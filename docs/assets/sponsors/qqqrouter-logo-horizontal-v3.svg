@@ -1,0 +1,110 @@
+<svg width="4200" height="1300" viewBox="0 250 4200 1300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="qGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur1"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.3"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="13" result="blur2"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.2"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7" result="blur3"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.3"/>
+      <feComposite in2="blur3" operator="in" result="glow3"/>
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="glow3"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="centerGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="33" result="blur1"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.2"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="27" result="blur2"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.3"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur3"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.4"/>
+      <feComposite in2="blur3" operator="in" result="glow3"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="13" result="blur4"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.6"/>
+      <feComposite in2="blur4" operator="in" result="glow4"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="blur5"/>
+      <feFlood flood-color="#D89B00" flood-opacity="0.8"/>
+      <feComposite in2="blur5" operator="in" result="glow5"/>
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="glow3"/>
+        <feMergeNode in="glow4"/>
+        <feMergeNode in="glow5"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="lineGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12" result="blur1"/>
+      <feFlood flood-color="#B86A00" flood-opacity="0.3"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur2"/>
+      <feFlood flood-color="#B86A00" flood-opacity="0.6"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="textGlowV3">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.4" result="blur"/>
+      <feOffset dx="0" dy="1" result="offset"/>
+      <feFlood flood-color="#9A5A00" flood-opacity="0.16"/>
+      <feComposite in2="offset" operator="in" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g transform="translate(-500 -180)">
+    <g filter="url(#lineGlow)">
+      <line x1="1200" y1="920" x2="1200" y2="1200" stroke="#B86A00" stroke-width="3.5" stroke-linecap="round"/>
+      <line x1="956" y1="1340" x2="1200" y2="1200" stroke="#B86A00" stroke-width="3.5" stroke-linecap="round"/>
+      <line x1="1444" y1="1340" x2="1200" y2="1200" stroke="#B86A00" stroke-width="3.5" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#qGlow)">
+      <circle cx="1200" cy="780" r="200" fill="none" stroke="#D89B00" stroke-width="28"/>
+      <line x1="1200" y1="880" x2="1200" y2="980" stroke="#D89B00" stroke-width="28" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#qGlow)">
+      <circle cx="836" cy="1410" r="200" fill="none" stroke="#D89B00" stroke-width="28"/>
+      <line x1="923" y1="1360" x2="1010" y2="1310" stroke="#D89B00" stroke-width="28" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#qGlow)">
+      <circle cx="1564" cy="1410" r="200" fill="none" stroke="#D89B00" stroke-width="28"/>
+      <line x1="1477" y1="1360" x2="1390" y2="1310" stroke="#D89B00" stroke-width="28" stroke-linecap="round"/>
+    </g>
+    <g filter="url(#centerGlow)">
+      <circle cx="1200" cy="1200" r="99" fill="#D89B00" opacity="0.2"/>
+      <circle cx="1200" cy="1200" r="81" fill="#D89B00" opacity="0.3"/>
+      <circle cx="1200" cy="1200" r="60" fill="#D89B00" opacity="0.4"/>
+      <circle cx="1200" cy="1200" r="39" fill="#D89B00" opacity="0.6"/>
+      <circle cx="1200" cy="1200" r="24" fill="#D89B00" opacity="0.8"/>
+      <circle cx="1200" cy="1200" r="18" fill="#FFFFFF"/>
+    </g>
+  </g>
+
+  <g filter="url(#textGlowV3)">
+    <text
+      x="1380"
+      y="1055"
+      font-family="Avenir Next, Futura PT, Futura, Montserrat, sans-serif"
+      font-size="450"
+      font-weight="700"
+      letter-spacing="1.6"
+      fill="#111111"
+      text-anchor="start"
+    >QQQ<tspan fill="#D89B00">Router</tspan></text>
+  </g>
+</svg>
