@@ -65,6 +65,10 @@ Please read the following carefully before using this project:
 <td align="center" valign="middle" width="130"><a href="https://web.ymocode.com"><img src="docs/assets/sponsors/yimous.png" alt="Yimo-US logo" height="22"><br><strong>Yimo-US</strong></a></td>
 <td valign="middle" width="78%">An API service brand focused on stable access and multi-upstream aggregation, designed for high-availability access, resource integration, and consistent service experiences.</td>
 </tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://wahaapi.top/"><img src="docs/assets/sponsors/wahaapi.jpg" alt="Waha AI logo" height="30"><br><strong>Waha AI</strong></a></td>
+<td valign="middle" width="78%">Access Claude, GPT, Gemini and more through a single OpenAI-compatible API. One key, all models. Pay only for the tokens you use, with transparent balances and instant top-ups. Fully compatible with your existing OpenAI code — switch freely.</td>
+</tr>
 </tbody>
 </table>
 
@@ -107,7 +111,8 @@ cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
 # - image tag (defaults to deviseo/transithub:latest)
-# - database password
+# - replace every change-this-* placeholder
+# - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
 # - APP_VERSION if you want a custom version label
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertCircle, Loader2, ShieldCheck, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ const props = defineProps<{
   open: boolean
   submitting: boolean
   errorKey: string | null
+  /** 打开弹窗时用于预填的非敏感已知信息（不包含 password/accessToken/refreshToken/tokenType）。 */
+  initialValue?: Partial<DashboardAdminLoginForm>
 }>()
 
 const emit = defineEmits<{
@@ -33,6 +35,29 @@ const password = ref('')
 const accessToken = ref('')
 const refreshToken = ref('')
 const tokenType = ref('')
+
+// 弹窗打开瞬间用 initialValue 预填非敏感字段，只填充一次，避免覆盖用户正在输入的内容；
+// 同时必须清空敏感字段，因为组件常驻挂载，关闭弹窗不会销毁内部 ref，上一次输入的
+// password/accessToken/refreshToken/tokenType 会残留在内存里。
+const applyInitialValue = () => {
+  platform.value = props.initialValue?.platform ?? 'sub2api'
+  siteUrl.value = props.initialValue?.siteUrl ?? ''
+  authMethod.value = props.initialValue?.authMethod ?? 'password'
+  email.value = props.initialValue?.email ?? ''
+
+  password.value = ''
+  accessToken.value = ''
+  refreshToken.value = ''
+  tokenType.value = ''
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) return
+    applyInitialValue()
+  },
+)
 
 // new-api 只支持密码登录，不显示 token 登录方式
 const showAuthMethodToggle = computed(() => platform.value === 'sub2api')

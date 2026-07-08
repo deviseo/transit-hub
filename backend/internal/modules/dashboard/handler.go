@@ -21,6 +21,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, metricsService *Metric
 	mux.HandleFunc("GET /api/dashboard/admin/status", handler.status)
 	mux.HandleFunc("POST /api/dashboard/admin/login", handler.login)
 	mux.HandleFunc("POST /api/dashboard/admin/logout", handler.logout)
+	mux.HandleFunc("POST /api/dashboard/admin/refresh", handler.refreshAdminSession)
 	mux.HandleFunc("GET /api/dashboard/metrics", handler.metrics)
 	mux.HandleFunc("GET /api/dashboard/trends", handler.trends)
 	mux.HandleFunc("GET /api/dashboard/groups", handler.adminGroups)
@@ -75,6 +76,21 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, StatusResponse{Authenticated: false})
+}
+
+// refreshAdminSession 主动刷新当前 admin session 并重新校验 admin 身份。
+func (h *Handler) refreshAdminSession(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	response, err := h.service.RefreshAdminSession(r.Context(), userID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 // metrics 返回当前用户的仪表盘五项核心指标实时数据。

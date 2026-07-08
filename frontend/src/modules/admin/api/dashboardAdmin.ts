@@ -63,9 +63,15 @@ export const loginDashboardAdmin = async (form: DashboardAdminLoginForm): Promis
     body: JSON.stringify(form),
   })
 
-/** 退出当前 admin 账户（仅清除仪表盘 admin 会话）。 */
+/** 退出当前 admin 账户（仅清除仪表盘 admin 会话）。保留供旧调用方兼容，新代码不再使用。 */
 export const logoutDashboardAdmin = async (): Promise<DashboardAdminStatus> =>
   requestJson<DashboardAdminStatus>('/dashboard/admin/logout', {
+    method: 'POST',
+  })
+
+/** 主动刷新当前 admin session 并重新校验 admin 身份。 */
+export const refreshDashboardAdminSession = async (): Promise<DashboardAdminStatus> =>
+  requestJson<DashboardAdminStatus>('/dashboard/admin/refresh', {
     method: 'POST',
   })
 

@@ -453,16 +453,45 @@ func sumFilteredBalances(users []any, filter BalanceFilter) float64 {
 }
 
 // FetchSub2APIAdminGroups 获取管理员站点的所有分组列表。
-// 调用 /api/v1/groups/available 并解析为 GroupInfo 切片。
+// 复用 fetchSub2APIAvailableGroupsWithRates，与 fetchSub2APIMetrics 共用同一套
+// "默认倍率 + 专属倍率覆盖" 解析逻辑，避免两个入口分别维护、其中一个遗漏修复。
 func (s *PlatformService) FetchSub2APIAdminGroups(session Session) ([]GroupInfo, error) {
+	return s.fetchSub2APIAvailableGroupsWithRates(session)
+}
+
+// fetchSub2APIAvailableGroupsWithRates 获取 sub2api 用户可见分组列表，并按 sub2api 文档规则
+// 合并专属倍率：
+//  1. 先以 /api/v1/groups/available 的 rate_multiplier 作为每个分组的默认倍率。
+//  2. 再拉取 /api/v1/groups/rates，按相同分组 ID 覆盖默认倍率。
+//  3. /groups/rates 缺失某个 ID 时保留默认倍率；出现 available 不包含的未知 ID 时不新增分组
+//     （缺少 name、platform 等基础展示字段）。
+//
+// Multiplier/MultiplierDisplay 始终表示最终生效倍率，供现有业务计算直接使用；
+// DefaultMultiplier/DedicatedMultiplier/HasDedicatedMultiplier 是新增的向后兼容字段，
+// 仅供前端展示"默认倍率 -> 专属倍率"提示。
+//
+// /groups/rates 请求失败（含旧版 sub2api 没有该接口的 404）时不影响返回结果，只回退到
+// 默认倍率并记录日志，因为 available 已经提供了完整的基础分组列表；调用方（登录、同步）
+// 因此不会因为这一个可选接口失败而整体失败。
+func (s *PlatformService) fetchSub2APIAvailableGroupsWithRates(session Session) ([]GroupInfo, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/available", authOptions)
 	if err != nil {
 		return nil, err
 	}
+
+	rateOverrides := map[string]float64{}
+	ratesResponse, ratesErr := s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/rates", authOptions)
+	if ratesErr != nil {
+		log.Printf("[sub2api-groups] /api/v1/groups/rates 拉取失败，回退默认倍率 base_url=%s err=%v", session.BaseURL, ratesErr)
+	} else {
+		rateOverrides = sub2APIGroupRateOverrides(ratesResponse.Payload)
+	}
+
 	groups := make([]GroupInfo, 0)
 	for _, item := range dataArray(response.Payload) {
 		id := groupID(item)
@@ -474,16 +503,74 @@ func (s *PlatformService) FetchSub2APIAdminGroups(session Session) ([]GroupInfo,
 			continue
 		}
 		platform := firstString(item, []string{"platform"})
-		rate := firstNumber(item, []string{"rate_multiplier"})
-		groups = append(groups, GroupInfo{
-			ID:                id,
-			Name:              name,
-			Platform:          platform,
-			Multiplier:        rate,
-			MultiplierDisplay: multiplier(rate),
-		})
+		defaultRate := firstNumber(item, []string{"rate_multiplier"})
+
+		group := GroupInfo{
+			ID:                       id,
+			Name:                     name,
+			Platform:                 platform,
+			Multiplier:               defaultRate,
+			MultiplierDisplay:        multiplier(defaultRate),
+			DefaultMultiplier:        defaultRate,
+			DefaultMultiplierDisplay: multiplier(defaultRate),
+		}
+
+		if dedicatedRate, ok := rateOverrides[id]; ok && id != "" {
+			rate := dedicatedRate
+			group.Multiplier = &rate
+			group.MultiplierDisplay = multiplier(&rate)
+			group.DedicatedMultiplier = &rate
+			group.DedicatedMultiplierDisplay = multiplier(&rate)
+			group.HasDedicatedMultiplier = true
+		}
+
+		groups = append(groups, group)
 	}
 	return groups, nil
+}
+
+// sub2APIGroupRateOverrides 将 /api/v1/groups/rates 的响应解析为 "分组 ID -> 专属倍率" 映射。
+// 兼容 sub2api 上游包装层可能出现的几种形态：
+//   - {"data": {"1": 0.8, "2": 1.2}}                       对象 map，key 为分组 ID
+//   - {"data": [{"group_id": 1, "rate_multiplier": 0.8}]}  对象数组，包在 data 里
+//   - [{"groupId": "1", "rateMultiplier": "0.8"}]          未包装的对象数组
+//
+// 缺少 ID 或倍率不是有效数字的条目会被静默忽略，不影响其余覆盖项按 ID 生效。
+func sub2APIGroupRateOverrides(payload any) map[string]float64 {
+	overrides := map[string]float64{}
+
+	var dataValue any = payload
+	if record, ok := payload.(map[string]any); ok {
+		if data, exists := record["data"]; exists {
+			dataValue = data
+		}
+	}
+
+	switch typed := dataValue.(type) {
+	case map[string]any:
+		for id, value := range typed {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if rate := readNumber(value); rate != nil {
+				overrides[id] = *rate
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			id := groupID(item)
+			if id == "" {
+				continue
+			}
+			rate := firstNumber(item, []string{"rate_multiplier", "rateMultiplier", "multiplier", "rate"})
+			if rate == nil {
+				continue
+			}
+			overrides[id] = *rate
+		}
+	}
+	return overrides
 }
 
 // AdminGroupInfo 是 /api/v1/admin/groups 返回的完整分组信息，
@@ -1074,9 +1161,9 @@ func (s *PlatformService) fetchSub2APIMetrics(session Session) (Metrics, error) 
 		log.Printf("[sub2api-metrics] /api/v1/usage/dashboard/stats 失败 base_url=%s err=%v", session.BaseURL, err)
 		return Metrics{}, err
 	}
-	groupsPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/available", authOptions)
+	groups, err := s.fetchSub2APIAvailableGroupsWithRates(session)
 	if err != nil {
-		log.Printf("[sub2api-metrics] /api/v1/groups/available 失败 base_url=%s err=%v", session.BaseURL, err)
+		log.Printf("[sub2api-metrics] 分组列表拉取失败 base_url=%s err=%v", session.BaseURL, err)
 		return Metrics{}, err
 	}
 
@@ -1091,20 +1178,6 @@ func (s *PlatformService) fetchSub2APIMetrics(session Session) (Metrics, error) 
 		}
 	}
 
-	groups := make([]GroupInfo, 0)
-	for _, item := range dataArray(groupsPayload.Payload) {
-		id := groupID(item)
-		name := defaultDisplay
-		if value := firstString(item, []string{"name"}); value != nil {
-			name = *value
-		}
-		platform := firstString(item, []string{"platform"})
-		rate := firstNumber(item, []string{"rate_multiplier"})
-		group := GroupInfo{ID: id, Name: name, Platform: platform, Multiplier: rate, MultiplierDisplay: multiplier(rate)}
-		if group.Name != defaultDisplay {
-			groups = append(groups, group)
-		}
-	}
 	firstGroup := defaultMetrics().Group
 	if len(groups) > 0 {
 		firstGroup = groups[0]
@@ -1925,4 +1998,113 @@ func (s *PlatformService) updateNewAPIGroupRatio(session Session, groupName stri
 		return err
 	}
 	return nil
+}
+
+// UpdateNewAPIChannelWeightStatus 更新 admin new-api 站点指定 channel 的权重和启用状态。
+// 供 connection_health 模块的自动降级/恢复动作使用：降级时 weight=0/status=2（禁用），
+// 恢复时按策略的 recovery_step_percent 逐步调高 weight 并在权重恢复到位后把 status 设回 1。
+// 采用与 updateSub2APIAdminGroupMultiplier 一致的 GET+PUT-merge 手法：先 GET 单个 channel
+// 详情复制原始字段，仅替换 weight/status 后整体 PUT 回去，避免覆盖 key/base_url/group 等字段。
+// 若 GET 失败（接口不存在、权限不足或 channel 已被删除），直接把错误透传给调用方，
+// 调用方应记录为 remote_action=unsupported 并停止后续动作，不做任何猜测性的 PUT 请求。
+func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, channelID string, weight int, status int) error {
+	if session.Platform != PlatformNewAPI {
+		return newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+
+	getURL := session.BaseURL + "/api/channel/" + channelID
+	response, err := s.httpClient.requestJSON(getURL, cookieOptions)
+	if err != nil {
+		return err
+	}
+	data := dataRecord(response.Payload)
+	if len(data) == 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformNewAPI)
+	}
+
+	channel := map[string]any{
+		"weight": weight,
+		"status": status,
+	}
+	for _, key := range []string{"id", "type", "key", "name", "base_url", "models", "group", "priority", "auto_ban", "model_mapping", "tag", "setting", "param_override", "header_override"} {
+		if v, ok := data[key]; ok {
+			channel[key] = v
+		}
+	}
+	if _, ok := channel["id"]; !ok {
+		// GET 响应缺少 id 字段时兜底：new-api channel id 是数值型，按数字解析后回填，
+		// 避免把字符串 channelID 直接序列化成 JSON 字符串导致后端 ShouldBindJSON 绑定失败。
+		if idNum, err := strconv.ParseInt(channelID, 10, 64); err == nil {
+			channel["id"] = idNum
+		} else {
+			channel["id"] = channelID
+		}
+	}
+
+	// new-api 的 UpdateChannel 用 ShouldBindJSON(&PatchChannel) 直接绑定请求体，
+	// 字段必须在 JSON 顶层，不能像 CreateNewAPIChannel 那样包一层 "channel"。
+	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/channel/", requestOptions{
+		Cookie: session.Cookie,
+		UserID: session.UserID,
+		Method: http.MethodPut,
+		Body:   channel,
+	})
+	return err
+}
+
+// UpdateSub2APIAdminAccountStatus 通过 GET+PUT /api/v1/admin/accounts/:id 更新 sub2api 转发账号的
+// 启用状态（"active"/"inactive"），供 connection_health 模块的自动降级/恢复动作使用。
+// 采用与 UpdateNewAPIChannelWeightStatus / updateSub2APIAdminGroupMultiplier 一致的 GET+PUT-merge
+// 手法：先 GET 账号详情复制原始字段，仅替换 status 后整体 PUT 回去，避免覆盖 credentials/
+// group_ids/priority/concurrency/rate_multiplier/load_factor 等字段（PUT-merge 而不是直接发送
+// {"status": "..."}，因为尚未确认 sub2api UpdateAccountRequest 支持 partial patch 语义）。
+// 若 GET 失败（接口不存在、权限不足或账号已被删除），直接把错误透传给调用方，调用方应记录为
+// remote_action=unsupported 并停止后续动作，不做任何猜测性的 PUT 请求。
+// 明文 credentials 只是原样透传（从 GET 响应直接搬到 PUT 请求体），本方法不解析、不记录其内容。
+func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accountID string, status string) error {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	if strings.TrimSpace(accountID) == "" {
+		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+
+	getURL := session.BaseURL + "/api/v1/admin/accounts/" + url.PathEscape(accountID)
+	response, err := s.httpClient.requestJSON(getURL, authOptions)
+	if err != nil {
+		return err
+	}
+	data := dataRecord(response.Payload)
+	if len(data) == 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+
+	payload := map[string]any{
+		"status": status,
+	}
+	for _, key := range []string{
+		"name", "notes", "type", "credentials", "extra", "proxy_id",
+		"concurrency", "priority", "rate_multiplier", "load_factor",
+		"expires_at", "auto_pause_on_expired", "confirm_mixed_channel_risk",
+	} {
+		if v, ok := data[key]; ok {
+			payload[key] = v
+		}
+	}
+	// group_ids 需要单独解析并保留原始元素类型（数字仍是数字）：sub2api 线上已确认 PUT 传
+	// 字符串化的 group_ids（如 ["50"]）会返回 400，必须和 GET 响应的原始类型一致（如 [50]）。
+	// 解析不到任何分组 ID 时完全不带这个字段，避免用空数组覆盖账号已有的分组绑定。
+	if groupIDs := resolveSub2APIAccountGroupIDsForPayload(data); len(groupIDs) > 0 {
+		payload["group_ids"] = groupIDs
+	}
+
+	_, err = s.httpClient.requestJSON(getURL, requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+		Method:      http.MethodPut,
+		Body:        payload,
+	})
+	return err
 }

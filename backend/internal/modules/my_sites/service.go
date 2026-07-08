@@ -597,6 +597,17 @@ func (s *Service) ListRealConnections(ctx context.Context, userID string) ([]Rea
 	return s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
 }
 
+// ListRealConnectionsForWorkspace 按显式传入的 userID + adminAccountID 查询真实对接绑定记录，
+// 不解析"当前" workspace。供没有 HTTP 请求上下文的后台调度器使用：调度器持有的策略
+// （connection_health_policies）本身就记录了 user_id/admin_account_id，必须按策略自带的
+// workspace 读取对应连接，不能依赖 authctx/admin_accounts 的"当前工作区"语义（那是请求态概念）。
+func (s *Service) ListRealConnectionsForWorkspace(ctx context.Context, userID string, adminAccountID string) ([]RealConnection, error) {
+	if s.connRepository == nil {
+		return nil, nil
+	}
+	return s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+}
+
 // RealDisconnect 取消真实对接：根据 mode 决定是仅删除记录还是同时清理远端资源。
 // mode == "unlink"：仅删除 real_connections 记录（所有平台通用）。
 // mode == "full"：按平台分支删除远端资源（sub2api 删 admin 账号+上游 key，new-api 删 channel+token），再删除记录。

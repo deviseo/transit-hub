@@ -31,6 +31,13 @@ export interface UpstreamGroupInfo {
   platform: string | null
   multiplier: number | null
   multiplierDisplay: string
+  // 以下字段为 sub2api 专属倍率展示新增的可选字段：旧后端/旧缓存数据没有这些字段时，
+  // 前端保持原来的单倍率展示。multiplier/multiplierDisplay 始终是最终生效倍率。
+  defaultMultiplier?: number | null
+  defaultMultiplierDisplay?: string
+  dedicatedMultiplier?: number | null
+  dedicatedMultiplierDisplay?: string
+  hasDedicatedMultiplier?: boolean
 }
 
 export interface UpstreamMetrics {

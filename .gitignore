@@ -5,6 +5,7 @@ coverage
 .env
 .env.*
 .sisyphus/
+.playwright-mcp/
 **/AGENTS.md
 **/CLAUDE.md
 frontend/node_modules

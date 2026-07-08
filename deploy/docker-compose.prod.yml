@@ -17,11 +17,11 @@ services:
     environment:
       PORT: "10621"
       # PostgreSQL 连接串。这里的密码必须和 postgres.POSTGRES_PASSWORD 保持一致。
-      DATABASE_URL: postgres://transithub:transithub@postgres:5432/transithub?sslmode=disable
+      DATABASE_URL: postgres://transithub:change-this-db-password@postgres:5432/transithub?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       # 首次空库启动时自动创建的管理员账号。已有用户时不会覆盖密码。
       ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: transithub
+      ADMIN_PASSWORD: change-this-admin-password
       # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
       ALLOW_PUBLIC_REGISTER: "false"
       # 当前运行版本号，仅用于后台纯展示。
@@ -35,7 +35,7 @@ services:
       POSTGRES_DB: transithub
       POSTGRES_USER: transithub
       # 必须修改，并同步到 app.environment.DATABASE_URL 中。
-      POSTGRES_PASSWORD: transithub
+      POSTGRES_PASSWORD: change-this-db-password
     volumes:
       # 持久化数据库数据。
       - ../data/postgres:/var/lib/postgresql/data

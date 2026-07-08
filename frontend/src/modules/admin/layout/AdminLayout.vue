@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -69,13 +69,63 @@ const goToAccounts = () => {
   router.push('/admin/accounts')
 }
 
-const menuItems = computed(() => [
-  { name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
-  { name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
-  { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
-  { name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
-  { name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
+// 二级菜单项：带独立小图标，方便在展开态下快速区分。
+interface MenuChild {
+  name: string
+  path: string
+  icon: Component
+}
+
+// 菜单项分两种形态：叶子（单一路由入口）和分组（固定顺序的二级菜单集合）。
+// “分组管理”下的三个二级菜单顺序固定：分组倍率 -> 分组关联 -> 分组健康，不随业务改动调整。
+type MenuEntry =
+  | { type: 'leaf'; name: string; path: string; icon: Component }
+  | { type: 'group'; name: string; icon: Component; children: MenuChild[] }
+
+const menuItems = computed<MenuEntry[]>(() => [
+  { type: 'leaf', name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
+  { type: 'leaf', name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
+  {
+    type: 'group',
+    name: t('admin.menu.groupManagement'),
+    icon: FolderTree,
+    children: [
+      { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
+      { name: t('admin.menu.groupAssociations'), path: '/admin/group-associations', icon: Link2 },
+      { name: t('admin.menu.connectionHealth'), path: '/admin/connection-health', icon: Activity },
+    ],
+  },
+  { type: 'leaf', name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
+  { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
+
+// 分组展开状态：未手动切换过时，按当前路由是否命中该分组的子项自动展开。
+const expandedGroups = ref<Record<string, boolean>>({})
+
+const isGroupActive = (group: Extract<MenuEntry, { type: 'group' }>) => group.children.some((child) => child.path === route.path)
+
+const isGroupExpanded = (group: Extract<MenuEntry, { type: 'group' }>) => {
+  const manual = expandedGroups.value[group.name]
+  return manual === undefined ? isGroupActive(group) : manual
+}
+
+const toggleGroup = (group: Extract<MenuEntry, { type: 'group' }>) => {
+  expandedGroups.value[group.name] = !isGroupExpanded(group)
+}
+
+// 摊平查找当前路由对应的菜单文案，供顶部标题使用（叶子和分组子项都要能查到）。
+const findMenuLabel = (path: string): string | undefined => {
+  for (const item of menuItems.value) {
+    if (item.type === 'leaf' && item.path === path) return item.name
+    if (item.type === 'group') {
+      const child = item.children.find((c) => c.path === path)
+      if (child) return child.name
+    }
+  }
+  return undefined
+}
+
+const pageTitle = computed(() => (route.path === '/admin' ? t('admin.menu.dashboard') : findMenuLabel(route.path) ?? ''))
 
 const handleLogout = () => {
   showUserMenu.value = false
@@ -98,20 +148,55 @@ const handleLogout = () => {
       </div>
 
       <nav class="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
-        <router-link
-          v-for="item in menuItems"
-          :key="item.path"
-          :to="item.path"
-          class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors"
-          :class="[
-            route.path === item.path
-              ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20'
-              : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'
-          ]"
-        >
-          <component :is="item.icon" class="w-5 h-5" />
-          {{ item.name }}
-        </router-link>
+        <template v-for="item in menuItems" :key="item.type === 'leaf' ? item.path : item.name">
+          <router-link
+            v-if="item.type === 'leaf'"
+            :to="item.path"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors"
+            :class="[
+              route.path === item.path
+                ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20'
+                : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'
+            ]"
+          >
+            <component :is="item.icon" class="w-5 h-5" />
+            {{ item.name }}
+          </router-link>
+
+          <div v-else>
+            <button
+              type="button"
+              class="flex w-full items-center gap-3 px-3 py-2.5 rounded-xl transition-colors"
+              :class="[
+                isGroupActive(item) && !isGroupExpanded(item)
+                  ? 'bg-primary/10 text-primary font-medium'
+                  : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'
+              ]"
+              @click="toggleGroup(item)"
+            >
+              <component :is="item.icon" class="w-5 h-5" />
+              <span class="flex-1 text-left">{{ item.name }}</span>
+              <ChevronDown class="w-4 h-4 transition-transform" :class="{ 'rotate-180': isGroupExpanded(item) }" />
+            </button>
+
+            <div v-if="isGroupExpanded(item)" class="mt-1 ml-4 space-y-1 border-l border-border/40 pl-3">
+              <router-link
+                v-for="child in item.children"
+                :key="child.path"
+                :to="child.path"
+                class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors"
+                :class="[
+                  route.path === child.path
+                    ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20'
+                    : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'
+                ]"
+              >
+                <component :is="child.icon" class="w-4 h-4" />
+                {{ child.name }}
+              </router-link>
+            </div>
+          </div>
+        </template>
       </nav>
 
       <div class="p-4 border-t border-border/40">
@@ -129,7 +214,7 @@ const handleLogout = () => {
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Header: 工作区选择页不显示业务导航头 -->
       <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-10">
-        <h1 class="text-lg font-semibold">{{ route.path === '/admin' ? t('admin.menu.dashboard') : menuItems.find(m => m.path === route.path)?.name }}</h1>
+        <h1 class="text-lg font-semibold">{{ pageTitle }}</h1>
 
         <div class="flex items-center gap-4">
           <div class="flex items-center gap-2">

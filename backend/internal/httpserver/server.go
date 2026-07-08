@@ -15,6 +15,7 @@ import (
 	"transithub/backend/internal/config"
 	"transithub/backend/internal/modules/admin_accounts"
 	"transithub/backend/internal/modules/auth"
+	"transithub/backend/internal/modules/connection_health"
 	"transithub/backend/internal/modules/dashboard"
 	"transithub/backend/internal/modules/group_rate_campaigns"
 	"transithub/backend/internal/modules/group_rates"
@@ -133,6 +134,25 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	group_rate_campaigns.RegisterRoutes(server.mux, campaignsService, adminAccountsService)
 	campaignsService.StartScheduler(context.Background())
 
+	// 分组健康探活模块：数据源为 real_connections（通过 mySitesService 只读接口），
+	// upstreamService 提供站点 base_url/平台类型查询，platformService 提供 new-api 远端降级/恢复能力。
+	// 不新增手动配置的探活目标，也不改变 my_sites/upstream 现有数据语义。
+	connHealthService := connection_health.NewService(
+		connection_health.NewRepository(db),
+		mySitesService,
+		upstreamService,
+		platformService,
+	)
+	if err := connHealthService.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	connHealthService.SetAdminAccountResolver(adminAccountsService)
+	// 注入平台中性的分组/账号读取能力：admin 分组健康主列表用它拉取 admin 全量分组及
+	// 分组下账号/渠道，叠加 real_connections 探活状态。platformService 已实现所需方法。
+	connHealthService.SetPlatformGroupReader(platformService)
+	connection_health.RegisterRoutes(server.mux, connHealthService)
+	connHealthService.StartScheduler(context.Background())
+
 	// 策略设置变更时通知上游服务更新定时同步配置。
 	applyRefreshConfig := func(s settings.StrategySettings) {
 		upstreamService.SetRefreshConfig(upstream.RefreshConfig{
@@ -222,7 +242,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health")
 }
 
 func bearerToken(header string) string {

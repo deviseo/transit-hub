@@ -147,13 +147,13 @@ type RealConnectResponse struct {
 type RealConnection struct {
 	ID                      string   `json:"id"`
 	UserID                  string   `json:"-"`
-	WorkspaceAdminAccountID string   `json:"-"`              // TransitHub workspace 归属（隔离字段）
+	WorkspaceAdminAccountID string   `json:"-"` // TransitHub workspace 归属（隔离字段）
 	UpstreamSiteID          string   `json:"upstreamSiteId"`
 	UpstreamGroupID         string   `json:"upstreamGroupId"`
 	UpstreamGroupName       string   `json:"upstreamGroupName"`
 	UpstreamKeyID           string   `json:"upstreamKeyId"`
 	UpstreamKey             string   `json:"upstreamKey"`
-	AdminAccountID          string   `json:"adminAccountId"`  // 上游平台 admin 转发账号 ID（业务字段）
+	AdminAccountID          string   `json:"adminAccountId"` // 上游平台 admin 转发账号 ID（业务字段）
 	AdminAccountName        string   `json:"adminAccountName"`
 	OwnGroupIDs             []string `json:"ownGroupIds"`
 	GroupType               string   `json:"groupType"`

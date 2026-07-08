@@ -224,6 +224,46 @@ func (s *Service) Logout(ctx context.Context, userID string) error {
 	return s.store.Delete(ctx, userID, adminAccountID)
 }
 
+// RefreshAdminSession 由前端主动触发，刷新当前 admin session 并重新校验 admin 身份。
+// 与 refreshIfNeeded（后台定时刷新，未变化时跳过校验）不同：这里无论 token 是否实际变化，
+// 都必须重新调用 VerifyAdmin，因为“更新管理员凭证”按钮的语义就是主动确认当前凭证仍然有效。
+// 刷新失败或校验失败统一返回 ErrorAdminOnly，不删除旧 session，让前端弹窗要求重新登录。
+func (s *Service) RefreshAdminSession(ctx context.Context, userID string) (StatusResponse, error) {
+	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	record, err := s.store.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if record == nil || !record.Session.IsAuthenticated() {
+		return StatusResponse{}, requestError(ErrorAdminOnly)
+	}
+
+	refreshedSession, err := s.platform.RefreshSession(record.Session)
+	if err != nil {
+		return StatusResponse{}, requestError(ErrorAdminOnly)
+	}
+	if err := s.platform.VerifyAdmin(refreshedSession); err != nil {
+		return StatusResponse{}, requestError(ErrorAdminOnly)
+	}
+
+	next := *record
+	next.Session = refreshedSession
+	next.LastRefreshedAt = nowMillis()
+	if err := s.store.Save(ctx, userID, adminAccountID, next); err != nil {
+		return StatusResponse{}, err
+	}
+
+	// 同步写入 my_site_states，确保 RealConnect 等功能使用最新的 admin 会话
+	if s.mySiteSync != nil {
+		s.mySiteSync.SyncAdminSession(ctx, userID, adminAccountID, next.Session, next.Identity)
+	}
+
+	return statusFromRecord(next, true), nil
+}
+
 // StartRefresher 启动后台协程，周期性扫描活跃会话并刷新临期令牌，随 ctx 结束而退出。
 func (s *Service) StartRefresher(ctx context.Context) {
 	go func() {

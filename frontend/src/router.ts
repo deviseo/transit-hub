@@ -47,6 +47,18 @@ const routes = [
         component: () => import('./modules/admin/views/GroupRatesView.vue')
       },
       {
+        path: 'group-associations',
+        name: 'AdminGroupAssociations',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/GroupAssociationsView.vue')
+      },
+      {
+        path: 'connection-health',
+        name: 'AdminConnectionHealth',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/ConnectionHealthView.vue')
+      },
+      {
         path: 'group-rate-campaigns',
         name: 'AdminGroupRateCampaigns',
         meta: { requiresWorkspace: true },

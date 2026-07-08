@@ -76,6 +76,9 @@ type fakePlatformClient struct {
 	// capturedSession 记录最后一次调用 FetchAdminGroupDailyStats 时传入的 session，
 	// 用于断言隔离性（不同工作区应使用不同 session）。
 	capturedSession upstream.Session
+	// refreshSessionErr / refreshSessionResult 供 RefreshAdminSession 测试控制 RefreshSession 的行为。
+	refreshSessionErr    error
+	refreshSessionResult *upstream.Session
 }
 
 func (f *fakePlatformClient) NormalizeURL(value string) (string, error) { return value, nil }
@@ -87,6 +90,12 @@ func (f *fakePlatformClient) LoginAdmin(baseURL string, platform upstream.Platfo
 func (f *fakePlatformClient) VerifyAdmin(session upstream.Session) error { return f.verifyAdminErr }
 
 func (f *fakePlatformClient) RefreshSession(session upstream.Session) (upstream.Session, error) {
+	if f.refreshSessionErr != nil {
+		return upstream.Session{}, f.refreshSessionErr
+	}
+	if f.refreshSessionResult != nil {
+		return *f.refreshSessionResult, nil
+	}
 	return session, nil
 }
 

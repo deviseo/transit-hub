@@ -41,7 +41,7 @@ const autoPricingNotifyTemplate = ref('')
 const copiedVar = ref<string | null>(null)
 const validationError = ref<string | null>(null)
 
-const prefix = 'admin.dashboard.groupList.autoPricingDrawer'
+const prefix = 'admin.groupAssociations.autoPricingDrawer'
 
 const upstreamTargets = computed<MySiteGroupRef[]>(() => props.mapping?.upstreamTargets ?? [])
 

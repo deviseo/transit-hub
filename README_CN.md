@@ -65,6 +65,10 @@
 <td align="center" valign="middle" width="130"><a href="https://web.ymocode.com"><img src="docs/assets/sponsors/yimous.png" alt="Yimo-US logo" height="22"><br><strong>Yimo-US</strong></a></td>
 <td valign="middle" width="78%">专注于稳定接入与多上游聚合的 API 服务品牌，面向高可用访问、资源整合与持续服务体验打造专业化接入能力。</td>
 </tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://wahaapi.top/"><img src="docs/assets/sponsors/wahaapi.jpg" alt="哇哈AI logo" height="30"><br><strong>哇哈AI</strong></a></td>
+<td valign="middle" width="78%">通过单一 OpenAI 兼容 API 接入 Claude、GPT、Gemini 等模型。一把密钥，调用所有模型。仅按实际使用的 token 付费，余额透明，充值即时到账。完全兼容现有 OpenAI 代码，可自由切换。</td>
+</tr>
 </tbody>
 </table>
 
@@ -107,7 +111,8 @@ cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
 # - 镜像 tag（默认使用 deviseo/transithub:latest）
-# - 数据库密码
+# - 替换所有 change-this-* 占位值
+# - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
 # - 如需自定义后台展示版本，可调整 APP_VERSION
 

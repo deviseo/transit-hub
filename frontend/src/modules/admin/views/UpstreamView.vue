@@ -683,7 +683,17 @@ onBeforeUnmount(() => {
                   >
                     {{ (group.multiplier * selectedSiteForGroups.rechargeRate).toFixed(2) }}
                   </span>
-                  <span class="text-[10px] text-muted-foreground mt-1">
+                  <template v-if="group.hasDedicatedMultiplier">
+                    <Tooltip :text="t('admin.upstream.fields.dedicatedMultiplierTooltip')" wide>
+                      <span class="text-[10px] text-muted-foreground mt-1">
+                        {{ group.defaultMultiplierDisplay }} -&gt; {{ group.dedicatedMultiplierDisplay }}
+                      </span>
+                    </Tooltip>
+                    <span class="mt-1 text-[9px] font-semibold text-accent px-1.5 py-0.5 rounded bg-accent/10 border border-accent/20">
+                      {{ t('admin.upstream.fields.dedicatedMultiplierBadge') }}
+                    </span>
+                  </template>
+                  <span v-else class="text-[10px] text-muted-foreground mt-1">
                     {{ group.multiplierDisplay }}
                   </span>
                 </button>
