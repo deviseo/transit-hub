@@ -24,6 +24,11 @@ const routes = [
     redirect: '/login'
   },
   {
+    path: '/embed/tickets',
+    name: 'EmbedTickets',
+    component: () => import('./modules/embed/tickets/TicketEmbedPage.vue')
+  },
+  {
     path: '/admin',
     component: () => import('./modules/admin/layout/AdminLayout.vue'),
     meta: { requiresAuth: true },
@@ -69,6 +74,12 @@ const routes = [
         name: 'AdminSettings',
         meta: { requiresWorkspace: true },
         component: () => import('./modules/admin/views/SettingsView.vue')
+      },
+      {
+        path: 'tickets',
+        name: 'AdminTickets',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/TicketsView.vue')
       },
       {
         path: 'accounts',

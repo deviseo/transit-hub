@@ -1,4 +1,8 @@
 export default {
+  brand: {
+    name: 'TransitHub',
+    logoAlt: 'TransitHub 徽标'
+  },
   nav: {
     features: '核心特性',
     integrations: '生态集成',
@@ -116,6 +120,7 @@ export default {
       connectionHealth: '分组健康',
       groupRateCampaigns: '活动调价',
       settings: '系统设置',
+      tickets: '工单',
       signOut: '退出登录'
     },
     adminAccounts: {
@@ -1172,6 +1177,159 @@ export default {
         invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。'
       }
     },
+    tickets: {
+      title: '工单',
+      subtitle: '查看并回复通过 iframe 提交的用户工单。',
+      common: {
+        placeholder: '—'
+      },
+      actions: {
+        refresh: '刷新',
+        viewDetail: '查看详情',
+        embedSettings: '嵌入设置'
+      },
+      tabs: {
+        all: '全部'
+      },
+      status: {
+        open: '待处理',
+        pending: '待跟进',
+        replied: '已回复',
+        closed: '已关闭',
+        loading: '正在加载工单...'
+      },
+      fields: {
+        title: '标题',
+        status: '状态',
+        category: '分类',
+        priority: '优先级',
+        manualEmail: '联系邮箱',
+        sub2apiUser: 'Sub2API 用户',
+        sub2apiSrcHost: '来源域名',
+        lastMessageAt: '最后回复时间',
+        actions: '操作'
+      },
+      empty: {
+        title: '暂无工单',
+        description: '当前工作区还没有收到任何工单。'
+      },
+      pagination: {
+        total: '共 {total} 个',
+        pageSize: '每页 {pageSize} 条',
+        currentPage: '第 {page} / {totalPages} 页',
+        previous: '上一页',
+        next: '下一页'
+      },
+      errors: {
+        network: '网络或 CORS 请求失败，请检查接口地址与跨域配置。',
+        request: '工单接口请求失败，请稍后重试。',
+        unknown: '加载工单时发生未知错误。',
+        notFound: '工单不存在。',
+        invalidStatus: '无效的工单状态。',
+        bodyRequired: '回复内容不能为空。',
+        ticketClosed: '工单已关闭，无法继续回复。',
+        noCurrentAccount: '请先选择一个工作区。',
+        invalidTemplate: '不支持的嵌入页面模板。',
+        invalidMaxImages: '每次工单最多上传图片数必须在 0-9 之间。',
+        attachmentLoadFailed: '图片加载失败，请稍后重试。',
+        invalidCategoryOptions: '分类选项无效，请检查是否为空、重复或超出数量/长度限制。',
+        invalidPriorityOptions: '优先级选项无效，请检查是否为空、重复或超出数量/长度限制。'
+      },
+      detail: {
+        title: '工单详情',
+        sectionTicket: '工单信息',
+        sectionMessages: '回复记录',
+        sectionReply: '回复',
+        category: '分类',
+        priority: '优先级',
+        manualEmail: '联系邮箱',
+        lastMessageAt: '最后回复时间',
+        sub2apiUserId: 'Sub2API 用户 ID',
+        sub2apiEmail: 'Sub2API 邮箱',
+        sub2apiRole: 'Sub2API 角色',
+        sub2apiSrcHost: '来源域名',
+        authorAdmin: '客服',
+        authorCustomer: '用户',
+        replyPlaceholder: '输入回复内容...',
+        send: '发送回复',
+        attachmentLoadFailed: '图片加载失败',
+        previewImage: '放大预览',
+        closePreview: '关闭预览'
+      },
+      embedConfig: {
+        title: '嵌入设置',
+        sections: {
+          basic: '基础设置',
+          category: '分类',
+          priority: '优先级'
+        },
+        legacyNotice: '"启用嵌入工单"和"允许来源域名"配置已取消，嵌入地址始终可用，如需限制访问范围请联系管理员评估其它方案。',
+        embedUrl: '嵌入地址',
+        embedUrlHint: '将此地址配置到 Sub2API 自定义 iframe 中，Sub2API 会自动追加用户身份参数。',
+        copy: '复制',
+        copied: '已复制',
+        copyFailed: '复制失败，请手动复制。',
+        openPreview: '打开工单页面',
+        openPreviewHint: '在新标签页预览嵌入页面。非 Sub2API iframe 环境打开时会缺少身份参数，属正常现象。',
+        template: '页面模板',
+        templates: {
+          default: {
+            name: '默认紧凑',
+            description: '标准圆角卡片风格，适合默认使用。'
+          },
+          minimal: {
+            name: '极简轻量',
+            description: '更轻量的视觉密度，适合嵌入已有后台风格。'
+          },
+          support: {
+            name: '客服面板',
+            description: '更突出对话感，适合作为独立客服面板使用。'
+          }
+        },
+        maxImages: '每次工单最多上传图片数',
+        maxImagesHint: '0 表示关闭图片上传，最多允许 9 张。',
+        categoryOptions: '分类选项',
+        priorityOptions: '优先级选项',
+        addOption: '添加选项',
+        addOptionPlaceholder: '输入新选项后点击添加',
+        removeOption: '删除该选项',
+        restoreDefaults: '恢复默认值',
+        optionsHint: '至少保留 1 项，单项最多 40 个字符。客户创建工单时必须从这里选择。',
+        saveTemplate: '保存设置',
+        saving: '保存中...',
+        saveSuccess: '已保存',
+        rotateToken: '轮换嵌入地址',
+        confirmRotate: '确定要轮换嵌入地址吗？旧的嵌入地址将立即失效。'
+      },
+      sub2apiProfile: {
+        title: 'Sub2API 用户资料',
+        sectionIdentity: '身份信息',
+        userId: '用户 ID',
+        email: '邮箱',
+        role: '角色',
+        srcHost: '来源域名',
+        username: '用户名',
+        status: '账号状态',
+        sectionBalance: '余额与充值',
+        balance: '当前余额',
+        totalRecharged: '总充值额度',
+        registeredAt: '注册时间',
+        frozenBalance: '冻结余额',
+        concurrency: '并发数',
+        rpmLimit: 'RPM 限制',
+        lastUsedAt: '最后使用时间',
+        unavailable: '暂不可用',
+        sectionRechargeHistory: '充值记录',
+        rechargeHistoryComingSoon: '暂未提供',
+        historyEmpty: '暂无充值记录',
+        empty: '暂无数据',
+        remoteUnavailable: {
+          noUserId: '该工单未记录 Sub2API 用户 ID，无法查询实时资料。',
+          noAdminSession: '当前工作区尚未登录 Sub2API 管理员账号，以下仅展示工单快照。',
+          userNotFound: '未能从 Sub2API 获取该用户的实时资料，以下仅展示工单快照。'
+        }
+      }
+    },
     settings: {
       title: '系统设置',
       subtitle: '管理系统运行参数、通知渠道及自动化策略。',
@@ -1275,9 +1433,93 @@ export default {
     },
     system: {
       version: '版本 {version}',
+      openRelease: '查看发布说明',
+      openGithubRepository: '在 GitHub 上查看源码',
       errors: {
         network: '系统信息请求失败，请检查网络连接。',
         request: '系统请求失败，请稍后重试。'
+      }
+    }
+  },
+  embed: {
+    tickets: {
+      page: {
+        loading: '正在加载工单系统...'
+      },
+      list: {
+        title: '我的工单',
+        refresh: '刷新',
+        create: '新建工单',
+        loading: '正在加载工单...',
+        emptyTitle: '暂无工单',
+        emptyDescription: '点击"新建工单"提交你的第一个问题。'
+      },
+      createModal: {
+        title: '新建工单'
+      },
+      form: {
+        manualEmail: '联系邮箱',
+        manualEmailPlaceholder: '请输入接收回复的邮箱',
+        title: '标题',
+        titlePlaceholder: '简要描述你的问题',
+        body: '问题详情',
+        bodyPlaceholder: '请详细描述遇到的问题',
+        category: '分类',
+        categoryPlaceholder: '请选择分类',
+        priority: '优先级',
+        priorityPlaceholder: '请选择优先级',
+        submit: '提交工单',
+        cancel: '取消',
+        images: '图片',
+        imagesCount: '{count} / {max} 张',
+        addImage: '添加图片',
+        imagesHint: '仅支持 JPEG/PNG/WEBP/GIF 格式，单张不超过 5MB。'
+      },
+      detail: {
+        back: '返回列表',
+        loading: '正在加载工单详情...',
+        support: '客服',
+        you: '我',
+        replyPlaceholder: '输入回复内容...',
+        send: '发送',
+        closedNotice: '该工单已关闭，无法继续回复。'
+      },
+      attachments: {
+        loadFailed: '图片加载失败'
+      },
+      status: {
+        open: '待处理',
+        pending: '待跟进',
+        replied: '已回复',
+        closed: '已关闭'
+      },
+      errors: {
+        network: '网络或 CORS 请求失败，请检查接口地址与跨域配置。',
+        request: '工单接口请求失败，请稍后重试。',
+        unknown: '发生未知错误，请稍后重试。',
+        missingParams: '当前打开方式缺少必要参数，无法建立会话。如果你是通过"打开工单页面"预览按钮打开的，这是正常现象——请在真实的 Sub2API iframe 环境中打开本页面。',
+        formIncomplete: '请填写联系邮箱、标题、问题详情，并选择分类和优先级。',
+        configNotFound: '嵌入配置不存在。',
+        disabled: '工单功能已被管理员关闭。',
+        invalidSrcHost: '来源地址无效。',
+        srcHostMismatch: '来源域名不受信任。',
+        sub2apiAuth: '身份校验失败，请刷新页面重试。',
+        sub2apiRequest: '获取用户信息失败，请稍后重试。',
+        userMismatch: '用户身份校验失败。',
+        sessionInvalid: '会话已过期，请刷新页面重试。',
+        invalidEmail: '请输入有效的邮箱地址。',
+        titleRequired: '请输入标题。',
+        bodyRequired: '请输入问题详情。',
+        categoryRequired: '请选择分类。',
+        priorityRequired: '请选择优先级。',
+        invalidCategory: '所选分类不属于当前工单系统的配置，请重新选择。',
+        invalidPriority: '所选优先级不属于当前工单系统的配置，请重新选择。',
+        ticketClosed: '工单已关闭，无法继续回复。',
+        tooManyImages: '图片数量超过当前允许的上限。',
+        invalidImageType: '仅支持 JPEG/PNG/WEBP/GIF 格式的图片。',
+        imageTooLarge: '单张图片大小不能超过 5MB。',
+        emptyImage: '图片内容为空，请重新选择。',
+        attachmentLoadFailed: '图片加载失败，请稍后重试。'
       }
     }
   }
