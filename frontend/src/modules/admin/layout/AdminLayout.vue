@@ -51,8 +51,8 @@ const releaseUrl = computed(() => {
   const version = versionInfo.value?.version.trim()
   if (!version) return githubReleasesUrl
   if (nonReleaseVersionPlaceholders.includes(version)) return githubReleasesUrl
-  // 版本号可能已经带 v 前缀（如 v0.0.4）也可能没有（如 0.0.4），统一补齐成 v 前缀，
-  // 避免拼出 vv0.0.4。
+  // 版本号可能已经带 v 前缀（如 v0.1.4）也可能没有（如 0.1.4），统一补齐成 v 前缀，
+  // 避免拼出 vv0.1.4。
   const tag = version.startsWith('v') ? version : `v${version}`
   return `${githubReleasesUrl}/tag/${tag}`
 })
