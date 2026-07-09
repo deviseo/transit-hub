@@ -23,6 +23,7 @@ import (
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/settings"
 	"transithub/backend/internal/modules/system"
+	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/modules/users"
 	"transithub/backend/internal/shared/authctx"
@@ -84,6 +85,26 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	my_sites.RegisterRoutes(server.mux, mySitesService)
 	mySitesService.SetAdminAccountResolver(adminAccountsService)
+
+	// 工单模块：iframe 嵌入配置 + 工单/回复。公开 iframe 接口鉴权完全依赖 embedToken/Sub2API
+	// token 换取的 embed session，与 TransitHub 登录态无关，因此不加入 protectedPath（见下方）。
+	ticketsRepository := tickets.NewRepository(db)
+	if err := ticketsRepository.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	ticketsSub2APIClient := tickets.NewSub2APIClient(&http.Client{Timeout: upstreamRequestTimeout})
+	ticketsSessions := tickets.NewEmbedSessionStore(redisClient)
+	ticketsStorage, err := tickets.NewAttachmentStorage(cfg.TicketUploadDir)
+	if err != nil {
+		panic(err)
+	}
+	ticketsService := tickets.NewService(ticketsRepository, ticketsSessions, ticketsSub2APIClient, ticketsStorage)
+	ticketsService.SetAdminAccountResolver(adminAccountsService)
+	// Sub2API 用户资料弹窗按当前 workspace 的 admin 会话（mySitesService）实时查询用户详情/余额
+	// 历史（platformService），复用已有的会话存储和刷新逻辑，不新增第二套 admin token 存储。
+	ticketsService.SetAdminSessionProvider(mySitesService)
+	ticketsService.SetSub2APIAdminClient(platformService)
+	tickets.RegisterRoutes(server.mux, ticketsService)
 
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
@@ -242,7 +263,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets")
 }
 
 func bearerToken(header string) string {

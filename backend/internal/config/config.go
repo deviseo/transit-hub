@@ -11,7 +11,7 @@ const (
 	defaultPort       = "10621"
 	defaultRedisURL   = "redis://127.0.0.1:6379/0"
 	defaultPublicDir  = "/app/public"
-	defaultAppVersion = "0.0.0"
+	defaultAppVersion = "0.0.4"
 )
 
 type Config struct {
@@ -29,7 +29,8 @@ type Config struct {
 	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
 	AllowPublicRegister bool
 
-	// 版本展示：开源版仅用于系统信息 API 和前端纯展示，不依赖任何远程授权/更新服务
+	// 版本展示：开源版仅用于系统信息 API 和前端纯展示，不依赖任何远程授权/更新服务。
+	// 发布版本号由代码内置，不能由部署环境变量覆盖，避免部署用户随意修改后台展示版本。
 	AppVersion string
 
 	// 活动调价（group_rate_campaigns）默认值，仅作为创建活动时未填字段的兜底，不强制覆盖用户在页面上的选择。
@@ -38,6 +39,9 @@ type Config struct {
 	GroupRateCampaignStartTemplate     string
 	GroupRateCampaignEndTemplate       string
 	GroupRateCampaignSchedulerInterval time.Duration
+
+	// 工单图片附件本地存储目录：只存文件本身，metadata 落库；目录不存在时自动创建。
+	TicketUploadDir string
 }
 
 func Load() Config {
@@ -60,13 +64,15 @@ func Load() Config {
 
 		AllowPublicRegister: envOrDefault("ALLOW_PUBLIC_REGISTER", "true") == "true",
 
-		AppVersion: envOrDefault("APP_VERSION", defaultAppVersion),
+		AppVersion: defaultAppVersion,
 
 		GroupRateCampaignNotifyEnabled:     envOrDefault("GROUP_RATE_CAMPAIGN_NOTIFY_ENABLED", "false") == "true",
 		GroupRateCampaignDefaultNotifyBots: splitOrigins(os.Getenv("GROUP_RATE_CAMPAIGN_DEFAULT_NOTIFY_BOT_IDS")),
 		GroupRateCampaignStartTemplate:     os.Getenv("GROUP_RATE_CAMPAIGN_START_NOTIFY_TEMPLATE"),
 		GroupRateCampaignEndTemplate:       os.Getenv("GROUP_RATE_CAMPAIGN_END_NOTIFY_TEMPLATE"),
 		GroupRateCampaignSchedulerInterval: envDuration("GROUP_RATE_CAMPAIGN_SCHEDULER_INTERVAL", 60*time.Second),
+
+		TicketUploadDir: envOrDefault("TICKET_UPLOAD_DIR", "data/ticket-uploads"),
 	}
 }
 
