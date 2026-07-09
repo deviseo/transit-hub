@@ -10,6 +10,7 @@ import { loginDashboardAdmin } from '../api/dashboardAdmin'
 import { markWorkspaceActive } from '@/lib/workspaceGuard'
 import AdminLoginModal from '../components/dashboard/AdminLoginModal.vue'
 import type { DashboardAdminLoginForm } from '../types/dashboardAdmin'
+import logoUrl from '@/assets/logo.png'
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -84,10 +85,8 @@ const handleAddSubmit = async (form: DashboardAdminLoginForm) => {
     <!-- 轻量头部：logo + 工具按钮 -->
     <header class="h-16 shrink-0 flex items-center justify-between px-6 border-b border-border/40">
       <div class="flex items-center gap-2">
-        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-          <span class="text-lg font-black text-primary leading-none">T</span>
-        </div>
-        <span class="text-xl font-bold tracking-tight text-foreground">TransitHub</span>
+        <img :src="logoUrl" :alt="t('brand.logoAlt')" class="h-8 w-8 shrink-0 object-contain" />
+        <span class="text-xl font-bold tracking-tight text-foreground">{{ t('brand.name') }}</span>
       </div>
 
       <div class="flex items-center gap-2">

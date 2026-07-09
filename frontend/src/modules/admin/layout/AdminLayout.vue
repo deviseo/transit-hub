@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
 import { clearAccessToken } from '@/modules/auth/api/auth'
 import { getSystemVersion } from '../api/system'
 import type { SystemVersionResponse } from '../api/system'
+import logoUrl from '@/assets/logo.png'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,6 +38,24 @@ const loadVersionInfo = async () => {
     // 版本信息加载失败不阻塞页面
   }
 }
+
+// GitHub 仓库地址是本项目唯一来源，版本号链接和图标入口都从这里派生，避免散落硬编码。
+const githubRepoUrl = 'https://github.com/deviseo/transit-hub'
+const githubReleasesUrl = `${githubRepoUrl}/releases`
+
+// 非正式发布的占位版本号（本地预览/开发/未设置 APP_VERSION 时的默认值）不对应真实 tag，
+// 点击后退回 release 列表页，而不是跳到一个不存在的 tag 地址。
+const nonReleaseVersionPlaceholders = ['latest', 'local-preview', 'dev', '0.0.0']
+
+const releaseUrl = computed(() => {
+  const version = versionInfo.value?.version.trim()
+  if (!version) return githubReleasesUrl
+  if (nonReleaseVersionPlaceholders.includes(version)) return githubReleasesUrl
+  // 版本号可能已经带 v 前缀（如 v0.0.4）也可能没有（如 0.0.4），统一补齐成 v 前缀，
+  // 避免拼出 vv0.0.4。
+  const tag = version.startsWith('v') ? version : `v${version}`
+  return `${githubReleasesUrl}/tag/${tag}`
+})
 
 // 工作区选择页不显示侧边栏和业务菜单
 const isWorkspaceSelectionPage = computed(() => route.name === 'AdminAccounts')
@@ -96,6 +115,7 @@ const menuItems = computed<MenuEntry[]>(() => [
     ],
   },
   { type: 'leaf', name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
+  { type: 'leaf', name: t('admin.menu.tickets'), path: '/admin/tickets', icon: MessageSquare },
   { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
 
@@ -140,10 +160,8 @@ const handleLogout = () => {
     <aside v-if="!isWorkspaceSelectionPage" class="w-64 border-r border-border/40 bg-surface-elevated flex flex-col">
       <div class="h-16 flex items-center px-6 border-b border-border/40">
         <div class="flex items-center gap-2">
-          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-            <span class="text-lg font-black text-primary leading-none">T</span>
-          </div>
-          <span class="text-xl font-bold tracking-tight text-foreground">TransitHub</span>
+          <img :src="logoUrl" :alt="t('brand.logoAlt')" class="h-8 w-8 shrink-0 object-contain" />
+          <span class="text-xl font-bold tracking-tight text-foreground">{{ t('brand.name') }}</span>
         </div>
       </div>
 
@@ -213,19 +231,34 @@ const handleLogout = () => {
     <!-- Main Content -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Header: 工作区选择页不显示业务导航头 -->
-      <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-10">
+      <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-50">
         <h1 class="text-lg font-semibold">{{ pageTitle }}</h1>
 
         <div class="flex items-center gap-4">
           <div class="flex items-center gap-2">
-            <!-- 版本号展示 -->
-            <span
+            <!-- 版本号展示：点击跳转到对应 GitHub release（非正式发布占位版本号退回 releases 列表）。 -->
+            <a
               v-if="versionInfo"
-              class="flex items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground"
-              :title="t('admin.system.version', { version: versionInfo.version })"
+              :href="releaseUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground hover:bg-surface-elevated hover:text-foreground transition-colors"
+              :title="t('admin.system.openRelease')"
+              :aria-label="t('admin.system.openRelease')"
             >
               v{{ versionInfo.version }}
-            </span>
+            </a>
+
+            <a
+              :href="githubRepoUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-surface-elevated text-muted-foreground hover:text-foreground transition-colors"
+              :title="t('admin.system.openGithubRepository')"
+              :aria-label="t('admin.system.openGithubRepository')"
+            >
+              <Github class="h-4 w-4" />
+            </a>
 
             <button @click="toggleLocale" class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-surface-elevated text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.layout.toggleLanguage')">
               <Globe class="h-4 w-4" />
@@ -249,7 +282,7 @@ const handleLogout = () => {
             <transition name="dropdown">
               <div
                 v-if="showUserMenu"
-                class="absolute right-0 top-full mt-2 w-56 rounded-xl border border-border/60 bg-surface-elevated shadow-lg py-1 z-50"
+                class="absolute right-0 top-full mt-2 w-56 rounded-xl border border-border/60 bg-surface-elevated shadow-lg py-1 z-[60]"
               >
                 <div v-if="currentAccount" class="px-3 py-2.5 border-b border-border/40">
                   <div class="text-sm font-medium text-foreground truncate">{{ currentAccount.displayName }}</div>

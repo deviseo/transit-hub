@@ -1,4 +1,8 @@
 export default {
+  brand: {
+    name: 'TransitHub',
+    logoAlt: 'TransitHub logo'
+  },
   nav: {
     features: 'Features',
     integrations: 'Integrations',
@@ -116,6 +120,7 @@ export default {
       connectionHealth: 'Group Health',
       groupRateCampaigns: 'Rate Campaigns',
       settings: 'Settings',
+      tickets: 'Tickets',
       signOut: 'Sign Out'
     },
     adminAccounts: {
@@ -1172,6 +1177,159 @@ export default {
         invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.'
       }
     },
+    tickets: {
+      title: 'Tickets',
+      subtitle: 'View and reply to user tickets submitted through the embedded iframe.',
+      common: {
+        placeholder: '—'
+      },
+      actions: {
+        refresh: 'Refresh',
+        viewDetail: 'View Details',
+        embedSettings: 'Embed Settings'
+      },
+      tabs: {
+        all: 'All'
+      },
+      status: {
+        open: 'Open',
+        pending: 'Pending',
+        replied: 'Replied',
+        closed: 'Closed',
+        loading: 'Loading tickets...'
+      },
+      fields: {
+        title: 'Title',
+        status: 'Status',
+        category: 'Category',
+        priority: 'Priority',
+        manualEmail: 'Contact Email',
+        sub2apiUser: 'Sub2API User',
+        sub2apiSrcHost: 'Source Host',
+        lastMessageAt: 'Last Reply',
+        actions: 'Actions'
+      },
+      empty: {
+        title: 'No tickets yet',
+        description: 'This workspace has not received any tickets yet.'
+      },
+      pagination: {
+        total: '{total} total',
+        pageSize: '{pageSize} per page',
+        currentPage: 'Page {page} of {totalPages}',
+        previous: 'Previous',
+        next: 'Next'
+      },
+      errors: {
+        network: 'Network or CORS request failed. Check the API URL and cross-origin settings.',
+        request: 'The ticket request failed. Try again later.',
+        unknown: 'An unknown error occurred while loading tickets.',
+        notFound: 'Ticket not found.',
+        invalidStatus: 'Invalid ticket status.',
+        bodyRequired: 'Reply content is required.',
+        ticketClosed: 'This ticket is closed and can no longer be replied to.',
+        noCurrentAccount: 'Please select a workspace first.',
+        invalidTemplate: 'Unsupported embed page template.',
+        invalidMaxImages: 'Max images per ticket must be between 0 and 9.',
+        attachmentLoadFailed: 'Failed to load image, please try again later.',
+        invalidCategoryOptions: 'Invalid category options. Check for empty, duplicate, or over-limit entries.',
+        invalidPriorityOptions: 'Invalid priority options. Check for empty, duplicate, or over-limit entries.'
+      },
+      detail: {
+        title: 'Ticket Details',
+        sectionTicket: 'Ticket Info',
+        sectionMessages: 'Messages',
+        sectionReply: 'Reply',
+        category: 'Category',
+        priority: 'Priority',
+        manualEmail: 'Contact Email',
+        lastMessageAt: 'Last Reply',
+        sub2apiUserId: 'Sub2API User ID',
+        sub2apiEmail: 'Sub2API Email',
+        sub2apiRole: 'Sub2API Role',
+        sub2apiSrcHost: 'Source Host',
+        authorAdmin: 'Support',
+        authorCustomer: 'User',
+        replyPlaceholder: 'Type your reply...',
+        send: 'Send Reply',
+        attachmentLoadFailed: 'Failed to load image',
+        previewImage: 'Zoom preview',
+        closePreview: 'Close preview'
+      },
+      embedConfig: {
+        title: 'Embed Settings',
+        sections: {
+          basic: 'Basic Settings',
+          category: 'Category',
+          priority: 'Priority'
+        },
+        legacyNotice: 'The "Enable Embedded Tickets" and "Allowed Source Host" settings have been removed. The embed URL is always active; contact an administrator if you need to restrict access.',
+        embedUrl: 'Embed URL',
+        embedUrlHint: 'Configure this URL in the Sub2API custom iframe. Sub2API automatically appends user identity parameters.',
+        copy: 'Copy',
+        copied: 'Copied',
+        copyFailed: 'Copy failed, please copy manually.',
+        openPreview: 'Open Ticket Page',
+        openPreviewHint: 'Opens the embed page in a new tab for preview. Identity parameters will be missing outside a real Sub2API iframe — that is expected.',
+        template: 'Page Template',
+        templates: {
+          default: {
+            name: 'Default Compact',
+            description: 'Standard rounded card style, suitable for default use.'
+          },
+          minimal: {
+            name: 'Minimal',
+            description: 'A lighter visual density, suitable for embedding into an existing admin style.'
+          },
+          support: {
+            name: 'Support Panel',
+            description: 'A more conversational look, suitable for use as a standalone support panel.'
+          }
+        },
+        maxImages: 'Max Images Per Ticket',
+        maxImagesHint: '0 disables image uploads. Maximum 9 images.',
+        categoryOptions: 'Category Options',
+        priorityOptions: 'Priority Options',
+        addOption: 'Add Option',
+        addOptionPlaceholder: 'Type a new option and click add',
+        removeOption: 'Remove this option',
+        restoreDefaults: 'Restore Defaults',
+        optionsHint: 'Keep at least 1 option, up to 40 characters each. Customers must pick from these when creating a ticket.',
+        saveTemplate: 'Save Settings',
+        saving: 'Saving...',
+        saveSuccess: 'Settings saved',
+        rotateToken: 'Rotate Embed URL',
+        confirmRotate: 'Are you sure you want to rotate the embed URL? The old embed URL will stop working immediately.'
+      },
+      sub2apiProfile: {
+        title: 'Sub2API User Profile',
+        sectionIdentity: 'Identity',
+        userId: 'User ID',
+        email: 'Email',
+        role: 'Role',
+        srcHost: 'Source Host',
+        username: 'Username',
+        status: 'Account Status',
+        sectionBalance: 'Balance & Recharge',
+        balance: 'Current Balance',
+        totalRecharged: 'Total Recharged',
+        registeredAt: 'Registered At',
+        frozenBalance: 'Frozen Balance',
+        concurrency: 'Concurrency',
+        rpmLimit: 'RPM Limit',
+        lastUsedAt: 'Last Used At',
+        unavailable: 'Not available',
+        sectionRechargeHistory: 'Recharge History',
+        rechargeHistoryComingSoon: 'Not provided yet',
+        historyEmpty: 'No recharge history yet',
+        empty: 'No data',
+        remoteUnavailable: {
+          noUserId: 'This ticket has no recorded Sub2API user ID, so live data cannot be queried.',
+          noAdminSession: 'The current workspace is not logged into a Sub2API admin account. Showing ticket snapshot data only.',
+          userNotFound: 'Could not fetch live data for this user from Sub2API. Showing ticket snapshot data only.'
+        }
+      }
+    },
     settings: {
       title: 'System Settings',
       subtitle: 'Manage system parameters, notification channels, and automation strategies.',
@@ -1275,9 +1433,93 @@ export default {
     },
     system: {
       version: 'Version {version}',
+      openRelease: 'View release notes',
+      openGithubRepository: 'View source on GitHub',
       errors: {
         network: 'System info request failed. Check your network connection.',
         request: 'System request failed. Please try again later.'
+      }
+    }
+  },
+  embed: {
+    tickets: {
+      page: {
+        loading: 'Loading ticket system...'
+      },
+      list: {
+        title: 'My Tickets',
+        refresh: 'Refresh',
+        create: 'New Ticket',
+        loading: 'Loading tickets...',
+        emptyTitle: 'No tickets yet',
+        emptyDescription: 'Click "New Ticket" to submit your first question.'
+      },
+      createModal: {
+        title: 'New Ticket'
+      },
+      form: {
+        manualEmail: 'Contact Email',
+        manualEmailPlaceholder: 'Enter the email to receive replies',
+        title: 'Title',
+        titlePlaceholder: 'Briefly describe your issue',
+        body: 'Details',
+        bodyPlaceholder: 'Describe the issue in detail',
+        category: 'Category',
+        categoryPlaceholder: 'Select a category',
+        priority: 'Priority',
+        priorityPlaceholder: 'Select a priority',
+        submit: 'Submit Ticket',
+        cancel: 'Cancel',
+        images: 'Images',
+        imagesCount: '{count} / {max}',
+        addImage: 'Add Image',
+        imagesHint: 'JPEG/PNG/WEBP/GIF only, up to 5MB per image.'
+      },
+      detail: {
+        back: 'Back to list',
+        loading: 'Loading ticket details...',
+        support: 'Support',
+        you: 'You',
+        replyPlaceholder: 'Type your reply...',
+        send: 'Send',
+        closedNotice: 'This ticket is closed and can no longer be replied to.'
+      },
+      attachments: {
+        loadFailed: 'Failed to load image'
+      },
+      status: {
+        open: 'Open',
+        pending: 'Pending',
+        replied: 'Replied',
+        closed: 'Closed'
+      },
+      errors: {
+        network: 'Network or CORS request failed. Check the API URL and cross-origin settings.',
+        request: 'The ticket request failed. Try again later.',
+        unknown: 'An unknown error occurred. Please try again later.',
+        missingParams: 'This page is missing required parameters and cannot start a session. If you opened it via the "Open Ticket Page" preview button, this is expected — open this page from within a real Sub2API iframe instead.',
+        formIncomplete: 'Please fill in the contact email, title, and details, and select a category and priority.',
+        configNotFound: 'The embed configuration does not exist.',
+        disabled: 'The ticket feature has been disabled by the administrator.',
+        invalidSrcHost: 'Invalid source host.',
+        srcHostMismatch: 'The source host is not trusted.',
+        sub2apiAuth: 'Identity verification failed. Please refresh the page and try again.',
+        sub2apiRequest: 'Failed to fetch user info. Please try again later.',
+        userMismatch: 'User identity verification failed.',
+        sessionInvalid: 'Session expired. Please refresh the page and try again.',
+        invalidEmail: 'Please enter a valid email address.',
+        titleRequired: 'Please enter a title.',
+        bodyRequired: 'Please enter the details.',
+        categoryRequired: 'Please select a category.',
+        priorityRequired: 'Please select a priority.',
+        invalidCategory: 'The selected category is not part of the current ticket configuration. Please choose again.',
+        invalidPriority: 'The selected priority is not part of the current ticket configuration. Please choose again.',
+        ticketClosed: 'This ticket is closed and can no longer be replied to.',
+        tooManyImages: 'The number of images exceeds the current limit.',
+        invalidImageType: 'Only JPEG/PNG/WEBP/GIF images are supported.',
+        imageTooLarge: 'Each image must be 5MB or smaller.',
+        emptyImage: 'The image is empty, please choose another one.',
+        attachmentLoadFailed: 'Failed to load image, please try again later.'
       }
     }
   }

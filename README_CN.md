@@ -110,11 +110,10 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
-# - 镜像 tag（默认使用 deviseo/transithub:latest）
+# - 镜像 tag（默认使用 deviseo/transithub:0.0.4）
 # - 替换所有 change-this-* 占位值
 # - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
-# - 如需自定义后台展示版本，可调整 APP_VERSION
 
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
@@ -136,7 +135,10 @@ http://YOUR_SERVER_IP:10621
 ```text
 data/postgres
 data/redis
+data/ticket-uploads
 ```
+
+`data/ticket-uploads` 存放工单图片附件（挂载到 `app` 容器的 `TICKET_UPLOAD_DIR`，默认 `/app/data/ticket-uploads`），不会作为公开静态目录对外暴露。重建 `app` 容器前请确认该 volume 已存在，否则图片文件会丢失（数据库里的附件 metadata 不受影响）。
 
 ### 开发依赖服务
 
@@ -153,7 +155,7 @@ docker compose -f deploy/docker-compose.yml up -d
 由于 Dockerfile 放在 `deploy/`，但构建上下文需要使用仓库根目录，请使用：
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:latest .
+docker build -f deploy/Dockerfile -t deviseo/transithub:0.0.4 .
 ```
 
 ## 本地开发
@@ -175,7 +177,6 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=transithub
 ALLOW_PUBLIC_REGISTER=true
-APP_VERSION=dev
 ```
 
 ### 前端
@@ -238,7 +239,7 @@ transit-hub/
 
 ## 项目说明
 
-- `APP_VERSION` 仅用于后台展示。
+- 后台展示版本号由发布代码内置，部署用户不可通过环境变量自定义。
 - `AGENTS.md`、`CLAUDE.md`、`.sisyphus/`、本地 `.env`、构建产物和运行时数据均会被 Git 忽略。
 
 ## Star History 星际历史

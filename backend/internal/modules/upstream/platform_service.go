@@ -2108,3 +2108,111 @@ func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accou
 	})
 	return err
 }
+
+// sub2APIUserIDKeys/sub2APIUserCreatedAtKeys/sub2APIUserLastUsedAtKeys/sub2APIBalanceHistoryTimeKeys
+// 是解析 Sub2API admin 用户资料相关字段时兼容的候选 key 列表（snake_case / camelCase）。
+var (
+	sub2APIUserIDKeys             = []string{"id", "user_id", "userId"}
+	sub2APIUserCreatedAtKeys      = []string{"created_at", "createdAt", "registered_at", "registeredAt"}
+	sub2APIUserLastUsedAtKeys     = []string{"last_used_at", "lastUsedAt"}
+	sub2APIBalanceHistoryTimeKeys = []string{"created_at", "createdAt"}
+)
+
+// FetchSub2APIAdminUser 通过 GET /api/v1/admin/users/:id 查询指定 Sub2API 用户的只读资料，
+// 仅用于工单模块"Sub2API 用户资料"弹窗展示，绝不写入/修改 Sub2API 数据。调用方必须传入
+// 当前 TransitHub workspace 的 admin session（已经过 RequireSession 刷新并校验过 admin 身份），
+// 不能使用 iframe 用户自己的 token 查询别的用户的资料。
+func (s *PlatformService) FetchSub2APIAdminUser(session Session, userID string) (Sub2APIAdminUser, error) {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return Sub2APIAdminUser{}, newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	trimmedID := strings.TrimSpace(userID)
+	if trimmedID == "" {
+		return Sub2APIAdminUser{}, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	requestURL := session.BaseURL + "/api/v1/admin/users/" + url.PathEscape(trimmedID)
+	response, err := s.httpClient.requestJSON(requestURL, requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
+	if err != nil {
+		return Sub2APIAdminUser{}, err
+	}
+	return parseSub2APIAdminUser(dataRecord(response.Payload)), nil
+}
+
+// FetchSub2APIAdminUserBalanceHistory 通过 GET /api/v1/admin/users/:id/balance-history 查询
+// 指定 Sub2API 用户的余额/充值历史。page/pageSize 非法时分别回退到 1/20；codeType 为空时不带
+// type 查询参数。
+func (s *PlatformService) FetchSub2APIAdminUserBalanceHistory(session Session, userID string, page int, pageSize int, codeType string) (Sub2APIUserBalanceHistory, error) {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return Sub2APIUserBalanceHistory{}, newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	trimmedID := strings.TrimSpace(userID)
+	if trimmedID == "" {
+		return Sub2APIUserBalanceHistory{}, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	requestURL := session.BaseURL + "/api/v1/admin/users/" + url.PathEscape(trimmedID) +
+		"/balance-history?page=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(int64(pageSize))
+	if trimmedType := strings.TrimSpace(codeType); trimmedType != "" {
+		requestURL += "&type=" + url.QueryEscape(trimmedType)
+	}
+	response, err := s.httpClient.requestJSON(requestURL, requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
+	if err != nil {
+		return Sub2APIUserBalanceHistory{}, err
+	}
+	history := Sub2APIUserBalanceHistory{
+		TotalRecharged: firstNumber(dataRecord(response.Payload), []string{"total_recharged", "totalRecharged"}),
+	}
+	if total, ok := paginationTotal(response.Payload); ok {
+		history.Total = total
+	}
+	for _, item := range dataArray(response.Payload) {
+		history.Items = append(history.Items, parseSub2APIBalanceHistoryItem(item))
+	}
+	return history, nil
+}
+
+// parseSub2APIAdminUser 从 GET /api/v1/admin/users/:id 的响应记录中解析只读字段，兼容
+// snake_case / camelCase；字段缺失或类型不匹配时保持零值，由调用方按需要降级展示。
+func parseSub2APIAdminUser(value any) Sub2APIAdminUser {
+	user := Sub2APIAdminUser{ID: firstStringy(value, sub2APIUserIDKeys)}
+	if email := firstString(value, []string{"email"}); email != nil {
+		user.Email = *email
+	}
+	if username := firstString(value, []string{"username"}); username != nil {
+		user.Username = *username
+	}
+	if role := firstString(value, []string{"role"}); role != nil {
+		user.Role = *role
+	}
+	user.Status = firstStringy(value, []string{"status"})
+	user.Balance = firstNumber(value, []string{"balance"})
+	user.FrozenBalance = firstNumber(value, []string{"frozen_balance", "frozenBalance"})
+	if concurrency := firstNumber(value, []string{"concurrency"}); concurrency != nil {
+		v := int(*concurrency)
+		user.Concurrency = &v
+	}
+	if rpmLimit := firstNumber(value, []string{"rpm_limit", "rpmLimit"}); rpmLimit != nil {
+		v := int(*rpmLimit)
+		user.RPMLimit = &v
+	}
+	user.CreatedAt = parseFlexibleTime(firstAny(value, sub2APIUserCreatedAtKeys))
+	user.LastUsedAt = parseFlexibleTime(firstAny(value, sub2APIUserLastUsedAtKeys))
+	return user
+}
+
+// parseSub2APIBalanceHistoryItem 解析余额/充值历史单条记录，兼容 snake_case / camelCase。
+func parseSub2APIBalanceHistoryItem(value any) Sub2APIBalanceHistoryItem {
+	item := Sub2APIBalanceHistoryItem{ID: firstStringy(value, []string{"id"})}
+	item.Type = firstStringy(value, []string{"type", "code_type", "codeType"})
+	item.Amount = firstNumber(value, []string{"amount", "balance", "value"})
+	if note := firstString(value, []string{"notes", "note", "remark"}); note != nil {
+		item.Note = *note
+	}
+	item.CreatedAt = parseFlexibleTime(firstAny(value, sub2APIBalanceHistoryTimeKeys))
+	return item
+}

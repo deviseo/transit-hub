@@ -110,11 +110,10 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
-# - image tag (defaults to deviseo/transithub:latest)
+# - image tag (defaults to deviseo/transithub:0.0.4)
 # - replace every change-this-* placeholder
 # - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
-# - APP_VERSION if you want a custom version label
 
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
@@ -136,7 +135,10 @@ Persistent data is stored under the repository root `data/` directory by default
 ```text
 data/postgres
 data/redis
+data/ticket-uploads
 ```
+
+`data/ticket-uploads` holds uploaded ticket images (mounted into the `app` container at `TICKET_UPLOAD_DIR`, default `/app/data/ticket-uploads`). It is not served as a public static directory; make sure this volume is present before recreating the `app` container, otherwise uploaded images will be lost even though their metadata remains in the database.
 
 ### Development Services
 
@@ -153,7 +155,7 @@ This starts PostgreSQL and Redis on local ports `5432` and `6379`.
 Because the Dockerfile is stored in `deploy/` but expects the repository root as build context, build with:
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:latest .
+docker build -f deploy/Dockerfile -t deviseo/transithub:0.0.4 .
 ```
 
 ## Local Development
@@ -175,7 +177,6 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=transithub
 ALLOW_PUBLIC_REGISTER=true
-APP_VERSION=dev
 ```
 
 ### Frontend
@@ -238,7 +239,7 @@ transit-hub/
 
 ## Project Notes
 
-- `APP_VERSION` is only used for display.
+- The displayed backend version is built into the release code and is not configurable by deployment users.
 - `AGENTS.md`, `CLAUDE.md`, `.sisyphus/`, local `.env` files, build output, and runtime data are intentionally ignored by Git.
 
 ## Star History

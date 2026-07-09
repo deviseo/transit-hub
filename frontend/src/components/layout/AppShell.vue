@@ -5,6 +5,7 @@ import gsap from 'gsap'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { Sun, Moon, Globe } from 'lucide-vue-next'
+import logoUrl from '@/assets/logo.png'
 
 const headerRef = ref<HTMLElement | null>(null)
 
@@ -39,10 +40,8 @@ onMounted(() => {
     <header ref="headerRef" class="fixed top-0 left-0 right-0 z-50 border-b border-border/40 bg-background/60 backdrop-blur-xl">
       <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div class="flex items-center gap-2">
-          <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-            <span class="text-lg font-black text-primary leading-none">T</span>
-          </div>
-          <span class="text-xl font-bold tracking-tight text-foreground">TransitHub</span>
+          <img :src="logoUrl" :alt="t('brand.logoAlt')" class="h-8 w-8 shrink-0 object-contain" />
+          <span class="text-xl font-bold tracking-tight text-foreground">{{ t('brand.name') }}</span>
         </div>
         
         <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-muted-foreground">

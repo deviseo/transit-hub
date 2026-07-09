@@ -3,8 +3,8 @@
 services:
   # TransitHub 应用服务：包含 Go 后端和已构建的前端静态文件。
   app:
-    # 默认使用 Docker Hub 最新镜像；如需固定版本，可改为 deviseo/transithub:0.1.1。
-    image: deviseo/transithub:latest
+    # 发布部署必须使用与代码内置版本号一致的固定镜像 tag。
+    image: deviseo/transithub:0.0.4
     restart: unless-stopped
     depends_on:
       postgres:
@@ -24,8 +24,12 @@ services:
       ADMIN_PASSWORD: change-this-admin-password
       # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
       ALLOW_PUBLIC_REGISTER: "false"
-      # 当前运行版本号，仅用于后台纯展示。
-      APP_VERSION: latest
+      # 工单图片附件本地存储目录，必须和下方 volumes 挂载的容器内路径完全一致，
+      # 否则容器重建后图片文件会丢失（数据库里的附件 metadata 不受影响）。
+      TICKET_UPLOAD_DIR: /app/data/ticket-uploads
+    volumes:
+      # 持久化工单图片附件；不要挂载到 /app/public 之下，避免变成公开静态目录。
+      - ../data/ticket-uploads:/app/data/ticket-uploads
 
   # PostgreSQL 数据库服务。
   postgres:

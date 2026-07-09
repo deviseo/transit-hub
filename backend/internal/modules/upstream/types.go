@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 type Platform string
@@ -236,6 +237,39 @@ type AdminSiteBalance struct {
 type BalanceFilter struct {
 	ExcludeAdmin    bool      // 是否排除 admin 角色用户
 	ExcludeBalances []float64 // 需要排除的精确余额值（如 0、0.1、1 等）
+}
+
+// Sub2APIAdminUser 是 GET /api/v1/admin/users/:id 返回的用户详情中，工单模块"Sub2API 用户
+// 资料"弹窗需要展示的只读字段。字段在远端响应中不存在或类型不匹配时保持零值/nil，
+// 由调用方（tickets.Service）按需降级展示，不在这里伪造数据。
+type Sub2APIAdminUser struct {
+	ID            string
+	Email         string
+	Username      string
+	Role          string
+	Status        string
+	Balance       *float64
+	FrozenBalance *float64
+	Concurrency   *int
+	RPMLimit      *int
+	CreatedAt     *time.Time
+	LastUsedAt    *time.Time
+}
+
+// Sub2APIBalanceHistoryItem 是 Sub2API 用户余额/充值历史中的单条记录。
+type Sub2APIBalanceHistoryItem struct {
+	ID        string
+	Type      string
+	Amount    *float64
+	Note      string
+	CreatedAt *time.Time
+}
+
+// Sub2APIUserBalanceHistory 是 GET /api/v1/admin/users/:id/balance-history 的解析结果。
+type Sub2APIUserBalanceHistory struct {
+	Items          []Sub2APIBalanceHistoryItem
+	Total          int
+	TotalRecharged *float64
 }
 
 // KeyUsageTodayStat 是平台层返回的单个 key 今日消费统计（上游平台原始金额，未乘以站点 rechargeRate）。

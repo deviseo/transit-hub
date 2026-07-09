@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const defaultDisplay = "-"
@@ -116,6 +117,71 @@ func firstNumber(value any, keys []string) *float64 {
 		}
 	}
 	return nil
+}
+
+// firstAny 返回 record 中第一个存在且非 nil 的字段原始值（不做类型转换）。
+// 供需要同时兼容字符串/数字等多种表示形式的字段（例如时间戳）使用，
+// 由调用方自行按需要的类型解析。
+func firstAny(value any, keys []string) any {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range keys {
+		if v, ok := record[key]; ok && v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+// firstStringy 兼容某些平台把 id/status 等字段序列化成数字而不是字符串的情况，
+// 优先按字符串读取，其次退化为数字并格式化成字符串；两者都取不到时返回空字符串。
+func firstStringy(value any, keys []string) string {
+	if text := firstString(value, keys); text != nil {
+		return *text
+	}
+	if number := firstNumber(value, keys); number != nil {
+		return strconv.FormatFloat(*number, 'f', -1, 64)
+	}
+	return ""
+}
+
+// parseFlexibleTime 尽量把常见的时间表示形式解析为 time.Time：RFC3339 及常见的
+// "yyyy-MM-dd HH:mm:ss"/"yyyy-MM-dd" 字符串、unix 秒/毫秒时间戳（含字符串形式的时间戳）。
+// 无法识别的值返回 nil，交由调用方视为字段不可用，而不是拼凑一个可能错误的时间。
+func parseFlexibleTime(value any) *time.Time {
+	switch typed := value.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return nil
+		}
+		layouts := []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05", "2006-01-02"}
+		for _, layout := range layouts {
+			if parsed, err := time.Parse(layout, trimmed); err == nil {
+				return &parsed
+			}
+		}
+		if seconds, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+			parsed := unixFlexible(seconds)
+			return &parsed
+		}
+		return nil
+	case float64:
+		parsed := unixFlexible(int64(typed))
+		return &parsed
+	default:
+		return nil
+	}
+}
+
+// unixFlexible 猜测 unix 时间戳的精度：数值大于 1e12 视为毫秒，否则视为秒。
+func unixFlexible(value int64) time.Time {
+	if value > 1_000_000_000_000 {
+		return time.UnixMilli(value)
+	}
+	return time.Unix(value, 0)
 }
 
 func groupID(value any) string {
