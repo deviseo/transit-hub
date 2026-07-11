@@ -110,7 +110,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
-# - 镜像 tag（默认使用 deviseo/transithub:v0.1.4）
+# - 镜像 tag（默认使用 deviseo/transithub:v0.1.5）
 # - 替换所有 change-this-* 占位值
 # - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -140,6 +140,14 @@ data/ticket-uploads
 
 `data/ticket-uploads` 存放工单图片附件（挂载到 `app` 容器的 `TICKET_UPLOAD_DIR`，默认 `/app/data/ticket-uploads`），不会作为公开静态目录对外暴露。重建 `app` 容器前请确认该 volume 已存在，否则图片文件会丢失（数据库里的附件 metadata 不受影响）。
 
+`SMTP_ENCRYPTION_KEY` 是可选环境变量，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。缺失该变量不会阻止应用启动，也不影响任何非 SMTP 功能。生成方式：
+
+```bash
+openssl rand -base64 32
+```
+
+该值必须是 base64 编码的 32 字节随机值，且一经设置需要长期稳定保存；更换 key 后，旧的 SMTP 密码密文将无法解密，需要重新填写并保存密码。
+
 ### 开发依赖服务
 
 本地开发只启动 PostgreSQL 和 Redis：
@@ -155,7 +163,7 @@ docker compose -f deploy/docker-compose.yml up -d
 由于 Dockerfile 放在 `deploy/`，但构建上下文需要使用仓库根目录，请使用：
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.4 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.5 .
 ```
 
 ## 本地开发

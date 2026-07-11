@@ -4,7 +4,7 @@ services:
   # TransitHub 应用服务：包含 Go 后端和已构建的前端静态文件。
   app:
     # 发布部署必须使用与代码内置版本号一致的固定镜像 tag。
-    image: deviseo/transithub:v0.1.4
+    image: deviseo/transithub:v0.1.5
     restart: unless-stopped
     depends_on:
       postgres:
@@ -27,6 +27,10 @@ services:
       # 工单图片附件本地存储目录，必须和下方 volumes 挂载的容器内路径完全一致，
       # 否则容器重建后图片文件会丢失（数据库里的附件 metadata 不受影响）。
       TICKET_UPLOAD_DIR: /app/data/ticket-uploads
+      # 可选：SMTP 密码加密密钥，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。
+      # 缺失不影响应用启动，也不影响 SMTP 之外的功能。用 `openssl rand -base64 32` 生成一个 base64 编码的
+      # 32 字节随机值；生成后必须长期稳定保存——更换 key 后，旧的 SMTP 密码密文将无法解密，需要重新填写密码。
+      # SMTP_ENCRYPTION_KEY: change-this-to-a-generated-base64-32-byte-key
     volumes:
       # 持久化工单图片附件；不要挂载到 /app/public 之下，避免变成公开静态目录。
       - ../data/ticket-uploads:/app/data/ticket-uploads
