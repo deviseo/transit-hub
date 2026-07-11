@@ -20,6 +20,7 @@ import (
 	"transithub/backend/internal/modules/group_rate_campaigns"
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
+	"transithub/backend/internal/modules/mass_email"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/settings"
 	"transithub/backend/internal/modules/system"
@@ -111,6 +112,12 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	if err := settingsService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
+	// SMTP_ENCRYPTION_KEY 是可选项：空值不影响启动；显式配置了非法值（非 base64 或非 32 字节）
+	// 必须尽早启动失败，避免运行时才发现加密能力不可用。抽成 configureSMTPEncryptionKey
+	// 这个窄 seam，便于在不启动真实 DB/Redis 依赖的情况下单元测试这条组装路径。
+	if _, err := configureSMTPEncryptionKey(settingsService, cfg.SMTPEncryptionKey); err != nil {
+		panic(err)
+	}
 
 	// dashboard 指标表必须在 admin_accounts 之前完成 schema，
 	// 因为 admin_accounts.EnsureSchema 的 legacy 迁移会 UPDATE dashboard 表。
@@ -131,6 +138,21 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 
 	// 注入机器人通知能力，供自动调价成功后发送通知。
 	mySitesService.SetBotNotifier(settingsService)
+
+	// 批量邮件模块只复用已保存的模板/SMTP 配置和当前 workspace 的 Sub2API admin 会话；
+	// 创建批次时只解析收件人，真正 SMTP 发送由 Postgres-backed worker 异步执行。
+	massEmailService := mass_email.NewService(
+		mass_email.NewRepository(db),
+		mySitesService,
+		platformService,
+		settingsService,
+	)
+	if err := massEmailService.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	mass_email.RegisterRoutes(server.mux, massEmailService, adminAccountsService)
+	massEmailWorker := mass_email.NewWorker(massEmailService)
+	massEmailWorker.Start(context.Background())
 
 	// 活动调价中心：批量修改 admin 自有分组倍率的独立模块，不复用/不污染 my_sites 的自动调价逻辑。
 	// mySitesService 提供 admin 会话与分组倍率读写能力，groupRatesService 提供分组类型标签查询，
@@ -263,7 +285,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/mass-email")
 }
 
 func bearerToken(header string) string {
