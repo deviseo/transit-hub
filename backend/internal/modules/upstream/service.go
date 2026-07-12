@@ -43,6 +43,7 @@ type Service struct {
 	accounts        AdminAccountResolver
 	refreshConfig   RefreshConfig
 	timers          map[string]*time.Timer
+	deletedSites    map[string]struct{}
 	mu              sync.Mutex
 	// AfterSync 在站点同步成功后被调用，传入同步前后的指标数据。
 	// 由系统设置模块注入，用于余额预警和倍率变更检测。
@@ -69,6 +70,7 @@ func NewService(platformService *PlatformService, repository SiteRepository, sna
 		repository:      repository,
 		cache:           cache,
 		timers:          make(map[string]*time.Timer),
+		deletedSites:    make(map[string]struct{}),
 	}
 }
 
@@ -132,6 +134,9 @@ func (s *Service) RestoreSavedSites(ctx context.Context) error {
 			continue
 		}
 		site := &sites[i]
+		if _, deleted := s.deletedSites[site.ID]; deleted {
+			continue
+		}
 		if err := s.cache.Set(ctx, site); err != nil {
 			return err
 		}
@@ -220,7 +225,7 @@ func (s *Service) FetchGroupDailyStats(ctx context.Context, userID string, id st
 	site, err = s.cache.Get(ctx, id)
 	if err == nil && site != nil && site.UserID == userID {
 		site.Session = &refreshedSession
-		_ = s.cache.Set(ctx, site)
+		_ = s.setCachedSite(ctx, site)
 		_ = s.saveSite(ctx, site)
 	}
 	return stats, nil
@@ -288,7 +293,7 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 			// 将刷新后的会话写回缓存和数据库，与 FetchGroupDailyStats 的写回模式一致。
 			if cached, cacheErr := s.cache.Get(ctx, site.ID); cacheErr == nil && cached != nil && cached.UserID == site.UserID {
 				cached.Session = &refreshedSession
-				_ = s.cache.Set(ctx, cached)
+				_ = s.setCachedSite(ctx, cached)
 				_ = s.saveSite(ctx, cached)
 			}
 
@@ -398,7 +403,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	}
 
 	// 先写入缓存和数据库。
-	if err := s.cache.Set(ctx, site); err != nil {
+	if err := s.setCachedSite(ctx, site); err != nil {
 		return Response{}, err
 	}
 	if err := s.saveSite(ctx, site); err != nil {
@@ -414,7 +419,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 		key := errorKey(loginErr)
 		site.ErrorKey = &key
 		response := toResponse(site)
-		_ = s.cache.Set(ctx, site)
+		_ = s.setCachedSite(ctx, site)
 		if saveErr := s.saveSite(ctx, site); saveErr != nil {
 			return response, saveErr
 		}
@@ -431,7 +436,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	site.ErrorKey = nil
 	site.LastSyncedAt = &now
 
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 
 	s.mu.Lock()
 	s.scheduleSyncLocked(id, site)
@@ -481,7 +486,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 
 	if shouldRelogin {
 		// 先保存基本字段更新到缓存。
-		_ = s.cache.Set(ctx, site)
+		_ = s.setCachedSite(ctx, site)
 
 		log.Printf("[upstream] 更新站点登录开始 id=%s name=%s url=%s", id, dto.Name, dto.SiteURL)
 		result, loginErr := s.updateLogin(dto)
@@ -501,7 +506,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 			key := errorKey(loginErr)
 			site.ErrorKey = &key
 			response := toResponse(site)
-			_ = s.cache.Set(ctx, site)
+			_ = s.setCachedSite(ctx, site)
 			if saveErr := s.saveSite(ctx, site); saveErr != nil {
 				s.restoreSite(ctx, id, &previousSite)
 				return response, saveErr
@@ -518,7 +523,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 		site.ErrorKey = nil
 		site.LastSyncedAt = &now
 
-		_ = s.cache.Set(ctx, site)
+		_ = s.setCachedSite(ctx, site)
 
 		s.mu.Lock()
 		s.scheduleSyncLocked(id, site)
@@ -533,7 +538,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 	}
 
 	// 无需重新登录：仅更新基本字段。
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 	if err := s.saveSite(ctx, site); err != nil {
 		s.restoreSite(ctx, id, &previousSite)
 		return toResponse(site), err
@@ -735,7 +740,7 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 	// 标记为同步中。
 	site.Status = StatusSyncing
 	site.ErrorKey = nil
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 	session := *site.Session
 
 	// 刷新会话并拉取指标（无锁操作，可能耗时较长）。
@@ -767,7 +772,7 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 		site.LastSyncedAt = &now
 	}
 
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 
 	s.mu.Lock()
 	s.scheduleSyncLocked(id, site)
@@ -850,6 +855,39 @@ func (s *Service) Remove(ctx context.Context, userID string, id string) error {
 	return nil
 }
 
+// CleanupDeletedWorkspaceSites 清理工作区删除后遗留的本地运行时状态。
+// 它只停止内存定时器并删除 Redis site cache，不调用任何上游远程删除接口。
+func (s *Service) CleanupDeletedWorkspaceSites(ctx context.Context, userID string, siteIDs []string) error {
+	ids := make([]string, 0, len(siteIDs))
+	seen := make(map[string]struct{}, len(siteIDs))
+	for _, id := range siteIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	s.mu.Lock()
+	for _, id := range ids {
+		s.deletedSites[id] = struct{}{}
+		s.clearTimerLocked(id)
+	}
+	s.mu.Unlock()
+
+	var errs []error
+	for _, id := range ids {
+		if err := s.cache.Delete(ctx, id, userID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (s *Service) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -863,6 +901,9 @@ func (s *Service) Close() {
 // 调用方必须持有 s.mu 锁。
 func (s *Service) scheduleSyncLocked(id string, site *Site) {
 	s.clearTimerLocked(id)
+	if _, deleted := s.deletedSites[id]; deleted {
+		return
+	}
 	if !s.refreshConfig.Enabled || site == nil || site.Session == nil {
 		return
 	}
@@ -966,7 +1007,7 @@ func (s *Service) UpdateSettings(ctx context.Context, userID string, siteID stri
 		return Response{}, newRequestError(ErrorNotFound, "")
 	}
 	site.Settings = dto
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 	if saveErr := s.saveSite(ctx, site); saveErr != nil {
 		return Response{}, saveErr
 	}
@@ -1001,9 +1042,31 @@ func (s *Service) saveSite(ctx context.Context, site *Site) error {
 	if s.repository == nil || site == nil {
 		return nil
 	}
+	if s.isSiteDeleted(site.ID) {
+		return newRequestError(ErrorNotFound, "")
+	}
 	ctx, cancel := context.WithTimeout(ctx, persistenceTimeout)
 	defer cancel()
 	return s.repository.SaveSite(ctx, *site)
+}
+
+func (s *Service) setCachedSite(ctx context.Context, site *Site) error {
+	if site == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, deleted := s.deletedSites[site.ID]; deleted {
+		return newRequestError(ErrorNotFound, "")
+	}
+	return s.cache.Set(ctx, site)
+}
+
+func (s *Service) isSiteDeleted(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, deleted := s.deletedSites[id]
+	return deleted
 }
 
 func (s *Service) deleteSite(ctx context.Context, userID string, id string) error {
@@ -1021,7 +1084,7 @@ func (s *Service) restoreSite(ctx context.Context, id string, site *Site) {
 	if site == nil {
 		return
 	}
-	_ = s.cache.Set(ctx, site)
+	_ = s.setCachedSite(ctx, site)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scheduleSyncLocked(id, site)
