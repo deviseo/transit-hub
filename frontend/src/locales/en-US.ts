@@ -134,9 +134,23 @@ export default {
       addWorkspace: 'Add Workspace',
       addWorkspaceHint: 'Connect a new site admin account',
       creating: 'Creating workspace...',
+      delete: {
+        actionLabel: 'Delete workspace {name}',
+        title: 'Delete {name}',
+        localDataWarning: 'All TransitHub local workspace data for this workspace will be permanently deleted. This cannot be undone.',
+        remoteResourcesRetained: 'Remote upstream resources and accounts are retained and will not be deleted.',
+        phraseInstruction: 'Type the exact phrase below to confirm: {phrase}',
+        inputLabel: 'Confirmation phrase',
+        inputPlaceholder: 'Type the phrase manually',
+        cancel: 'Cancel',
+        confirm: 'Delete Workspace',
+        deleting: 'Deleting...',
+        cleanupPending: 'Workspace deletion completed, but local runtime, cache, or file cleanup is still pending and will retry.'
+      },
       errors: {
         noCurrentAccount: 'Please select a workspace first.',
         notFound: 'Workspace not found.',
+        deleteFailed: 'Workspace deletion failed. Type the confirmation phrase again and retry.',
         request: 'Operation failed. Please try again.',
         network: 'Network error. Check your connection and try again.'
       }
@@ -309,10 +323,13 @@ export default {
     },
     groupAssociations: {
       title: 'Group Mappings',
-      subtitle: '{count} mappings total',
+      subtitle: '{count} groups · {associated} associated · {unassociated} unassociated',
       close: 'Close',
       empty: 'No group mappings found.',
       loadError: 'Failed to load group list.',
+      runError: 'Failed to run auto-pricing. Please try again.',
+      unassociatedLabel: 'No upstream linked',
+      unassociatedMultiplier: 'Not available',
       columns: {
         index: '#',
         ownGroup: 'Own Group',
@@ -340,7 +357,36 @@ export default {
       },
       autoPricingActions: {
         configure: 'Configure',
-        edit: 'Edit'
+        edit: 'Edit',
+        runNow: 'Run Now',
+        runNowFor: 'Run auto-pricing now for {group}'
+      },
+      lastRun: {
+        never: 'Never',
+        summary: 'Last: {status} · {trigger} · {time}',
+        reason: 'Reason: {reason}',
+        triggerManual: 'Manual',
+        triggerAfterSync: 'After sync',
+        triggerUnknown: 'Unknown trigger',
+        reasonUnknown: 'No details available',
+        status: {
+          applied: 'Success',
+          skipped: 'Skipped',
+          thresholdExceeded: 'Threshold exceeded',
+          failed: 'Failed',
+          unknown: 'No run'
+        },
+        reasons: {
+          primary_upstream_not_affected: 'Primary upstream was not affected by the sync.',
+          missing_reference_multiplier: 'Reference multiplier is missing.',
+          unknown_pricing_source: 'Pricing source is not recognized.',
+          status_persist_failed: 'Run status could not be saved.',
+          invalid_old_reference_multiplier: 'Previous reference multiplier is invalid.',
+          threshold_exceeded: 'Change exceeded the configured threshold.',
+          own_group_not_found_in_admin: 'Own group was not found in the admin site.',
+          target_unchanged: 'Target multiplier was unchanged.',
+          remote_update_failed: 'Remote multiplier update failed.'
+        }
       },
       autoPricingDrawer: {
         title: 'Auto-Pricing Config',
@@ -1040,7 +1086,8 @@ export default {
       errors: {
         network: 'Network or CORS request failed. Check the API URL and cross-origin settings.',
         request: 'The group rates API request failed. Try again later.',
-        unknown: 'An unknown error occurred while loading group rates.'
+        unknown: 'An unknown error occurred while loading group rates.',
+        refreshFailed: 'The change was saved, but the list refresh failed. Refresh again to update the view.'
       }
     },
     groupRateCampaigns: {

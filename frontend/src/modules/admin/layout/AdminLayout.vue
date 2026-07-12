@@ -26,7 +26,7 @@ const toggleLocale = () => {
   locale.value = locale.value === 'zh-CN' ? 'en-US' : 'zh-CN'
 }
 
-const { currentAccount, loadCurrentAccount } = useAdminAccounts()
+const { currentAccount, noticeKey, loadCurrentAccount } = useAdminAccounts()
 
 // 版本信息：开源版仅用于纯展示，不依赖授权/更新服务
 const versionInfo = ref<SystemVersionResponse | null>(null)
@@ -382,6 +382,9 @@ watch(
 
       <!-- Content Area -->
       <main class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 sm:p-6'">
+        <div v-if="!isWorkspaceSelectionPage && noticeKey" class="mb-4 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
+          {{ t(noticeKey) }}
+        </div>
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />

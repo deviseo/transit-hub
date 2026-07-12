@@ -6,14 +6,28 @@ import {
   getCurrentAdminAccount,
   switchAdminAccount,
   updateAdminAccount,
+  deleteAdminAccount,
 } from '../api/adminAccounts'
 import { markWorkspaceActive, resetWorkspaceCheck } from '@/lib/workspaceGuard'
+import type { DeleteAdminAccountResponse, WorkspaceDeleteConfirmation } from '../types/adminAccounts'
 
 const accounts = ref<AdminAccount[]>([])
 const currentAccount = ref<AdminAccount | null>(null)
 const isLoading = ref(false)
 const isSwitching = ref(false)
+const isDeleting = ref(false)
 const errorKey = ref('')
+const noticeKey = ref('')
+
+const adminAccountsErrorPrefix = 'admin.adminAccounts.errors.'
+
+const toAdminAccountsErrorKey = (err: unknown, fallback: string): string => {
+  if (!(err instanceof Error)) return fallback
+  if (err.message.startsWith(adminAccountsErrorPrefix) || err.message === 'auth.errors.unauthorized') {
+    return err.message
+  }
+  return fallback
+}
 
 export function useAdminAccounts() {
   const router = useRouter()
@@ -77,17 +91,70 @@ export function useAdminAccounts() {
     }
   }
 
+  const deleteAccount = async (
+    id: string,
+    confirmation: WorkspaceDeleteConfirmation,
+  ): Promise<DeleteAdminAccountResponse> => {
+    isDeleting.value = true
+    errorKey.value = ''
+    noticeKey.value = ''
+    const deletedCurrent = currentAccount.value?.id === id || accounts.value.some(account => account.id === id && account.current)
+
+    try {
+      const response = await deleteAdminAccount(id, confirmation)
+      const remainingAccounts = accounts.value.filter(account => account.id !== response.deletedId)
+
+      if (response.hasCurrent && response.currentAdminAccountId) {
+        accounts.value = remainingAccounts.map(account => ({
+          ...account,
+          current: account.id === response.currentAdminAccountId,
+        }))
+        currentAccount.value = accounts.value.find(account => account.id === response.currentAdminAccountId) ?? null
+        resetWorkspaceCheck()
+        markWorkspaceActive()
+        if (deletedCurrent) {
+          await router.push('/admin')
+        }
+      } else {
+        accounts.value = remainingAccounts.map(account => ({
+          ...account,
+          current: false,
+        }))
+        currentAccount.value = null
+        resetWorkspaceCheck()
+        if (router.currentRoute.value.name !== 'AdminAccounts') {
+          await router.push('/admin/accounts')
+        }
+      }
+
+      if (response.cleanupPending) {
+        noticeKey.value = 'admin.adminAccounts.delete.cleanupPending'
+      }
+
+      return response
+    } catch (err) {
+      const nextErrorKey = toAdminAccountsErrorKey(err, 'admin.adminAccounts.errors.deleteFailed')
+      errorKey.value = nextErrorKey
+      throw new Error(nextErrorKey)
+    } finally {
+      isDeleting.value = false
+    }
+  }
+
   return {
     accounts,
     currentAccount,
     isLoading,
     isSwitching,
+    isDeleting,
     errorKey,
+    noticeKey,
     hasAccounts,
     hasCurrentAccount,
     loadAccounts,
     loadCurrentAccount,
     switchAccount,
     renameAccount,
+    deleteAccount,
   }
 }

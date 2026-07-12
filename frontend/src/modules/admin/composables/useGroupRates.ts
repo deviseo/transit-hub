@@ -19,8 +19,10 @@ export const useGroupRates = () => {
   const isActionLoading = ref(false)
   const errorKey = ref<string | null>(null)
   const historyErrorKey = ref<string | null>(null)
+  let ratesRequestId = 0
 
   const loadRates = async () => {
+    const requestId = ++ratesRequestId
     isLoading.value = true
     errorKey.value = null
     try {
@@ -31,6 +33,8 @@ export const useGroupRates = () => {
         platform: platformFilter.value,
       })
 
+      if (requestId !== ratesRequestId) return
+
       rates.value = response.items
       total.value = response.total
       page.value = response.page
@@ -39,9 +43,12 @@ export const useGroupRates = () => {
       types.value = response.types
       platforms.value = response.platforms
     } catch (error) {
+      if (requestId !== ratesRequestId) return
       errorKey.value = error instanceof Error ? error.message : 'admin.groupRates.errors.unknown'
     } finally {
-      isLoading.value = false
+      if (requestId === ratesRequestId) {
+        isLoading.value = false
+      }
     }
   }
 

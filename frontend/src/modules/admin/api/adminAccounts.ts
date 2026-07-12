@@ -1,4 +1,8 @@
-import type { AdminAccount } from '../types/adminAccounts'
+import {
+  type AdminAccount,
+  type DeleteAdminAccountResponse,
+  type WorkspaceDeleteConfirmation,
+} from '../types/adminAccounts'
 import {
   authUnauthorizedErrorKey,
   getAccessToken,
@@ -68,4 +72,13 @@ export const updateAdminAccount = async (id: string, displayName: string): Promi
   requestJson<AdminAccount>(`/admin-accounts/${id}`, {
     method: 'PUT',
     body: JSON.stringify({ displayName }),
+  })
+
+export const deleteAdminAccount = async (
+  id: string,
+  confirmation: WorkspaceDeleteConfirmation,
+): Promise<DeleteAdminAccountResponse> =>
+  requestJson<DeleteAdminAccountResponse>(`/admin-accounts/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ confirmation }),
   })

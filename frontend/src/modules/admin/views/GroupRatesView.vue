@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
@@ -31,6 +31,7 @@ const {
   loadRates,
   loadHistory,
   saveType,
+  setSearch,
   setTypeFilter,
   goToPage,
 } = useGroupRates()
@@ -59,8 +60,9 @@ const adminPlatform = ref('')
 const upstreamKeys = ref<UpstreamKeyItem[]>([])
 const selectedKeyId = ref('')
 const isLoadingKeys = ref(false)
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-const totalGroups = computed(() => rates.value.length)
+const totalGroups = computed(() => total.value)
 const updatedCount = computed(() => rates.value.filter((rate) => rate.updatedAt).length)
 const editTypeOptions = computed(() => {
   const options = new Set(types.value)
@@ -99,6 +101,7 @@ const loadRealConnections = async () => {
 }
 
 void loadRealConnections()
+void loadRates()
 
 const loadAdminPlatform = async () => {
   try {
@@ -112,14 +115,10 @@ void loadAdminPlatform()
 
 const filteredRates = computed(() => {
   const filtered = rates.value.filter(rate => {
-    const searchMatch = !searchQuery.value ||
-      rate.siteName.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      rate.groupName.toLowerCase().includes(searchQuery.value.toLowerCase())
-
     const typeMatch = !typeFilter.value || rate.type === typeFilter.value
 
     if (mappedFilter.value === 'deleted') {
-      return searchMatch && typeMatch && rate.deleted
+      return typeMatch && rate.deleted
     }
 
     if (rate.deleted) return false
@@ -128,7 +127,7 @@ const filteredRates = computed(() => {
       (mappedFilter.value === 'mapped' && rate.mapped) ||
       (mappedFilter.value === 'unmapped' && !rate.mapped)
 
-    return searchMatch && typeMatch && mappedMatch
+    return typeMatch && mappedMatch
   })
 
   return [...filtered].sort((a, b) => {
@@ -146,6 +145,17 @@ const filteredRates = computed(() => {
 })
 const canGoPrevious = computed(() => page.value > 1 && !isLoading.value)
 const canGoNext = computed(() => page.value < totalPages.value && !isLoading.value)
+
+watch(searchQuery, (value) => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    void setSearch(value)
+  }, 300)
+})
+
+onBeforeUnmount(() => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+})
 
 const isAdminNewAPI = computed(() => adminPlatform.value === 'newapi')
 const needsGroupTypeSelection = computed(() => !connectingRate.value?.type && !isAdminNewAPI.value)
@@ -311,8 +321,8 @@ const submitTypeEditor = async () => {
   closeTypeEditor()
 }
 
-const loadMySiteMappingData = async () => {
-  if (hasLoadedMappingOptions.value) return
+const loadMySiteMappingData = async (force = false) => {
+  if (hasLoadedMappingOptions.value && !force) return
   isActionLoading.value = true
   try {
     const options = await getMySiteMappingOptions()
@@ -345,6 +355,16 @@ const submitConnector = async () => {
 
 const realConnectError = ref('')
 
+const refreshAfterMutation = async () => {
+  try {
+    await Promise.all([loadRates(), loadRealConnections(), loadMySiteMappingData(true)])
+  } catch {
+    errorKey.value = 'admin.groupRates.errors.refreshFailed'
+  }
+}
+
+void loadRates()
+
 const submitRealConnect = async () => {
   if (!connectingRate.value || connectOwnGroups.value.length === 0) return
   realConnectError.value = ''
@@ -357,18 +377,17 @@ const submitRealConnect = async () => {
     channelType: selectedChannelType.value || undefined,
     ownGroupIds: connectOwnGroups.value,
   }
-  console.log('[real-connect] payload:', JSON.stringify(payload, null, 2))
   try {
-    const result = await realConnect(payload)
-    console.log('[real-connect] success:', JSON.stringify(result, null, 2))
+    await realConnect(payload)
     closeConnector()
-    await Promise.all([loadRates(), loadRealConnections()])
-  } catch (err: any) {
-    console.error('[real-connect] error:', err)
+  } catch {
     realConnectError.value = t('admin.groupRates.connect.realFailed')
-  } finally {
     isActionLoading.value = false
+    return
   }
+
+  await refreshAfterMutation()
+  isActionLoading.value = false
 }
 
 const loadUpstreamKeys = async (siteId: string) => {
@@ -399,13 +418,14 @@ const submitBind = async () => {
       groupType: selectedGroupType.value,
     })
     closeConnector()
-    await Promise.all([loadRates(), loadRealConnections()])
-  } catch (err: any) {
-    console.error('[real-bind] error:', err)
+  } catch {
     realConnectError.value = t('admin.groupRates.connect.bindFailed')
-  } finally {
     isActionLoading.value = false
+    return
   }
+
+  await refreshAfterMutation()
+  isActionLoading.value = false
 }
 
 const openDisconnect = (rate: GroupRate) => {
@@ -430,12 +450,14 @@ const submitDisconnect = async () => {
   try {
     await realDisconnect({ connectionId: conn.id, mode: disconnectMode.value })
     closeDisconnect()
-    await Promise.all([loadRates(), loadRealConnections()])
   } catch {
     disconnectError.value = t('admin.groupRates.disconnect.failed')
-  } finally {
     isDisconnecting.value = false
+    return
   }
+
+  await refreshAfterMutation()
+  isDisconnecting.value = false
 }
 
 const historyTitle = computed(() => {

@@ -5,6 +5,20 @@ export interface MySiteGroupRef {
 
 export type AutoPricingSource = 'primary_upstream' | 'lowest_upstream' | 'highest_upstream' | 'average_upstream'
 export type AutoPricingStrategy = 'fixed' | 'percentage'
+export type AutoPricingRunStatus = 'applied' | 'skipped' | 'threshold_exceeded' | 'failed'
+export type AutoPricingRunTrigger = 'after_sync' | 'manual'
+
+export interface AutoPricingRunResult {
+  status?: AutoPricingRunStatus
+  reason?: string
+  trigger?: AutoPricingRunTrigger | string
+  ranAt?: string
+  oldReference?: number | null
+  newReference?: number | null
+  targetMultiplier?: number | null
+  oldOwnMultiplier?: number | null
+  newOwnMultiplier?: number | null
+}
 
 export interface MySiteMapping {
   ownGroup: string
@@ -22,6 +36,16 @@ export interface MySiteMapping {
   enableAutoPricingNotify?: boolean
   autoPricingNotifyBotIds?: string[]
   autoPricingNotifyTemplate?: string
+  lastAutoPricingRun?: AutoPricingRunResult | null
+}
+
+export interface RunAutoPricingRequest {
+  ownGroup: string
+}
+
+export interface RunAutoPricingResponse {
+  result: AutoPricingRunResult
+  mapping: MySiteMapping
 }
 
 export interface MySiteStatus {

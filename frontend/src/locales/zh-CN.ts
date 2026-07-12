@@ -134,9 +134,23 @@ export default {
       addWorkspace: '添加工作区',
       addWorkspaceHint: '连接新的站点管理员账号',
       creating: '正在创建工作区...',
+      delete: {
+        actionLabel: '删除工作区 {name}',
+        title: '删除 {name}',
+        localDataWarning: '此工作区的所有 TransitHub 本地工作区数据将被永久删除，且无法恢复。',
+        remoteResourcesRetained: '远程上游资源和账号会被保留，不会被删除。',
+        phraseInstruction: '手动输入下方完全一致的短语以确认：{phrase}',
+        inputLabel: '确认短语',
+        inputPlaceholder: '请手动输入确认短语',
+        cancel: '取消',
+        confirm: '删除工作区',
+        deleting: '正在删除...',
+        cleanupPending: '工作区删除已完成，但本地运行时、缓存或文件清理仍在等待处理，系统会继续重试。'
+      },
       errors: {
         noCurrentAccount: '请先选择一个工作区。',
         notFound: '工作区不存在。',
+        deleteFailed: '删除工作区失败，请重新输入确认短语后再试。',
         request: '操作失败，请稍后重试。',
         network: '网络异常，请检查连接后重试。'
       }
@@ -309,10 +323,13 @@ export default {
     },
     groupAssociations: {
       title: '分组关联',
-      subtitle: '共 {count} 组映射',
+      subtitle: '共 {count} 组 · {associated} 组已关联 · {unassociated} 组未关联',
       close: '关闭',
       empty: '暂无分组映射数据。',
       loadError: '加载分组列表失败。',
+      runError: '执行自动调价失败，请重试。',
+      unassociatedLabel: '未关联上游',
+      unassociatedMultiplier: '暂无倍率',
       columns: {
         index: '序号',
         ownGroup: '我的分组',
@@ -340,7 +357,36 @@ export default {
       },
       autoPricingActions: {
         configure: '配置',
-        edit: '编辑'
+        edit: '编辑',
+        runNow: '立即执行',
+        runNowFor: '立即执行 {group} 的自动调价'
+      },
+      lastRun: {
+        never: '从未执行',
+        summary: '上次：{status} · {trigger} · {time}',
+        reason: '原因：{reason}',
+        triggerManual: '手动',
+        triggerAfterSync: '同步后',
+        triggerUnknown: '未知触发',
+        reasonUnknown: '暂无详情',
+        status: {
+          applied: '成功',
+          skipped: '跳过',
+          thresholdExceeded: '超过阈值',
+          failed: '失败',
+          unknown: '无记录'
+        },
+        reasons: {
+          primary_upstream_not_affected: '主上游未受本次同步影响。',
+          missing_reference_multiplier: '缺少参考倍率。',
+          unknown_pricing_source: '无法识别定价来源。',
+          status_persist_failed: '执行状态保存失败。',
+          invalid_old_reference_multiplier: '原参考倍率无效。',
+          threshold_exceeded: '变化超过配置阈值。',
+          own_group_not_found_in_admin: '管理员站点中未找到我的分组。',
+          target_unchanged: '目标倍率未变化。',
+          remote_update_failed: '远端倍率更新失败。'
+        }
       },
       autoPricingDrawer: {
         title: '自动调价配置',
@@ -1040,7 +1086,8 @@ export default {
       errors: {
         network: '网络或 CORS 请求失败，请检查接口地址与跨域配置。',
         request: '分组倍率接口请求失败，请稍后重试。',
-        unknown: '加载分组倍率时发生未知错误。'
+        unknown: '加载分组倍率时发生未知错误。',
+        refreshFailed: '变更已保存，但列表刷新失败。请重新刷新以更新视图。'
       }
     },
     groupRateCampaigns: {

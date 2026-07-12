@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Layers, Loader2, Save, CheckCircle2, CircleHelp, Zap, Settings2 } from 'lucide-vue-next'
-import { getMySiteMappingOptions, saveMySiteMappings } from '../../api/mySites'
+import { Layers, Loader2, Save, CheckCircle2, CircleHelp, Zap, Settings2, Play } from 'lucide-vue-next'
+import { getMySiteMappingOptions, runAutoPricing, saveMySiteMappings } from '../../api/mySites'
 import { listUpstreamSites } from '../../api/upstream'
 import { getNotificationChannelSettings } from '../../api/settings'
-import type { MySiteMapping, MySiteMappingOwnGroupOption } from '../../types/mySites'
+import type { AutoPricingRunResult, MySiteMapping, MySiteMappingOwnGroupOption } from '../../types/mySites'
 import AutoPricingConfigDrawer from './AutoPricingConfigDrawer.vue'
 import type { BotOption } from './AutoPricingConfigDrawer.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -119,10 +119,14 @@ const mappingRows = computed(() => {
   return rows
 })
 
+const associatedCount = computed(() => mappingRows.value.filter(row => row.upstreamTargets.length > 0).length)
+const unassociatedCount = computed(() => mappingRows.value.filter(row => row.upstreamTargets.length === 0).length)
 const totalMappings = computed(() => mappingRows.value.length)
 
 const isSaving = ref(false)
 const showSaveSuccess = ref(false)
+const savingDrawer = ref(false)
+const runningOwnGroup = ref<string | null>(null)
 
 const drawerOpen = ref(false)
 const drawerOwnGroup = ref<string | null>(null)
@@ -136,21 +140,45 @@ const drawerMapping = computed<MySiteMapping | null>(() => {
 })
 
 const openDrawer = (ownGroup: string) => {
-  const existing = mappings.value.find(m => m.ownGroup === ownGroup)
-  if (!existing) {
-    mappings.value.push({ ownGroup, upstreamTargets: [] })
-  }
   drawerOwnGroup.value = ownGroup
   drawerOpen.value = true
 }
 
-const onDrawerSave = (config: Partial<MySiteMapping>) => {
-  if (!drawerOwnGroup.value) return
-  const mapping = mappings.value.find(m => m.ownGroup === drawerOwnGroup.value)
-  if (mapping) {
-    Object.assign(mapping, config)
+const upsertMapping = (nextMapping: MySiteMapping) => {
+  const index = mappings.value.findIndex(m => m.ownGroup === nextMapping.ownGroup)
+  if (index >= 0) {
+    mappings.value.splice(index, 1, nextMapping)
+  } else {
+    mappings.value.push(nextMapping)
   }
-  drawerOpen.value = false
+}
+
+const onDrawerSave = async (config: Partial<MySiteMapping>) => {
+  if (!drawerOwnGroup.value) return
+  if (savingDrawer.value) return
+
+  savingDrawer.value = true
+  error.value = null
+  try {
+    const existing = mappings.value.find(m => m.ownGroup === drawerOwnGroup.value) ?? {
+      ownGroup: drawerOwnGroup.value,
+      upstreamTargets: [],
+    }
+    const nextMapping = { ...existing, ...config, ownGroup: drawerOwnGroup.value }
+    const nextMappings = mappings.value.some(m => m.ownGroup === drawerOwnGroup.value)
+      ? mappings.value.map(m => m.ownGroup === drawerOwnGroup.value ? nextMapping : m)
+      : [...mappings.value, nextMapping]
+
+    const status = await saveMySiteMappings(nextMappings)
+    mappings.value = status.mappings ?? nextMappings
+    drawerOpen.value = false
+    showSaveSuccess.value = true
+    setTimeout(() => { showSaveSuccess.value = false }, 3000)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'admin.groupAssociations.saveError'
+  } finally {
+    savingDrawer.value = false
+  }
 }
 
 const getAutoPricingStatus = (ownGroup: string): 'not_configured' | 'enabled' | 'saved_disabled' => {
@@ -165,13 +193,67 @@ const saveMappingsData = async () => {
   isSaving.value = true
   error.value = null
   try {
-    await saveMySiteMappings(mappings.value)
+    const status = await saveMySiteMappings(mappings.value)
+    mappings.value = status.mappings ?? mappings.value
     showSaveSuccess.value = true
     setTimeout(() => { showSaveSuccess.value = false }, 3000)
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'admin.groupAssociations.saveError'
   } finally {
     isSaving.value = false
+  }
+}
+
+const formatRunTime = (value: string | undefined): string => {
+  if (!value) return t('admin.groupAssociations.lastRun.never')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return t('admin.groupAssociations.lastRun.never')
+  return new Intl.DateTimeFormat(locale.value, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+const runStatusKey = (status: AutoPricingRunResult['status']): string => {
+  if (status === 'applied') return 'applied'
+  if (status === 'skipped') return 'skipped'
+  if (status === 'threshold_exceeded') return 'thresholdExceeded'
+  if (status === 'failed') return 'failed'
+  return 'unknown'
+}
+
+const runTriggerLabel = (trigger: AutoPricingRunResult['trigger']): string => {
+  if (trigger === 'manual') return t('admin.groupAssociations.lastRun.triggerManual')
+  if (trigger === 'after_sync') return t('admin.groupAssociations.lastRun.triggerAfterSync')
+  return t('admin.groupAssociations.lastRun.triggerUnknown')
+}
+
+const runReasonLabel = (reason: string | undefined): string => {
+  if (!reason) return t('admin.groupAssociations.lastRun.reasonUnknown')
+  const key = `admin.groupAssociations.lastRun.reasons.${reason}`
+  const label = t(key)
+  return label === key ? t('admin.groupAssociations.lastRun.reasonUnknown') : label
+}
+
+const getLastRun = (ownGroup: string): AutoPricingRunResult | null => (
+  mappings.value.find(m => m.ownGroup === ownGroup)?.lastAutoPricingRun ?? null
+)
+
+const runNow = async (ownGroup: string) => {
+  const mapping = mappings.value.find(m => m.ownGroup === ownGroup)
+  if (!mapping?.enableAutoPricing || mapping.upstreamTargets.length === 0 || runningOwnGroup.value) return
+
+  runningOwnGroup.value = ownGroup
+  error.value = null
+  try {
+    const response = await runAutoPricing({ ownGroup })
+    upsertMapping(response.mapping)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'admin.groupAssociations.runError'
+  } finally {
+    runningOwnGroup.value = null
   }
 }
 
@@ -231,7 +313,7 @@ onMounted(() => {
         <div>
           <h2 class="text-lg font-semibold text-foreground">{{ t('admin.groupAssociations.title') }}</h2>
           <p class="text-sm text-muted-foreground">
-            {{ t('admin.groupAssociations.subtitle', { count: totalMappings }) }}
+            {{ t('admin.groupAssociations.subtitle', { count: totalMappings, associated: associatedCount, unassociated: unassociatedCount }) }}
           </p>
         </div>
       </div>
@@ -324,10 +406,15 @@ onMounted(() => {
               <td class="px-4 py-3 align-middle text-foreground border-r border-border/20 transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">
                 {{ formatMultiplier(mapping.ownMultiplier) }}
               </td>
-              <td class="px-4 py-3 align-middle text-muted-foreground transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">—</td>
-              <td class="px-4 py-3 align-middle text-muted-foreground transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">—</td>
+              <td class="px-4 py-3 align-middle text-muted-foreground transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">
+                {{ t('admin.groupAssociations.unassociatedLabel') }}
+              </td>
+              <td class="px-4 py-3 align-middle text-muted-foreground transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">
+                {{ t('admin.groupAssociations.unassociatedMultiplier') }}
+              </td>
               <td class="px-4 py-3 align-middle transition-colors" :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}">
-                <div class="flex items-center gap-2">
+                <div class="flex flex-col gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
                   <span
                     class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
                     :class="{
@@ -351,6 +438,32 @@ onMounted(() => {
                     <Settings2 class="h-3 w-3" />
                     {{ getAutoPricingStatus(mapping.ownGroup) === 'not_configured' ? t('admin.groupAssociations.autoPricingActions.configure') : t('admin.groupAssociations.autoPricingActions.edit') }}
                   </button>
+                  <button
+                    v-if="getAutoPricingStatus(mapping.ownGroup) === 'enabled' && mapping.upstreamTargets.length > 0"
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="runningOwnGroup !== null"
+                    :aria-busy="runningOwnGroup === mapping.ownGroup"
+                    :aria-label="t('admin.groupAssociations.autoPricingActions.runNowFor', { group: mapping.ownGroup })"
+                    @click="runNow(mapping.ownGroup)"
+                  >
+                    <Loader2 v-if="runningOwnGroup === mapping.ownGroup" class="h-3 w-3 animate-spin" />
+                    <Play v-else class="h-3 w-3" />
+                    {{ t('admin.groupAssociations.autoPricingActions.runNow') }}
+                  </button>
+                  </div>
+                  <div class="space-y-0.5 text-xs text-muted-foreground">
+                    <div>
+                      {{ t('admin.groupAssociations.lastRun.summary', {
+                        status: t(`admin.groupAssociations.lastRun.status.${runStatusKey(getLastRun(mapping.ownGroup)?.status)}`),
+                        trigger: runTriggerLabel(getLastRun(mapping.ownGroup)?.trigger),
+                        time: formatRunTime(getLastRun(mapping.ownGroup)?.ranAt),
+                      }) }}
+                    </div>
+                    <div v-if="getLastRun(mapping.ownGroup)?.reason" class="truncate max-w-[16rem]" :title="runReasonLabel(getLastRun(mapping.ownGroup)?.reason)">
+                      {{ t('admin.groupAssociations.lastRun.reason', { reason: runReasonLabel(getLastRun(mapping.ownGroup)?.reason) }) }}
+                    </div>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -434,7 +547,8 @@ onMounted(() => {
                 class="px-4 py-3 align-middle transition-colors"
                 :class="{'bg-primary/5': hoveredMappingIndex === mappingIndex}"
               >
-                <div class="flex items-center gap-2">
+                <div class="flex flex-col gap-2">
+                  <div class="flex flex-wrap items-center gap-2">
                   <span
                     class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
                     :class="{
@@ -458,6 +572,32 @@ onMounted(() => {
                     <Settings2 class="h-3 w-3" />
                     {{ getAutoPricingStatus(mapping.ownGroup) === 'not_configured' ? t('admin.groupAssociations.autoPricingActions.configure') : t('admin.groupAssociations.autoPricingActions.edit') }}
                   </button>
+                  <button
+                    v-if="getAutoPricingStatus(mapping.ownGroup) === 'enabled' && mapping.upstreamTargets.length > 0"
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="runningOwnGroup !== null"
+                    :aria-busy="runningOwnGroup === mapping.ownGroup"
+                    :aria-label="t('admin.groupAssociations.autoPricingActions.runNowFor', { group: mapping.ownGroup })"
+                    @click="runNow(mapping.ownGroup)"
+                  >
+                    <Loader2 v-if="runningOwnGroup === mapping.ownGroup" class="h-3 w-3 animate-spin" />
+                    <Play v-else class="h-3 w-3" />
+                    {{ t('admin.groupAssociations.autoPricingActions.runNow') }}
+                  </button>
+                  </div>
+                  <div class="space-y-0.5 text-xs text-muted-foreground">
+                    <div>
+                      {{ t('admin.groupAssociations.lastRun.summary', {
+                        status: t(`admin.groupAssociations.lastRun.status.${runStatusKey(getLastRun(mapping.ownGroup)?.status)}`),
+                        trigger: runTriggerLabel(getLastRun(mapping.ownGroup)?.trigger),
+                        time: formatRunTime(getLastRun(mapping.ownGroup)?.ranAt),
+                      }) }}
+                    </div>
+                    <div v-if="getLastRun(mapping.ownGroup)?.reason" class="truncate max-w-[16rem]" :title="runReasonLabel(getLastRun(mapping.ownGroup)?.reason)">
+                      {{ t('admin.groupAssociations.lastRun.reason', { reason: runReasonLabel(getLastRun(mapping.ownGroup)?.reason) }) }}
+                    </div>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -472,6 +612,7 @@ onMounted(() => {
     :mapping="drawerMapping"
     :upstream-multipliers="upstreamMultiplierMap"
     :available-bots="botOptions"
+    :saving="savingDrawer"
     @close="drawerOpen = false"
     @save="onDrawerSave"
   />

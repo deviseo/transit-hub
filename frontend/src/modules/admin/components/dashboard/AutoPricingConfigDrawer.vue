@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { X, Zap, ZapOff, Calculator, CircleHelp, Bell, BellOff, Copy, Check } from 'lucide-vue-next'
+import { X, Zap, ZapOff, Calculator, CircleHelp, Bell, BellOff, Copy, Check, Loader2 } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
 import type { MySiteMapping, MySiteGroupRef, AutoPricingSource, AutoPricingStrategy } from '../../types/mySites'
 
@@ -16,6 +16,7 @@ const props = defineProps<{
   mapping: MySiteMapping | null
   upstreamMultipliers: Map<string, number>
   availableBots: BotOption[]
+  saving?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -250,7 +251,7 @@ const parseNumberInput = (value: string): number | null => {
       leave-to-class="opacity-0"
     >
       <div v-if="open" class="fixed inset-0 z-[150]">
-        <div class="absolute inset-0 bg-background/60 backdrop-blur-sm" @click="emit('close')" />
+        <div class="absolute inset-0 bg-background/60 backdrop-blur-sm" @click="saving ? undefined : emit('close')" />
 
         <Transition
           enter-active-class="transition duration-250 ease-out"
@@ -276,7 +277,8 @@ const parseNumberInput = (value: string): number | null => {
               </div>
               <button
                 type="button"
-                class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground"
+                class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground disabled:opacity-50"
+                :disabled="saving"
                 @click="emit('close')"
               >
                 <X class="h-4 w-4" />
@@ -582,17 +584,21 @@ const parseNumberInput = (value: string): number | null => {
             <div v-if="hasUpstreams" class="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-card/95 backdrop-blur px-5 py-4">
               <button
                 type="button"
-                class="rounded-lg border border-border/50 px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground"
+                class="rounded-lg border border-border/50 px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground disabled:opacity-50"
+                :disabled="saving"
                 @click="emit('close')"
               >
                 {{ t(`${prefix}.cancel`) }}
               </button>
               <button
                 type="button"
-                class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                :disabled="saving"
                 @click="handleSave"
               >
-                {{ t(`${prefix}.save`) }}
+                <Loader2 v-if="saving" class="h-4 w-4 animate-spin" />
+                <Check v-else class="h-4 w-4" />
+                {{ saving ? t('admin.groupAssociations.saving') : t(`${prefix}.save`) }}
               </button>
             </div>
           </div>

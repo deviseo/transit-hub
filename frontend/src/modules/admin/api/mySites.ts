@@ -1,4 +1,6 @@
 import type {
+  RunAutoPricingRequest,
+  RunAutoPricingResponse,
   MySiteMapping,
   MySiteMappingOptionsResponse,
   MySiteStatus,
@@ -96,3 +98,10 @@ export const realDisconnect = async (req: RealDisconnectRequest): Promise<void> 
     body: JSON.stringify(req),
   })
 }
+
+export const runAutoPricing = async (req: RunAutoPricingRequest): Promise<RunAutoPricingResponse> => (
+  requestJson<RunAutoPricingResponse>('/my-sites/auto-pricing/run', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+)
