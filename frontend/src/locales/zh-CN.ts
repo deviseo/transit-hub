@@ -1261,6 +1261,8 @@ export default {
     },
     mySites: {
       errors: {
+        request: '保存分组关联失败，请刷新页面后重试。',
+        network: '网络异常，请检查连接后重试。',
         invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。'
       }
     },
