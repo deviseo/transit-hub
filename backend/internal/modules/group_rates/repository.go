@@ -16,8 +16,6 @@ type Repository struct {
 	db *pgxpool.Pool
 }
 
-const mappedExistsWorkspacePredicate = "states.admin_account_id = $2"
-
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
@@ -289,15 +287,29 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 			FROM ranked
 			WHERE row_number = 1
 		), mapped AS (
-			SELECT latest.*, EXISTS (
-				SELECT 1
-				FROM my_site_states AS states
-				CROSS JOIN LATERAL jsonb_array_elements(states.mappings) AS mapping
-				CROSS JOIN LATERAL jsonb_array_elements(mapping->'upstreamTargets') AS target
-				WHERE states.user_id = latest.user_id
-					AND `+mappedExistsWorkspacePredicate+`
-					AND target->>'siteId' = latest.site_id
-					AND target->>'groupName' = latest.group_name
+			SELECT latest.*, (
+				EXISTS (
+					SELECT 1
+					FROM my_site_states AS states
+					CROSS JOIN LATERAL jsonb_array_elements(states.mappings) AS mapping
+					CROSS JOIN LATERAL jsonb_array_elements(mapping->'upstreamTargets') AS target
+					WHERE states.user_id = latest.user_id
+						AND states.admin_account_id = $2
+						AND target->>'siteId' = latest.site_id
+						AND target->>'groupName' = latest.group_name
+				)
+				OR EXISTS (
+					SELECT 1
+					FROM real_connections AS connections
+					WHERE connections.user_id = latest.user_id
+						AND connections.workspace_admin_account_id = $2
+						AND connections.upstream_site_id = latest.site_id
+						AND (
+							connections.upstream_group_id = latest.group_id
+							OR ((connections.upstream_group_id = '' OR latest.group_id = '')
+								AND connections.upstream_group_name = latest.group_name)
+						)
+				)
 			) AS mapped
 			FROM latest
 		), filtered AS (
