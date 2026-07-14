@@ -31,6 +31,14 @@ const (
 )
 
 var workspaceDeleteStatements = []workspaceDeleteStatement{
+	{Name: "lottery_reward_jobs", SQL: `DELETE FROM lottery_reward_jobs WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_winners", SQL: `DELETE FROM lottery_winners WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_draws", SQL: `DELETE FROM lottery_draws WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_entries", SQL: `DELETE FROM lottery_entries WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_prizes", SQL: `DELETE FROM lottery_prizes WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_audit_logs", SQL: `DELETE FROM lottery_audit_logs WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_campaigns", SQL: `DELETE FROM lottery_campaigns WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "lottery_embed_configs", SQL: `DELETE FROM lottery_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "mass_email_batch_items", SQL: `DELETE FROM mass_email_batch_items WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "mass_email_batches", SQL: `DELETE FROM mass_email_batches WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "group_rate_campaign_items", SQL: `DELETE FROM group_rate_campaign_items WHERE user_id = $1 AND admin_account_id = $2`},
@@ -58,6 +66,14 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 }
 
 var legacyWorkspaceTables = []workspaceTableDescriptor{
+	{Name: "lottery_embed_configs", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_campaigns", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_prizes", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_entries", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_draws", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_winners", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_reward_jobs", WorkspaceColumn: "admin_account_id"},
+	{Name: "lottery_audit_logs", WorkspaceColumn: "admin_account_id"},
 	{Name: "upstream_sites", WorkspaceColumn: "admin_account_id"},
 	{Name: "group_rate_snapshots", WorkspaceColumn: "admin_account_id"},
 	{Name: "strategy_settings", WorkspaceColumn: "admin_account_id"},

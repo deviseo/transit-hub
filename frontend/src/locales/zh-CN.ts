@@ -116,6 +116,7 @@ export default {
     menu: {
       dashboard: '仪表盘',
       leaderboard: '排行榜',
+      lottery: '抽奖活动',
       upstream: '上游管理',
       groupManagement: '分组管理',
       groupRates: '分组倍率',
@@ -161,6 +162,210 @@ export default {
         invalidSourceOrigin: '来源地址必须与当前工作区连接的 Sub2API 站点完全一致。',
         upstreamUnsupported: '当前 Sub2API 版本不支持排行榜接口或 Token 排序，请先升级。',
         unknown: '排行榜请求失败，请稍后重试。'
+      }
+    },
+    lottery: {
+      eyebrow: '抽奖运营',
+      title: '抽奖活动',
+      subtitle: '创建并运营 Sub2API 抽奖活动、报名、开奖结果、奖励发放、审计记录和嵌入令牌设置。',
+      common: {
+        empty: '无',
+        noDescription: '暂无描述。',
+        yes: '是',
+        no: '否'
+      },
+      filters: {
+        status: '活动状态',
+        all: '全部状态'
+      },
+      tabs: {
+        overview: '概览',
+        entries: '报名',
+        rewards: '中奖与奖励',
+        audit: '审计',
+        embed: '嵌入'
+      },
+      list: {
+        title: '活动列表',
+        count: '{count} 项',
+        empty: '当前筛选下没有抽奖活动。'
+      },
+      detail: {
+        empty: '选择一个活动查看详情。'
+      },
+      sections: {
+        schedule: '时间安排',
+        integrity: '开奖完整性',
+        prizes: '奖品'
+      },
+      metrics: {
+        entries: '{count} 个报名',
+        winners: '{count} 个中奖'
+      },
+      actions: {
+        create: '创建活动',
+        refresh: '刷新活动',
+        edit: '编辑草稿',
+        publish: '发布',
+        close: '关闭报名',
+        draw: '开奖',
+        cancel: '取消活动',
+        retry: '重试',
+        completeManual: '标记已兑换',
+        save: '保存活动',
+        closeDialog: '关闭',
+        confirm: {
+          publish: '确定发布此抽奖活动？',
+          close: '确定关闭此活动的报名？',
+          draw: '确定为此活动开奖？',
+          cancel: '确定取消此活动？',
+          completeManual: '确认中奖者已经完成人工兑换并将奖励标记为已发放？'
+        }
+      },
+      status: {
+        draft: '草稿',
+        scheduled: '待开放',
+        open: '报名中',
+        closed: '报名已关闭',
+        drawing: '开奖中',
+        drawn: '已开奖',
+        fulfilling: '发奖中',
+        completed: '已完成',
+        partial: '部分完成',
+        cancelled: '已取消'
+      },
+      drawMode: {
+        manual: '手动开奖',
+        scheduled: '定时开奖'
+      },
+      prizeType: {
+        balance: '余额',
+        subscription: '订阅'
+      },
+      entryStatus: {
+        active: '有效',
+        withdrawn: '已撤回'
+      },
+      rewardStatus: {
+        pending: '待处理',
+        processing: '处理中',
+        fulfilled: '已发放',
+        retryable_failed: '可重试失败',
+        manual_attention: '需人工处理',
+        failed: '失败'
+      },
+      fields: {
+        actions: '操作',
+        balanceAmount: '余额金额',
+        createdAt: '创建时间',
+        description: '描述',
+        drawAt: '开奖时间',
+        drawMode: '开奖方式',
+        deliveryMode: '领取方式',
+        entrySnapshotHash: '报名快照哈希',
+        entryId: '报名 ID',
+        error: '错误',
+        groupId: '分组 ID',
+        groupName: '分组名称',
+        subscriptionGroup: '订阅分组',
+        currentMultiplier: '当前倍率',
+        maskedEmail: '脱敏邮箱',
+        multiplier: '倍率',
+        rewardMultiplier: '奖励倍率',
+        name: '活动名称',
+        prize: '奖品',
+        prizeName: '奖品名称',
+        prizeSlot: '奖品序号',
+        prizeType: '奖品类型',
+        publicWinners: '公开展示中奖者',
+        quantity: '数量',
+        voucherCodes: '兑换券（每行一份）',
+        manualContact: '人工兑换联系方式',
+        receiptHash: '报名凭证哈希',
+        registrationEnd: '报名结束',
+        registrationStart: '报名开始',
+        revealedSeed: '公开种子',
+        rewardStatus: '奖励状态',
+        seedCommitment: '种子承诺',
+        status: '状态',
+        validityDays: '有效天数',
+        winner: '中奖者'
+      },
+      entries: {
+        empty: '暂无报名。'
+      },
+      delivery: {
+        title: '余额奖品领取设置',
+        subtitle: '每个奖品可自动发放、逐份分配兑换券，或由中奖者联系管理员兑换。',
+        quantityHint: '该奖品共 {count} 份',
+        mode: {
+          sub2api_auto: '自动发放',
+          voucher: '兑换券',
+          manual: '人工兑换'
+        },
+        voucherPlaceholder: '每行填写一个唯一兑换券码',
+        voucherCount: '已填写 {current} 份，需要 {required} 份；开奖后按顺序逐份发给中奖者。',
+        manualPlaceholder: '填写邮箱、客服账号或其他兑换说明',
+        manualHint: '仅中奖者本人和管理员可看到此联系方式。',
+        autoHint: '中奖后由当前 Sub2API 工作区自动发放余额。'
+      },
+      rewards: {
+        empty: '暂无奖励任务。',
+        manualTitle: '待确认的人工兑换'
+      },
+      prizes: {
+        subscriptionSummary: '{group}（ID {id}）· 奖励倍率 {multiplier} · {days} 天'
+      },
+      audit: {
+        create: '已创建',
+        update: '已更新',
+        publish: '已发布',
+        close: '已关闭',
+        draw: '已开奖',
+        empty: '暂无审计事件。'
+      },
+      embed: {
+        title: '抽奖嵌入设置',
+        subtitle: '系统会自动绑定当前工作区；公开页面启用后，可将此链接用于 Sub2API 自定义菜单。',
+        sourceOrigin: '当前绑定站点',
+        url: 'iframe 链接',
+        copy: '复制链接',
+        copyFailed: '复制失败，请手动选择链接。',
+        rotate: '重新生成令牌',
+        confirmRotate: '重新生成后，旧的抽奖嵌入链接将失效。确定继续吗？'
+      },
+      form: {
+        createTitle: '创建抽奖活动',
+        editTitle: '编辑抽奖活动',
+        subtitle: '草稿发布前可编辑；公开开奖默认开启，余额奖品可配置自动发放、兑换券或人工兑换。',
+        namePlaceholder: '七月用户抽奖',
+        descriptionPlaceholder: '活动内部备注和公开描述。',
+        addPrize: '添加奖品',
+        removePrize: '移除',
+        prizeNumber: '奖品 {number}',
+        prizeNamePlaceholder: '奖品展示名称',
+        subscriptionGroupPlaceholder: '选择当前工作区的订阅分组',
+        subscriptionGroupsLoading: '正在读取当前工作区分组…',
+        subscriptionGroupsEmpty: '当前工作区没有可用分组',
+        subscriptionGroupOption: '{name}（ID {id}）· 当前倍率 {multiplier}',
+        subscriptionGroupUnavailable: '{name}（ID {id}）· 已保存奖励倍率 {multiplier} · 当前不可用',
+        refreshSubscriptionGroups: '重新读取'
+      },
+      errors: {
+        network: '网络请求失败，请检查连接后重试。',
+        request: '抽奖请求无效，请刷新后重试。',
+        unknown: '抽奖请求失败，请稍后重试。',
+        invalidSourceOrigin: '抽奖嵌入必须使用当前工作区的 Sub2API 站点。',
+        notFound: '未找到此抽奖活动。',
+        invalidState: '当前活动状态不允许执行此生命周期操作。',
+        validation: '请检查必填字段、时间顺序和奖品配置。',
+        voucherQuantity: '兑换券必须一行一份、互不重复，并与奖品数量完全一致。',
+        manualContactRequired: '人工兑换必须填写中奖者可使用的联系方式。',
+        manualRedemptionRequired: '请中奖者按照显示的联系方式完成人工兑换。',
+        rewardSafeMessage: '奖励发放需要处理，请查看奖励状态，并在可重试时重试。',
+        rewardUnsupported: '当前 Sub2API 站点不支持此奖励类型。',
+        rewardAdminSession: '请重新连接当前工作区的 Sub2API 管理员账号。',
+        subscriptionGroups: '无法读取当前工作区的订阅分组，请确认 Sub2API 管理员登录仍有效。'
       }
     },
     adminAccounts: {
@@ -1261,8 +1466,6 @@ export default {
     },
     mySites: {
       errors: {
-        request: '保存分组关联失败，请刷新页面后重试。',
-        network: '网络异常，请检查连接后重试。',
         invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。'
       }
     },
@@ -1864,6 +2067,216 @@ export default {
         adminSession: '管理员会话不可用，请联系站点管理员重新连接工作区。',
         upstreamUnsupported: '当前 Sub2API 版本不支持排行榜，请联系管理员升级。',
         upstreamRequest: '排行榜数据暂时不可用，请稍后重试。'
+      }
+    },
+    lottery: {
+      eyebrow: '抽奖报名',
+      title: '抽奖活动',
+      subtitle: '参与开放中的活动，保存报名凭证哈希，并在开奖后查看结果。',
+      page: {
+        loading: '正在加载抽奖活动...'
+      },
+      common: {
+        empty: '无',
+        noDescription: '暂无描述。'
+      },
+      list: {
+        title: '活动列表',
+        count: '{count} 项',
+        loading: '正在加载活动...',
+        empty: '暂无可公开访问的抽奖活动。'
+      },
+      detail: {
+        loading: '正在加载活动详情...',
+        empty: '请选择一个活动查看详情。'
+      },
+      sections: {
+        schedule: '时间安排',
+        prizes: '奖品',
+        winners: '公开中奖者',
+        integrity: '开奖完整性',
+        myEntry: '我的报名',
+        myResult: '我的结果',
+        entries: '公开报名名册'
+      },
+      metrics: {
+        entries: '{count} 个报名',
+        winners: '{count} 个中奖者',
+        winnersLabel: '中奖者'
+      },
+      actions: {
+        refresh: '刷新',
+        enter: '参与活动',
+        withdraw: '撤回报名',
+        browseCampaigns: '浏览其他活动',
+        returnToDraw: '返回我的开奖场',
+        copyVoucher: '复制兑换券'
+      },
+      transparency: {
+        title: '公开透明开奖场',
+        description: '报名名册、凭证哈希、随机种子承诺和开奖快照均可公开核验。',
+        activeEntries: '{count} 个有效报名',
+        algorithmV2: 'v2 使用公开名册中的报名 ID、脱敏邮箱和凭证哈希生成快照，再以公开种子执行确定性 HMAC-SHA256 洗牌。',
+        algorithmLegacy: '该活动使用兼容旧版的 v1 算法；仍可核验种子承诺和最终结果，但快照包含旧版内部标识。'
+      },
+      countdown: {
+        opensIn: '报名开始倒计时',
+        closesIn: '报名截止倒计时',
+        drawsIn: '开奖倒计时',
+        drawTime: '开奖时间',
+        noTimer: '倒计时',
+        days: '{days} 天 {hours} 小时 {minutes} 分 {seconds} 秒',
+        hours: '{hours} 小时 {minutes} 分 {seconds} 秒',
+        minutes: '{minutes} 分 {seconds} 秒',
+        seconds: '{seconds} 秒'
+      },
+      drawReveal: {
+        ariaLabel: '抽奖结果揭晓',
+        countdown: {
+          eyebrow: '开奖倒计时',
+          description: '报名快照已锁定，准备随机抽取。'
+        },
+        drawing: {
+          eyebrow: '公平开奖',
+          title: '正在抽取幸运用户',
+          description: '正在根据公开算法计算本期结果...'
+        },
+        won: {
+          eyebrow: '恭喜中奖',
+          title: '你抽中了「{prize}」',
+          description: '中奖记录已经确认，奖励发放状态可在结果页查看。'
+        },
+        lost: {
+          eyebrow: '开奖结果',
+          title: '这次没有抽中',
+          description: '感谢参与本期活动，期待下次与你分享好运。'
+        },
+        spectator: {
+          eyebrow: '开奖完成',
+          title: '本期结果已经揭晓',
+          description: '公开中奖名单和开奖完整性信息已经更新。'
+        },
+        viewResult: '查看开奖结果'
+      },
+      status: {
+        draft: '草稿',
+        scheduled: '待开放',
+        open: '报名中',
+        closed: '报名已关闭',
+        drawing: '开奖中',
+        drawn: '已开奖',
+        fulfilling: '发奖中',
+        completed: '已完成',
+        partial: '部分完成',
+        cancelled: '已取消'
+      },
+      drawMode: {
+        manual: '手动开奖',
+        scheduled: '定时开奖'
+      },
+      prizeType: {
+        balance: '余额',
+        subscription: '订阅'
+      },
+      deliveryMode: {
+        sub2api_auto: 'Sub2API 自动发放',
+        voucher: '中奖后领取兑换券',
+        manual: '联系管理员人工兑换'
+      },
+      entryStatus: {
+        active: '有效',
+        withdrawn: '已撤回'
+      },
+      rewardStatus: {
+        pending: '待处理',
+        processing: '处理中',
+        fulfilled: '已发放',
+        retryable_failed: '可重试失败',
+        manual_attention: '需人工处理',
+        failed: '失败'
+      },
+      fields: {
+        algorithmVersion: '算法版本',
+        drawAt: '开奖时间',
+        deliveryMode: '领取方式',
+        enteredAt: '报名时间',
+        entrySnapshotHash: '报名快照哈希',
+        entryId: '报名 ID',
+        entryStatus: '报名状态',
+        prize: '奖品',
+        prizeSlot: '奖品序号',
+        receiptHash: '报名凭证哈希',
+        registrationEnd: '报名结束',
+        registrationStart: '报名开始',
+        revealedSeed: '公开种子',
+        rewardMessage: '奖励消息',
+        rewardStatus: '奖励状态',
+        seedCommitment: '种子承诺',
+        voucherCode: '我的兑换券',
+        manualContact: '兑换联系方式'
+      },
+      prizes: {
+        empty: '该活动尚未公开奖品。',
+        quantity: 'x {count}',
+        balanceValue: '余额金额：{amount}',
+        subscriptionValue: '分组：{group}，奖励倍率：{multiplier}，有效期 {days} 天'
+      },
+      winners: {
+        private: '中奖者展示由活动发起方控制。',
+        empty: '暂无公开中奖者。',
+        count: '{count} 个公开中奖者',
+        row: '{email} 获得 {prize} #{slot}'
+      },
+      entries: {
+        description: '邮箱已脱敏；每条凭证哈希可用于核对报名与开奖快照。',
+        count: '{active} 个有效 / {total} 个记录',
+        empty: '当前还没有报名记录。'
+      },
+      entry: {
+        none: '你尚未参与此活动。'
+      },
+      result: {
+        none: {
+          title: '尚未报名',
+          description: '在报名开放期间参与活动即可获得报名凭证哈希。'
+        },
+        pending: {
+          title: '结果待开奖',
+          description: '你的报名仍然有效，开奖后刷新即可查看结果。'
+        },
+        won: {
+          title: '你已中奖',
+          description: '中奖奖品和奖励发放状态显示在下方。'
+        },
+        lost: {
+          title: '未被抽中',
+          description: '本次开奖已完成，你的报名未被选中。'
+        },
+        withdrawn: {
+          title: '报名已撤回',
+          description: '当前活动中，撤回后的报名结果不可重新参与。'
+        }
+      },
+      errors: {
+        title: '抽奖加载失败',
+        network: '网络请求失败，请检查连接后重试。',
+        request: '抽奖接口请求失败，请稍后重试。',
+        missingParams: '当前页面缺少 iframe 会话参数，请从 Sub2API 自定义菜单中打开。',
+        configNotFound: '抽奖嵌入配置不存在或尚未绑定来源站点。',
+        invalidSrcHost: '来源地址无效。',
+        srcHostMismatch: '当前来源站点与嵌入配置不匹配。',
+        sub2apiAuth: '身份校验失败，请刷新页面重试。',
+        sub2apiRequest: '无法连接来源站点，请稍后重试。',
+        userMismatch: '用户身份校验失败。',
+        userInactive: '来源账号已停用。',
+        sessionInvalid: '会话已过期，请刷新页面重试。',
+        adminSession: '管理员会话不可用，请联系站点管理员重新连接工作区。',
+        sourceBinding: '抽奖嵌入来源已变更，请联系管理员重新保存嵌入设置。',
+        campaignNotOpen: '该活动当前未开放报名。',
+        entryNotFound: '未找到此活动的有效报名。',
+        upstreamRequest: '来源站点数据暂时不可用，请稍后重试。',
+        alreadyEntered: '你已经参与过此活动。',
+        copy: '复制失败，请手动选择兑换券。'
       }
     }
   }

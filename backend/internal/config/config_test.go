@@ -58,6 +58,26 @@ func TestLoadUsesHardcodedAppVersion(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsLotteryPrivateTargetsToDisabled(t *testing.T) {
+	t.Setenv("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "")
+
+	cfg := Load()
+
+	if cfg.LotteryAllowPrivateSub2APITargets {
+		t.Fatal("expected private Sub2API lottery targets to be disabled by default")
+	}
+}
+
+func TestLoadCanEnableLotteryPrivateTargetsForLocalDebugging(t *testing.T) {
+	t.Setenv("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "true")
+
+	cfg := Load()
+
+	if !cfg.LotteryAllowPrivateSub2APITargets {
+		t.Fatal("expected private Sub2API lottery targets to be enabled")
+	}
+}
+
 // TestLoadDefaultsSMTPEncryptionKeyEmpty 校验未设置 SMTP_ENCRYPTION_KEY 时 Load() 正常返回空值，
 // 保证现有部署在不配置该变量的情况下应用仍然可以启动（key 解析/校验由 settings 模块负责，不在这里做）。
 func TestLoadDefaultsSMTPEncryptionKeyEmpty(t *testing.T) {

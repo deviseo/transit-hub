@@ -22,6 +22,7 @@ import (
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
 	"transithub/backend/internal/modules/leaderboard"
+	"transithub/backend/internal/modules/lottery"
 	"transithub/backend/internal/modules/mass_email"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/settings"
@@ -44,6 +45,9 @@ type Server struct {
 	allowed                        map[string]struct{}
 	authService                    *auth.Service
 	leaderboardFrameAncestorOrigin func(ctx context.Context, embedToken string) (string, bool)
+	lotteryFrameAncestorOrigin     func(ctx context.Context, embedToken string) (string, bool)
+	lotteryCancel                  context.CancelFunc
+	lotteryWorker                  *lottery.Worker
 }
 
 func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server {
@@ -122,6 +126,23 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	server.leaderboardFrameAncestorOrigin = leaderboardService.FrameAncestorOrigin
 	leaderboard.RegisterRoutes(server.mux, leaderboardService)
+
+	lotteryRepository := lottery.NewRepository(db)
+	lotterySessions := lottery.NewEmbedSessionStore(redisClient)
+	if cfg.LotteryAllowPrivateSub2APITargets {
+		log.Printf("[lottery] WARNING: private Sub2API targets are enabled for local debugging; do not enable this in production")
+	}
+	lotteryViewerClient := lottery.NewSub2APIViewerClientWithPrivateTargets(&http.Client{Timeout: upstreamRequestTimeout}, cfg.LotteryAllowPrivateSub2APITargets)
+	lotteryRewardClient := lottery.NewRewardClientWithPrivateTargets(&http.Client{Timeout: upstreamRequestTimeout}, cfg.LotteryAllowPrivateSub2APITargets)
+	lotteryService := lottery.NewService(lotteryRepository, lotterySessions, lotteryViewerClient, lotteryRewardClient, mySitesService)
+	lotteryService.SetAdminAccountResolver(adminAccountsService)
+	lotteryService.SetSubscriptionGroupProvider(platformService)
+	lotteryService.SetAllowPrivateTargets(cfg.LotteryAllowPrivateSub2APITargets)
+	if err := lotteryService.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	server.lotteryFrameAncestorOrigin = lotteryService.FrameAncestorOrigin
+	lottery.RegisterRoutes(server.mux, lotteryService)
 
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
@@ -216,6 +237,12 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	massEmailWorker.Start(context.Background())
 	campaignsService.StartScheduler(context.Background())
+	lotteryCtx, lotteryCancel := context.WithCancel(context.Background())
+	lotteryWorker := lottery.NewWorker(lotteryService)
+	lotteryWorker.Start(lotteryCtx)
+	lotteryService.StartScheduler(lotteryCtx)
+	server.lotteryCancel = lotteryCancel
+	server.lotteryWorker = lotteryWorker
 	connHealthService.StartScheduler(context.Background())
 
 	// 策略设置变更时通知上游服务更新定时同步配置。
@@ -256,6 +283,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		dashboardSessions:   dashboardSessionStore,
 		ticketSessions:      ticketsSessions,
 		leaderboardSessions: leaderboardSessions,
+		lotterySessions:     lotterySessions,
 		attachments:         ticketsStorage,
 		upstreamSites:       upstreamService,
 	})
@@ -292,6 +320,10 @@ type leaderboardEmbedSessionCleaner interface {
 	DeleteWorkspace(ctx context.Context, userID string, adminAccountID string) error
 }
 
+type lotteryEmbedSessionCleaner interface {
+	DeleteWorkspace(ctx context.Context, userID string, adminAccountID string) error
+}
+
 type attachmentCleaner interface {
 	Delete(storagePath string) error
 }
@@ -304,6 +336,7 @@ type workspaceCleanup struct {
 	dashboardSessions   dashboardSessionCleaner
 	ticketSessions      ticketEmbedSessionCleaner
 	leaderboardSessions leaderboardEmbedSessionCleaner
+	lotterySessions     lotteryEmbedSessionCleaner
 	attachments         attachmentCleaner
 	upstreamSites       upstreamSiteCleaner
 }
@@ -323,6 +356,11 @@ func (c workspaceCleanup) CleanupDeletedWorkspace(ctx context.Context, payload a
 	if c.leaderboardSessions != nil {
 		if err := c.leaderboardSessions.DeleteWorkspace(ctx, payload.UserID, payload.AdminAccountID); err != nil {
 			errs = append(errs, fmt.Errorf("leaderboard embed session cleanup: %w", err))
+		}
+	}
+	if c.lotterySessions != nil {
+		if err := c.lotterySessions.DeleteWorkspace(ctx, payload.UserID, payload.AdminAccountID); err != nil {
+			errs = append(errs, fmt.Errorf("lottery embed session cleanup: %w", err))
 		}
 	}
 	if c.upstreamSites != nil {
@@ -378,8 +416,29 @@ func (s *Server) Handler() http.Handler {
 	})))
 }
 
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.lotteryCancel != nil {
+		s.lotteryCancel()
+	}
+	if s.lotteryWorker == nil {
+		return nil
+	}
+	s.lotteryWorker.Stop()
+	done := make(chan struct{})
+	go func() {
+		s.lotteryWorker.Wait()
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-done:
+		return nil
+	}
+}
+
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/mass-email")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email")
 }
 
 func (s *Server) setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +449,18 @@ func (s *Server) setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
 		origin := ""
 		if s.leaderboardFrameAncestorOrigin != nil {
 			origin, _ = s.leaderboardFrameAncestorOrigin(r.Context(), r.URL.Query().Get("embed_token"))
+		}
+		if origin == "" {
+			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+			return
+		}
+		w.Header().Set("Content-Security-Policy", "frame-ancestors "+origin)
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/embed/lottery" {
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		origin := ""
+		if s.lotteryFrameAncestorOrigin != nil {
+			origin, _ = s.lotteryFrameAncestorOrigin(r.Context(), r.URL.Query().Get("embed_token"))
 		}
 		if origin == "" {
 			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")

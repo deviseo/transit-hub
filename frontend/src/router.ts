@@ -34,6 +34,11 @@ const routes = [
     component: () => import('./modules/embed/leaderboard/LeaderboardEmbedPage.vue')
   },
   {
+    path: '/embed/lottery',
+    name: 'EmbedLottery',
+    component: () => import('./modules/embed/lottery/LotteryEmbedPage.vue')
+  },
+  {
     path: '/admin',
     component: () => import('./modules/admin/layout/AdminLayout.vue'),
     meta: { requiresAuth: true },
@@ -91,6 +96,12 @@ const routes = [
         name: 'AdminLeaderboard',
         meta: { requiresWorkspace: true },
         component: () => import('./modules/leaderboard/LeaderboardAdminPage.vue')
+      },
+      {
+        path: 'lottery',
+        name: 'AdminLottery',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/lottery/LotteryAdminPage.vue')
       },
       {
         path: 'mass-email',

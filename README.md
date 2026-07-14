@@ -110,7 +110,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
-# - image tag (defaults to deviseo/transithub:v0.1.7)
+# - image tag (defaults to deviseo/transithub:v0.1.8)
 # - replace every change-this-* placeholder
 # - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -163,7 +163,7 @@ This starts PostgreSQL and Redis on local ports `5432` and `6379`.
 Because the Dockerfile is stored in `deploy/` but expects the repository root as build context, build with:
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.7 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.8 .
 ```
 
 ## Local Development
@@ -185,6 +185,8 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=transithub
 ALLOW_PUBLIC_REGISTER=true
+# Local lottery debugging only; keep false or unset in production
+LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS=false
 ```
 
 ### Frontend

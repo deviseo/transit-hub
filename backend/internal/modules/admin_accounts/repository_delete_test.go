@@ -7,6 +7,14 @@ import (
 
 func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 	want := []string{
+		"lottery_reward_jobs",
+		"lottery_winners",
+		"lottery_draws",
+		"lottery_entries",
+		"lottery_prizes",
+		"lottery_audit_logs",
+		"lottery_campaigns",
+		"lottery_embed_configs",
 		"mass_email_batch_items",
 		"mass_email_batches",
 		"group_rate_campaign_items",

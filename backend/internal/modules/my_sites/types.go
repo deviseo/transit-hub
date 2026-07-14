@@ -32,9 +32,6 @@ type MappingRequest struct {
 	EnableAutoPricingNotify   bool               `json:"enableAutoPricingNotify"`
 	AutoPricingNotifyBotIDs   []string           `json:"autoPricingNotifyBotIds"`
 	AutoPricingNotifyTemplate string             `json:"autoPricingNotifyTemplate"`
-	// Accepted for response round-trips only. SaveMappings ignores the client value
-	// and restores the latest server-owned status from persistent state.
-	LastAutoPricingRun *AutoPricingRunStatus `json:"lastAutoPricingRun,omitempty"`
 }
 
 // UpstreamGroupRef 上游分组的引用（站点 ID + 分组名）。

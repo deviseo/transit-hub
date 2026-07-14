@@ -116,6 +116,7 @@ export default {
     menu: {
       dashboard: 'Dashboard',
       leaderboard: 'Leaderboard',
+      lottery: 'Lottery',
       upstream: 'Upstream',
       groupManagement: 'Group Management',
       groupRates: 'Group Rates',
@@ -161,6 +162,210 @@ export default {
         invalidSourceOrigin: 'The source origin must exactly match the Sub2API site connected to this workspace.',
         upstreamUnsupported: 'This Sub2API version does not support the leaderboard endpoint or token sorting. Upgrade it first.',
         unknown: 'The leaderboard request failed. Try again later.'
+      }
+    },
+    lottery: {
+      eyebrow: 'Lottery operations',
+      title: 'Lottery Campaigns',
+      subtitle: 'Create and operate Sub2API lottery campaigns, entries, draw results, reward delivery, audit trail, and embed token settings.',
+      common: {
+        empty: 'None',
+        noDescription: 'No description provided.',
+        yes: 'Yes',
+        no: 'No'
+      },
+      filters: {
+        status: 'Campaign status',
+        all: 'All statuses'
+      },
+      tabs: {
+        overview: 'Overview',
+        entries: 'Entries',
+        rewards: 'Winners & rewards',
+        audit: 'Audit',
+        embed: 'Embed'
+      },
+      list: {
+        title: 'Campaigns',
+        count: '{count} items',
+        empty: 'No lottery campaigns match the current filter.'
+      },
+      detail: {
+        empty: 'Select a campaign to view details.'
+      },
+      sections: {
+        schedule: 'Schedule',
+        integrity: 'Draw integrity',
+        prizes: 'Prizes'
+      },
+      metrics: {
+        entries: '{count} entries',
+        winners: '{count} winners'
+      },
+      actions: {
+        create: 'Create campaign',
+        refresh: 'Refresh campaigns',
+        edit: 'Edit draft',
+        publish: 'Publish',
+        close: 'Close registration',
+        draw: 'Draw winners',
+        cancel: 'Cancel campaign',
+        retry: 'Retry',
+        completeManual: 'Mark redeemed',
+        save: 'Save campaign',
+        closeDialog: 'Close',
+        confirm: {
+          publish: 'Publish this lottery campaign?',
+          close: 'Close registration for this campaign?',
+          draw: 'Draw winners for this campaign?',
+          cancel: 'Cancel this campaign?',
+          completeManual: 'Confirm that the winner completed manual redemption and mark this reward as fulfilled?'
+        }
+      },
+      status: {
+        draft: 'Draft',
+        scheduled: 'Scheduled',
+        open: 'Open',
+        closed: 'Registration closed',
+        drawing: 'Drawing',
+        drawn: 'Drawn',
+        fulfilling: 'Fulfilling',
+        completed: 'Completed',
+        partial: 'Partial',
+        cancelled: 'Cancelled'
+      },
+      drawMode: {
+        manual: 'Manual draw',
+        scheduled: 'Scheduled draw'
+      },
+      prizeType: {
+        balance: 'Balance',
+        subscription: 'Subscription'
+      },
+      entryStatus: {
+        active: 'Active',
+        withdrawn: 'Withdrawn'
+      },
+      rewardStatus: {
+        pending: 'Pending',
+        processing: 'Processing',
+        fulfilled: 'Fulfilled',
+        retryable_failed: 'Retryable failed',
+        manual_attention: 'Manual attention',
+        failed: 'Failed'
+      },
+      fields: {
+        actions: 'Actions',
+        balanceAmount: 'Balance amount',
+        createdAt: 'Created at',
+        description: 'Description',
+        drawAt: 'Draw at',
+        drawMode: 'Draw mode',
+        deliveryMode: 'Delivery method',
+        entrySnapshotHash: 'Entry snapshot hash',
+        entryId: 'Entry ID',
+        error: 'Error',
+        groupId: 'Group ID',
+        groupName: 'Group name',
+        subscriptionGroup: 'Subscription group',
+        currentMultiplier: 'Current multiplier',
+        maskedEmail: 'Masked email',
+        multiplier: 'Multiplier',
+        rewardMultiplier: 'Reward multiplier',
+        name: 'Campaign name',
+        prize: 'Prize',
+        prizeName: 'Prize name',
+        prizeSlot: 'Prize slot',
+        prizeType: 'Prize type',
+        publicWinners: 'Show winners publicly',
+        quantity: 'Quantity',
+        voucherCodes: 'Vouchers (one per line)',
+        manualContact: 'Manual redemption contact',
+        receiptHash: 'Receipt hash',
+        registrationEnd: 'Registration end',
+        registrationStart: 'Registration start',
+        revealedSeed: 'Revealed seed',
+        rewardStatus: 'Reward status',
+        seedCommitment: 'Seed commitment',
+        status: 'Status',
+        validityDays: 'Validity days',
+        winner: 'Winner'
+      },
+      entries: {
+        empty: 'No entries yet.'
+      },
+      delivery: {
+        title: 'Balance prize delivery',
+        subtitle: 'Deliver each prize automatically, assign one voucher per winner, or provide a manual redemption contact.',
+        quantityHint: '{count} units in this prize',
+        mode: {
+          sub2api_auto: 'Automatic',
+          voucher: 'Vouchers',
+          manual: 'Manual'
+        },
+        voucherPlaceholder: 'Enter one unique voucher code per line',
+        voucherCount: '{current} provided; {required} required. Codes are assigned to winners in order after the draw.',
+        manualPlaceholder: 'Enter an email, support account, or redemption instructions',
+        manualHint: 'Only the winner and administrators can see this contact information.',
+        autoHint: 'The current Sub2API workspace delivers the balance automatically after the draw.'
+      },
+      rewards: {
+        empty: 'No reward jobs yet.',
+        manualTitle: 'Manual redemptions awaiting confirmation'
+      },
+      prizes: {
+        subscriptionSummary: '{group} (ID {id}) · Reward multiplier {multiplier} · {days} days'
+      },
+      audit: {
+        create: 'Created',
+        update: 'Updated',
+        publish: 'Published',
+        close: 'Closed',
+        draw: 'Drawn',
+        empty: 'No audit events yet.'
+      },
+      embed: {
+        title: 'Lottery embed settings',
+        subtitle: 'The current workspace is bound automatically. Use the URL in a Sub2API custom menu when the public page is enabled.',
+        sourceOrigin: 'Bound site',
+        url: 'Iframe URL',
+        copy: 'Copy URL',
+        copyFailed: 'Copy failed. Select the URL manually.',
+        rotate: 'Regenerate token',
+        confirmRotate: 'Regenerating the token invalidates the previous lottery embed URL. Continue?'
+      },
+      form: {
+        createTitle: 'Create lottery campaign',
+        editTitle: 'Edit lottery campaign',
+        subtitle: 'Drafts can be edited before publishing. Public results are on by default, and balance prizes support automatic, voucher, or manual delivery.',
+        namePlaceholder: 'July user lottery',
+        descriptionPlaceholder: 'Internal campaign notes and public description.',
+        addPrize: 'Add prize',
+        removePrize: 'Remove',
+        prizeNumber: 'Prize {number}',
+        prizeNamePlaceholder: 'Prize display name',
+        subscriptionGroupPlaceholder: 'Select a group from the current workspace',
+        subscriptionGroupsLoading: 'Loading current workspace groups...',
+        subscriptionGroupsEmpty: 'No available groups in this workspace',
+        subscriptionGroupOption: '{name} (ID {id}) · Current multiplier {multiplier}',
+        subscriptionGroupUnavailable: '{name} (ID {id}) · Saved reward multiplier {multiplier} · Currently unavailable',
+        refreshSubscriptionGroups: 'Reload'
+      },
+      errors: {
+        network: 'Network request failed. Check your connection and try again.',
+        request: 'The lottery request is invalid. Refresh and try again.',
+        unknown: 'The lottery request failed. Try again later.',
+        invalidSourceOrigin: 'The lottery embed must use the current workspace Sub2API site.',
+        notFound: 'The lottery campaign was not found.',
+        invalidState: 'This lifecycle action is not valid for the current campaign status.',
+        validation: 'Check required fields, schedule order, and prize configuration.',
+        voucherQuantity: 'Provide one unique voucher per line and exactly match the prize quantity.',
+        manualContactRequired: 'Manual redemption requires contact information the winner can use.',
+        manualRedemptionRequired: 'The winner must use the displayed contact information to redeem this prize.',
+        rewardSafeMessage: 'Reward delivery needs attention. Check the reward status and retry when available.',
+        rewardUnsupported: 'The current Sub2API site does not support this reward type.',
+        rewardAdminSession: 'Reconnect the current workspace Sub2API administrator account.',
+        subscriptionGroups: 'Unable to load subscription groups for this workspace. Check that the Sub2API administrator session is still valid.'
       }
     },
     adminAccounts: {
@@ -1261,8 +1466,6 @@ export default {
     },
     mySites: {
       errors: {
-        request: 'Failed to save group associations. Refresh the page and try again.',
-        network: 'Network error. Check the connection and try again.',
         invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.'
       }
     },
@@ -1864,6 +2067,216 @@ export default {
         adminSession: 'The admin session is unavailable. Ask the site administrator to reconnect the workspace.',
         upstreamUnsupported: 'This Sub2API version does not support the leaderboard. Ask an administrator to upgrade it.',
         upstreamRequest: 'Leaderboard data is temporarily unavailable. Try again later.'
+      }
+    },
+    lottery: {
+      eyebrow: 'Lottery entry',
+      title: 'Lottery Campaigns',
+      subtitle: 'Enter active campaigns, keep your receipt hash, and check your result after the draw.',
+      page: {
+        loading: 'Loading lottery campaigns...'
+      },
+      common: {
+        empty: 'None',
+        noDescription: 'No description provided.'
+      },
+      list: {
+        title: 'Campaigns',
+        count: '{count} items',
+        loading: 'Loading campaigns...',
+        empty: 'No public lottery campaigns are available.'
+      },
+      detail: {
+        loading: 'Loading campaign details...',
+        empty: 'Select a campaign to view details.'
+      },
+      sections: {
+        schedule: 'Schedule',
+        prizes: 'Prizes',
+        winners: 'Public winners',
+        integrity: 'Draw integrity',
+        myEntry: 'My entry',
+        myResult: 'My result',
+        entries: 'Public entry register'
+      },
+      metrics: {
+        entries: '{count} entries',
+        winners: '{count} winners',
+        winnersLabel: 'Winners'
+      },
+      actions: {
+        refresh: 'Refresh',
+        enter: 'Enter campaign',
+        withdraw: 'Withdraw entry',
+        browseCampaigns: 'Browse other campaigns',
+        returnToDraw: 'Return to my draw',
+        copyVoucher: 'Copy voucher'
+      },
+      transparency: {
+        title: 'Public, verifiable draw',
+        description: 'The entry register, receipt hashes, seed commitment, and draw snapshot are available for verification.',
+        activeEntries: '{count} active entries',
+        algorithmV2: 'v2 builds the snapshot from public entry IDs, masked emails, and receipt hashes, then applies a deterministic HMAC-SHA256 shuffle with the revealed seed.',
+        algorithmLegacy: 'This campaign uses the compatible v1 algorithm. Its seed commitment and result remain verifiable, but the snapshot contains a legacy internal identifier.'
+      },
+      countdown: {
+        opensIn: 'Registration opens in',
+        closesIn: 'Registration closes in',
+        drawsIn: 'Draw starts in',
+        drawTime: 'Draw time',
+        noTimer: 'Timer',
+        days: '{days}d {hours}h {minutes}m {seconds}s',
+        hours: '{hours}h {minutes}m {seconds}s',
+        minutes: '{minutes}m {seconds}s',
+        seconds: '{seconds}s'
+      },
+      drawReveal: {
+        ariaLabel: 'Lottery result reveal',
+        countdown: {
+          eyebrow: 'Draw countdown',
+          description: 'The entry snapshot is locked and ready for the draw.'
+        },
+        drawing: {
+          eyebrow: 'Verifiable draw',
+          title: 'Selecting the lucky entries',
+          description: 'Calculating this draw with the published algorithm...'
+        },
+        won: {
+          eyebrow: 'Congratulations',
+          title: 'You won {prize}',
+          description: 'Your win is confirmed. Reward delivery is available on the result page.'
+        },
+        lost: {
+          eyebrow: 'Draw result',
+          title: 'Not selected this time',
+          description: 'Thank you for taking part. We hope to see you in the next draw.'
+        },
+        spectator: {
+          eyebrow: 'Draw complete',
+          title: 'The results are in',
+          description: 'The public winners and draw integrity details have been updated.'
+        },
+        viewResult: 'View draw result'
+      },
+      status: {
+        draft: 'Draft',
+        scheduled: 'Scheduled',
+        open: 'Open',
+        closed: 'Registration closed',
+        drawing: 'Drawing',
+        drawn: 'Drawn',
+        fulfilling: 'Fulfilling',
+        completed: 'Completed',
+        partial: 'Partial',
+        cancelled: 'Cancelled'
+      },
+      drawMode: {
+        manual: 'Manual draw',
+        scheduled: 'Scheduled draw'
+      },
+      prizeType: {
+        balance: 'Balance',
+        subscription: 'Subscription'
+      },
+      deliveryMode: {
+        sub2api_auto: 'Automatic Sub2API delivery',
+        voucher: 'Voucher delivered after winning',
+        manual: 'Manual redemption with organizer'
+      },
+      entryStatus: {
+        active: 'Active',
+        withdrawn: 'Withdrawn'
+      },
+      rewardStatus: {
+        pending: 'Pending',
+        processing: 'Processing',
+        fulfilled: 'Fulfilled',
+        retryable_failed: 'Retryable failed',
+        manual_attention: 'Manual attention',
+        failed: 'Failed'
+      },
+      fields: {
+        algorithmVersion: 'Algorithm version',
+        drawAt: 'Draw at',
+        deliveryMode: 'Delivery method',
+        enteredAt: 'Entered at',
+        entrySnapshotHash: 'Entry snapshot hash',
+        entryId: 'Entry ID',
+        entryStatus: 'Entry status',
+        prize: 'Prize',
+        prizeSlot: 'Prize slot',
+        receiptHash: 'Receipt hash',
+        registrationEnd: 'Registration end',
+        registrationStart: 'Registration start',
+        revealedSeed: 'Revealed seed',
+        rewardMessage: 'Reward message',
+        rewardStatus: 'Reward status',
+        seedCommitment: 'Seed commitment',
+        voucherCode: 'My voucher',
+        manualContact: 'Redemption contact'
+      },
+      prizes: {
+        empty: 'No prizes have been published for this campaign.',
+        quantity: 'x {count}',
+        balanceValue: 'Balance amount: {amount}',
+        subscriptionValue: 'Group: {group}, reward multiplier: {multiplier}, valid for {days} days'
+      },
+      winners: {
+        private: 'Winner visibility is controlled by the campaign owner.',
+        empty: 'No public winners are available yet.',
+        count: '{count} public winners',
+        row: '{email} won {prize} #{slot}'
+      },
+      entries: {
+        description: 'Emails are masked. Each receipt hash can be checked against the registration and draw snapshot.',
+        count: '{active} active / {total} records',
+        empty: 'No entry records yet.'
+      },
+      entry: {
+        none: 'You have not entered this campaign.'
+      },
+      result: {
+        none: {
+          title: 'Not entered',
+          description: 'Enter while registration is open to receive a receipt hash.'
+        },
+        pending: {
+          title: 'Result pending',
+          description: 'Your entry is active. Refresh after the draw to see the result.'
+        },
+        won: {
+          title: 'You won',
+          description: 'Your winning prize and reward delivery status are shown below.'
+        },
+        lost: {
+          title: 'Not selected',
+          description: 'The draw has completed and this entry was not selected.'
+        },
+        withdrawn: {
+          title: 'Entry withdrawn',
+          description: 'This withdrawn entry is final for the current campaign.'
+        }
+      },
+      errors: {
+        title: 'Unable to load lottery',
+        network: 'Network request failed. Check the connection and try again.',
+        request: 'The lottery request failed. Try again later.',
+        missingParams: 'Required iframe session parameters are missing. Open this page from a Sub2API custom menu.',
+        configNotFound: 'The lottery embed is not configured or has no source site.',
+        invalidSrcHost: 'The source address is invalid.',
+        srcHostMismatch: 'The current source site does not match the embed configuration.',
+        sub2apiAuth: 'Identity verification failed. Refresh the page and try again.',
+        sub2apiRequest: 'Unable to connect to the source site. Try again later.',
+        userMismatch: 'User identity verification failed.',
+        userInactive: 'This source account is inactive.',
+        sessionInvalid: 'The session expired. Refresh the page and try again.',
+        adminSession: 'The admin session is unavailable. Ask the site administrator to reconnect the workspace.',
+        sourceBinding: 'The lottery source has changed. Ask an administrator to save the embed settings again.',
+        campaignNotOpen: 'This campaign is not open for entries.',
+        entryNotFound: 'No active entry was found for this campaign.',
+        upstreamRequest: 'Source site data is temporarily unavailable. Try again later.',
+        alreadyEntered: 'You already have an entry for this campaign.',
+        copy: 'Copy failed. Select the voucher manually.'
       }
     }
   }

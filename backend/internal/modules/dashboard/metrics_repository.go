@@ -27,9 +27,9 @@ func NewMetricsRepository(db *pgxpool.Pool) *MetricsRepository {
 // dashboard_balance_filter: (user_id, admin_account_id) 唯一索引保证每工作区至多一行配置。
 //
 // 迁移策略：
-//   1. 新增 admin_account_id 列（DEFAULT '' 兼容旧行）。
-//   2. 删除旧的单维度唯一索引/约束，创建新的多维度唯一索引。
-//   3. 旧数据 admin_account_id='' 保留原样，由 admin_accounts 统一归属迁移负责补值。
+//  1. 新增 admin_account_id 列（DEFAULT ” 兼容旧行）。
+//  2. 删除旧的单维度唯一索引/约束，创建新的多维度唯一索引。
+//  3. 旧数据 admin_account_id=” 保留原样，由 admin_accounts 统一归属迁移负责补值。
 func (r *MetricsRepository) EnsureSchema(ctx context.Context) error {
 	_, err := r.db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS dashboard_daily_stats (

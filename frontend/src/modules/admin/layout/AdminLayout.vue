@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github, Mail, Menu, X, Trophy } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github, Mail, Menu, X, Trophy, Gift } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -126,6 +126,7 @@ type MenuEntry =
 const menuItems = computed<MenuEntry[]>(() => [
   { type: 'leaf', name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
   { type: 'leaf', name: t('admin.menu.leaderboard'), path: '/admin/leaderboard', icon: Trophy },
+  { type: 'leaf', name: t('admin.menu.lottery'), path: '/admin/lottery', icon: Gift },
   { type: 'leaf', name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
   {
     type: 'group',
