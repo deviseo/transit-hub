@@ -262,7 +262,10 @@ func TestSaveMappingsPreservesLastAutoPricingRun(t *testing.T) {
 	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
 	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
 
-	response, err := service.SaveMappings(context.Background(), "user-1", []MappingRequest{{OwnGroup: " vip "}})
+	response, err := service.SaveMappings(context.Background(), "user-1", []MappingRequest{{
+		OwnGroup:           " vip ",
+		LastAutoPricingRun: &AutoPricingRunStatus{Status: "failed", Trigger: "manual", RanAt: time.Unix(200, 0)},
+	}})
 	if err != nil {
 		t.Fatalf("SaveMappings returned error: %v", err)
 	}

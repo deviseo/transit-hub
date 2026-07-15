@@ -65,10 +65,16 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
 
 export const getMySiteMappingOptions = async (): Promise<MySiteMappingOptionsResponse> => requestJson<MySiteMappingOptionsResponse>('/my-sites/mapping-options')
 
+const writableMappings = (mappings: MySiteMapping[]): MySiteMapping[] => mappings.map((mapping) => {
+  const writable = { ...mapping }
+  delete writable.lastAutoPricingRun
+  return writable
+})
+
 export const saveMySiteMappings = async (mappings: MySiteMapping[]): Promise<MySiteStatus> => (
   requestJson<MySiteStatus>('/my-sites/mappings', {
     method: 'PUT',
-    body: JSON.stringify({ mappings }),
+    body: JSON.stringify({ mappings: writableMappings(mappings) }),
   })
 )
 
