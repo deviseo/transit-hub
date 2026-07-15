@@ -1481,6 +1481,8 @@ export default {
     },
     mySites: {
       errors: {
+        request: 'Failed to save group associations. Refresh the page and try again.',
+        network: 'Network error. Check the connection and try again.',
         invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.'
       }
     },
