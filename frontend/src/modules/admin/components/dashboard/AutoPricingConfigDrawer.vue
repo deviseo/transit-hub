@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X, Zap, ZapOff, Calculator, CircleHelp, Bell, BellOff, Copy, Check, Loader2 } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
+import { mySiteGroupMultiplierKey, mySiteGroupRefKey } from '../../types/mySites'
 import type { MySiteMapping, MySiteGroupRef, AutoPricingSource, AutoPricingStrategy } from '../../types/mySites'
 
 export interface BotOption {
@@ -29,6 +30,7 @@ const { t } = useI18n()
 const enableAutoPricing = ref(false)
 const autoPricingSource = ref<AutoPricingSource>('primary_upstream')
 const primaryUpstreamSiteId = ref('')
+const primaryUpstreamGroupId = ref('')
 const primaryUpstreamGroupName = ref('')
 const autoPricingStrategy = ref<AutoPricingStrategy>('percentage')
 const fixedIncrease = ref(0.1)
@@ -86,26 +88,34 @@ const toggleBot = (botId: string) => {
   }
 }
 
+const primaryUpstreamTarget = computed<MySiteGroupRef | null>(() => {
+  if (!primaryUpstreamSiteId.value || !primaryUpstreamGroupName.value) return null
+  return upstreamTargets.value.find((target) => {
+    if (target.siteId !== primaryUpstreamSiteId.value) return false
+    if (primaryUpstreamGroupId.value) return target.groupId === primaryUpstreamGroupId.value
+    return target.groupName === primaryUpstreamGroupName.value
+  }) ?? null
+})
+
 const primaryUpstreamKey = computed({
-  get: () => primaryUpstreamSiteId.value && primaryUpstreamGroupName.value
-    ? `${primaryUpstreamSiteId.value}::${primaryUpstreamGroupName.value}`
-    : '',
+  get: () => primaryUpstreamTarget.value ? mySiteGroupRefKey(primaryUpstreamTarget.value) : '',
   set: (val: string) => {
     if (!val) {
       primaryUpstreamSiteId.value = ''
+      primaryUpstreamGroupId.value = ''
       primaryUpstreamGroupName.value = ''
       return
     }
-    const idx = val.indexOf('::')
-    if (idx >= 0) {
-      primaryUpstreamSiteId.value = val.slice(0, idx)
-      primaryUpstreamGroupName.value = val.slice(idx + 2)
-    }
+    const target = upstreamTargets.value.find(item => mySiteGroupRefKey(item) === val)
+    if (!target) return
+    primaryUpstreamSiteId.value = target.siteId
+    primaryUpstreamGroupId.value = target.groupId ?? ''
+    primaryUpstreamGroupName.value = target.groupName
   }
 })
 
-const getUpstreamMultiplier = (siteId: string, groupName: string): number | null => {
-  return props.upstreamMultipliers.get(`${siteId}::${groupName}`) ?? null
+const getUpstreamMultiplier = (target: MySiteGroupRef): number | null => {
+  return props.upstreamMultipliers.get(mySiteGroupMultiplierKey(target.siteId, target.groupId, target.groupName)) ?? null
 }
 
 const referenceMultiplier = computed<number | null>(() => {
@@ -113,12 +123,11 @@ const referenceMultiplier = computed<number | null>(() => {
   if (targets.length === 0) return null
 
   if (autoPricingSource.value === 'primary_upstream') {
-    if (!primaryUpstreamSiteId.value || !primaryUpstreamGroupName.value) return null
-    return getUpstreamMultiplier(primaryUpstreamSiteId.value, primaryUpstreamGroupName.value)
+    return primaryUpstreamTarget.value ? getUpstreamMultiplier(primaryUpstreamTarget.value) : null
   }
 
   const multipliers = targets
-    .map(t => getUpstreamMultiplier(t.siteId, t.groupName))
+    .map(getUpstreamMultiplier)
     .filter((m): m is number => m != null)
   if (multipliers.length === 0) return null
 
@@ -154,7 +163,13 @@ const resetForm = () => {
   enableAutoPricing.value = m?.enableAutoPricing ?? false
   autoPricingSource.value = m?.autoPricingSource ?? 'primary_upstream'
   primaryUpstreamSiteId.value = m?.primaryUpstreamSiteId ?? ''
+  primaryUpstreamGroupId.value = m?.primaryUpstreamGroupId ?? ''
   primaryUpstreamGroupName.value = m?.primaryUpstreamGroupName ?? ''
+  if (!primaryUpstreamGroupId.value && primaryUpstreamSiteId.value && primaryUpstreamGroupName.value) {
+    primaryUpstreamGroupId.value = upstreamTargets.value.find(target => (
+      target.siteId === primaryUpstreamSiteId.value && target.groupName === primaryUpstreamGroupName.value
+    ))?.groupId ?? ''
+  }
   autoPricingStrategy.value = m?.autoPricingStrategy ?? 'percentage'
   fixedIncrease.value = m?.fixedIncrease ?? 0.1
   percentageIncrease.value = m?.percentageIncrease ?? 10
@@ -176,7 +191,7 @@ const validate = (): boolean => {
   validationError.value = null
 
   if (enableAutoPricing.value && autoPricingSource.value === 'primary_upstream') {
-    if (!primaryUpstreamSiteId.value || !primaryUpstreamGroupName.value) {
+    if (!primaryUpstreamTarget.value) {
       validationError.value = t(`${prefix}.errors.primaryRequired`)
       return false
     }
@@ -220,6 +235,7 @@ const handleSave = () => {
     enableAutoPricing: enableAutoPricing.value,
     autoPricingSource: autoPricingSource.value,
     primaryUpstreamSiteId: primaryUpstreamSiteId.value || undefined,
+    primaryUpstreamGroupId: primaryUpstreamGroupId.value || undefined,
     primaryUpstreamGroupName: primaryUpstreamGroupName.value || undefined,
     autoPricingStrategy: autoPricingStrategy.value,
     fixedIncrease: fixedIncrease.value,
@@ -333,10 +349,10 @@ const parseNumberInput = (value: string): number | null => {
                       <option value="" disabled>{{ t(`${prefix}.primaryUpstreamPlaceholder`) }}</option>
                       <option
                         v-for="target in upstreamTargets"
-                        :key="`${target.siteId}::${target.groupName}`"
-                        :value="`${target.siteId}::${target.groupName}`"
+                        :key="mySiteGroupRefKey(target)"
+                        :value="mySiteGroupRefKey(target)"
                       >
-                        {{ target.groupName }} ({{ target.siteId }}){{ getUpstreamMultiplier(target.siteId, target.groupName) != null ? ` — ${Number(getUpstreamMultiplier(target.siteId, target.groupName)!.toFixed(4))}×` : '' }}
+                        {{ target.groupName }} ({{ target.siteId }}){{ getUpstreamMultiplier(target) != null ? ` — ${Number(getUpstreamMultiplier(target)!.toFixed(4))}×` : '' }}
                       </option>
                     </select>
                   </div>

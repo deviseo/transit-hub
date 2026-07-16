@@ -1,7 +1,18 @@
 export interface MySiteGroupRef {
   siteId: string
+  groupId?: string
   groupName: string
 }
+
+export const mySiteGroupRefKey = (target: MySiteGroupRef): string => JSON.stringify([
+  target.siteId,
+  target.groupId ? 'id' : 'name',
+  target.groupId || target.groupName,
+])
+
+export const mySiteGroupMultiplierKey = (siteId: string, groupId: string | undefined, groupName: string): string => (
+  mySiteGroupRefKey({ siteId, groupId, groupName })
+)
 
 export type AutoPricingSource = 'primary_upstream' | 'lowest_upstream' | 'highest_upstream' | 'average_upstream'
 export type AutoPricingStrategy = 'fixed' | 'percentage'
@@ -26,6 +37,7 @@ export interface MySiteMapping {
   enableAutoPricing?: boolean
   autoPricingSource?: AutoPricingSource
   primaryUpstreamSiteId?: string
+  primaryUpstreamGroupId?: string
   primaryUpstreamGroupName?: string
   autoPricingStrategy?: AutoPricingStrategy
   fixedIncrease?: number

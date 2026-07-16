@@ -22,6 +22,7 @@ type MappingRequest struct {
 	EnableAutoPricing         bool               `json:"enableAutoPricing"`
 	AutoPricingSource         string             `json:"autoPricingSource"`
 	PrimaryUpstreamSiteID     string             `json:"primaryUpstreamSiteId"`
+	PrimaryUpstreamGroupID    string             `json:"primaryUpstreamGroupId,omitempty"`
 	PrimaryUpstreamGroupName  string             `json:"primaryUpstreamGroupName"`
 	AutoPricingStrategy       string             `json:"autoPricingStrategy"`
 	FixedIncrease             *float64           `json:"fixedIncrease"`
@@ -34,9 +35,11 @@ type MappingRequest struct {
 	AutoPricingNotifyTemplate string             `json:"autoPricingNotifyTemplate"`
 }
 
-// UpstreamGroupRef 上游分组的引用（站点 ID + 分组名）。
+// UpstreamGroupRef identifies a group by stable ID when available. GroupName remains
+// persisted for display and for legacy records created before group IDs were stored.
 type UpstreamGroupRef struct {
 	SiteID    string `json:"siteId"`
+	GroupID   string `json:"groupId,omitempty"`
 	GroupName string `json:"groupName"`
 }
 
@@ -59,6 +62,7 @@ type GroupMapping struct {
 	EnableAutoPricing         bool                  `json:"enableAutoPricing"`
 	AutoPricingSource         string                `json:"autoPricingSource"`
 	PrimaryUpstreamSiteID     string                `json:"primaryUpstreamSiteId"`
+	PrimaryUpstreamGroupID    string                `json:"primaryUpstreamGroupId,omitempty"`
 	PrimaryUpstreamGroupName  string                `json:"primaryUpstreamGroupName"`
 	AutoPricingStrategy       string                `json:"autoPricingStrategy"`
 	FixedIncrease             float64               `json:"fixedIncrease"`

@@ -183,10 +183,16 @@ func TestThresholdExceeded(t *testing.T) {
 	}
 }
 
-// staticLookup 返回一个按 "siteID|groupName" 查表的 lookupMultiplier 回调，用于测试。
-func staticLookup(table map[string]float64) func(string, string) *float64 {
-	return func(siteID, groupName string) *float64 {
-		if v, ok := table[siteID+"|"+groupName]; ok {
+// staticLookup returns a stable-ID-aware multiplier lookup for tests.
+func staticLookup(table map[string]float64) multiplierLookup {
+	return func(target UpstreamGroupRef) *float64 {
+		if target.GroupID != "" {
+			if v, ok := table[target.SiteID+"|id:"+target.GroupID]; ok {
+				return &v
+			}
+			return nil
+		}
+		if v, ok := table[target.SiteID+"|"+target.GroupName]; ok {
 			return &v
 		}
 		return nil
@@ -203,8 +209,8 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 			{SiteID: "sync1", GroupName: "B"},
 		}
 		changesByGroup := map[string]groupMultiplierChange{
-			"A": {Old: 1.00, New: 1.10},
-			"B": {Old: 2.00, New: 2.20},
+			groupIdentity("", "A"): {Old: 1.00, New: 1.10},
+			groupIdentity("", "B"): {Old: 2.00, New: 2.20},
 		}
 		newMetrics := []upstream.GroupInfo{
 			{Name: "A", Multiplier: floatPtr(1.10)},
@@ -212,7 +218,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 		}
 
 		oldRef, newRef, ok, reason := computeReferenceMultipliers(
-			"average_upstream", targets, "", "", "sync1",
+			"average_upstream", targets, "", "", "", "sync1",
 			changesByGroup, newMetrics, staticLookup(nil),
 		)
 		if !ok {
@@ -235,8 +241,8 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 			{SiteID: "sync1", GroupName: "B"},
 		}
 		changesByGroup := map[string]groupMultiplierChange{
-			"A": {Old: 1.00, New: 1.10},
-			"B": {Old: 2.00, New: 1.80},
+			groupIdentity("", "A"): {Old: 1.00, New: 1.10},
+			groupIdentity("", "B"): {Old: 2.00, New: 1.80},
 		}
 		newMetrics := []upstream.GroupInfo{
 			{Name: "A", Multiplier: floatPtr(1.10)},
@@ -244,7 +250,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 		}
 
 		oldRef, newRef, ok, _ := computeReferenceMultipliers(
-			"lowest_upstream", targets, "", "", "sync1",
+			"lowest_upstream", targets, "", "", "", "sync1",
 			changesByGroup, newMetrics, staticLookup(nil),
 		)
 		if !ok {
@@ -267,8 +273,8 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 			{SiteID: "sync1", GroupName: "B"},
 		}
 		changesByGroup := map[string]groupMultiplierChange{
-			"A": {Old: 1.00, New: 1.50},
-			"B": {Old: 2.00, New: 2.20},
+			groupIdentity("", "A"): {Old: 1.00, New: 1.50},
+			groupIdentity("", "B"): {Old: 2.00, New: 2.20},
 		}
 		newMetrics := []upstream.GroupInfo{
 			{Name: "A", Multiplier: floatPtr(1.50)},
@@ -276,7 +282,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 		}
 
 		oldRef, newRef, ok, _ := computeReferenceMultipliers(
-			"highest_upstream", targets, "", "", "sync1",
+			"highest_upstream", targets, "", "", "", "sync1",
 			changesByGroup, newMetrics, staticLookup(nil),
 		)
 		if !ok {
@@ -292,11 +298,11 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 
 	t.Run("primary: primary group changed", func(t *testing.T) {
 		changesByGroup := map[string]groupMultiplierChange{
-			"default": {Old: 1.00, New: 1.08},
+			groupIdentity("", "default"): {Old: 1.00, New: 1.08},
 		}
 
 		oldRef, newRef, ok, _ := computeReferenceMultipliers(
-			"primary_upstream", nil, "sync1", "default", "sync1",
+			"primary_upstream", nil, "sync1", "", "default", "sync1",
 			changesByGroup, nil, staticLookup(nil),
 		)
 		if !ok {
@@ -312,11 +318,11 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 
 	t.Run("primary: primary group not changed", func(t *testing.T) {
 		changesByGroup := map[string]groupMultiplierChange{
-			"vip": {Old: 2.00, New: 2.10},
+			groupIdentity("", "vip"): {Old: 2.00, New: 2.10},
 		}
 
 		_, _, ok, reason := computeReferenceMultipliers(
-			"primary_upstream", nil, "sync1", "default", "sync1",
+			"primary_upstream", nil, "sync1", "", "default", "sync1",
 			changesByGroup, nil, staticLookup(nil),
 		)
 		if ok {
@@ -329,11 +335,11 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 
 	t.Run("primary: primary not in sync site", func(t *testing.T) {
 		changesByGroup := map[string]groupMultiplierChange{
-			"default": {Old: 1.00, New: 1.08},
+			groupIdentity("", "default"): {Old: 1.00, New: 1.08},
 		}
 
 		_, _, ok, reason := computeReferenceMultipliers(
-			"primary_upstream", nil, "other_site", "default", "sync1",
+			"primary_upstream", nil, "other_site", "", "default", "sync1",
 			changesByGroup, nil, staticLookup(nil),
 		)
 		if ok {
@@ -353,7 +359,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 			{SiteID: "other", GroupName: "B"},
 		}
 		changesByGroup := map[string]groupMultiplierChange{
-			"A": {Old: 1.00, New: 1.20},
+			groupIdentity("", "A"): {Old: 1.00, New: 1.20},
 		}
 		newMetrics := []upstream.GroupInfo{
 			{Name: "A", Multiplier: floatPtr(1.20)},
@@ -361,7 +367,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 		lookup := staticLookup(map[string]float64{"other|B": 3.00})
 
 		oldRef, newRef, ok, _ := computeReferenceMultipliers(
-			"average_upstream", targets, "", "", "sync1",
+			"average_upstream", targets, "", "", "", "sync1",
 			changesByGroup, newMetrics, lookup,
 		)
 		if !ok {
@@ -384,7 +390,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 			{SiteID: "sync1", GroupName: "B"},
 		}
 		changesByGroup := map[string]groupMultiplierChange{
-			"A": {Old: 1.00, New: 1.20},
+			groupIdentity("", "A"): {Old: 1.00, New: 1.20},
 		}
 		newMetrics := []upstream.GroupInfo{
 			{Name: "A", Multiplier: floatPtr(1.20)},
@@ -392,7 +398,7 @@ func TestComputeReferenceMultipliers(t *testing.T) {
 		}
 
 		oldRef, newRef, ok, _ := computeReferenceMultipliers(
-			"average_upstream", targets, "", "", "sync1",
+			"average_upstream", targets, "", "", "", "sync1",
 			changesByGroup, newMetrics, staticLookup(nil),
 		)
 		if !ok {
@@ -546,11 +552,48 @@ func TestBuildChangesByGroup(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 change, got %d", len(result))
 	}
-	ch, ok := result["default"]
+	ch, ok := result[groupIdentity("1", "default")]
 	if !ok {
 		t.Fatal("expected change for 'default'")
 	}
 	if ch.Old != 1.00 || ch.New != 1.10 {
 		t.Errorf("default change = {%.2f, %.2f}, want {1.00, 1.10}", ch.Old, ch.New)
+	}
+}
+
+func TestBuildChangesByGroupUsesStableIDAcrossRename(t *testing.T) {
+	old := upstream.Metrics{Groups: []upstream.GroupInfo{{
+		ID: "22", Name: "pool-0.03", Multiplier: floatPtr(0.03),
+	}}}
+	current := upstream.Metrics{Groups: []upstream.GroupInfo{{
+		ID: "22", Name: "pool-0.02", Multiplier: floatPtr(0.02),
+	}}}
+
+	change, ok := buildChangesByGroup(old, current)[groupIdentity("22", "pool-0.02")]
+	if !ok || change.Old != 0.03 || change.New != 0.02 {
+		t.Fatalf("stable-ID rename change = %#v, %t", change, ok)
+	}
+}
+
+func TestFindUpstreamGroupDoesNotRebindMissingStableIDByName(t *testing.T) {
+	groups := []upstream.GroupInfo{{ID: "99", Name: "same-name", Multiplier: floatPtr(0.2)}}
+	if group := findUpstreamGroup(groups, UpstreamGroupRef{GroupID: "54", GroupName: "same-name"}); group != nil {
+		t.Fatalf("missing stable ID rebound to %#v", group)
+	}
+	if group := findUpstreamGroup(groups, UpstreamGroupRef{GroupName: "same-name"}); group == nil || group.ID != "99" {
+		t.Fatalf("legacy name lookup failed: %#v", group)
+	}
+}
+
+func TestComputeReferenceMultipliersUsesPrimaryStableIDAcrossRename(t *testing.T) {
+	changes := map[string]groupMultiplierChange{
+		groupIdentity("22", "pool-0.02"): {Old: 0.03, New: 0.02},
+	}
+	oldRef, newRef, ok, reason := computeReferenceMultipliers(
+		"primary_upstream", nil, "site-a", "22", "pool-0.03", "site-a",
+		changes, nil, staticLookup(nil),
+	)
+	if !ok || reason != "" || oldRef != 0.03 || newRef != 0.02 {
+		t.Fatalf("stable primary result = %.4f/%.4f ok=%t reason=%s", oldRef, newRef, ok, reason)
 	}
 }
