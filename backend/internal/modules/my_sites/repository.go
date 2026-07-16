@@ -283,7 +283,7 @@ func (r *Repository) DeleteRealConnection(ctx context.Context, id string, userID
 }
 
 // RemoveUpstreamMappingAndDeleteConnection atomically removes the mapping target and local connection row.
-func (r *Repository) RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupName string) error {
+func (r *Repository) RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupID string, groupName string) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -300,7 +300,7 @@ func (r *Repository) RemoveUpstreamMappingAndDeleteConnection(ctx context.Contex
 		return err
 	}
 	if state != nil {
-		removeMappingTargetFromState(state, siteID, groupName)
+		removeMappingTargetFromState(state, siteID, groupID, groupName)
 		sessionJSON, mappingsJSON, ownGroupsJSON, err := marshalStateJSON(*state)
 		if err != nil {
 			return err

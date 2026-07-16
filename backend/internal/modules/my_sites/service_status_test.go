@@ -101,7 +101,7 @@ func (r *testConnRepo) DeleteRealConnection(ctx context.Context, id string, user
 	return nil
 }
 
-func (r *testConnRepo) RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupName string) error {
+func (r *testConnRepo) RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupID string, groupName string) error {
 	beforeState := cloneState(r.stateRepo.state)
 	beforeConn := (*RealConnection)(nil)
 	if r.connection != nil {
@@ -109,7 +109,7 @@ func (r *testConnRepo) RemoveUpstreamMappingAndDeleteConnection(ctx context.Cont
 		beforeConn = &conn
 	}
 	if r.stateRepo.state != nil {
-		removeMappingTargetFromState(r.stateRepo.state, siteID, groupName)
+		removeMappingTargetFromState(r.stateRepo.state, siteID, groupID, groupName)
 	}
 	if err := r.DeleteRealConnection(ctx, connectionID, userID, adminAccountID); err != nil {
 		r.stateRepo.state = beforeState
@@ -271,6 +271,47 @@ func TestSaveMappingsPreservesLastAutoPricingRun(t *testing.T) {
 	}
 	if response.Mappings[0].LastAutoPricingRun.Status != "applied" || response.Mappings[0].LastAutoPricingRun.Trigger != "manual" {
 		t.Fatalf("unexpected preserved status: %#v", response.Mappings[0].LastAutoPricingRun)
+	}
+}
+
+func TestSaveMappingsPreservesStableTargetIDsFromLegacyClient(t *testing.T) {
+	lastRun := &AutoPricingRunStatus{Status: "applied", Trigger: "manual", RanAt: time.Unix(100, 0)}
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings: []GroupMapping{{
+			OwnGroup:                 "vip",
+			UpstreamTargets:          []UpstreamGroupRef{{SiteID: "site-a", GroupID: "54", GroupName: "shared"}},
+			PrimaryUpstreamSiteID:    "site-a",
+			PrimaryUpstreamGroupID:   "54",
+			PrimaryUpstreamGroupName: "shared",
+			LastAutoPricingRun:       lastRun,
+		}},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	response, err := service.SaveMappings(context.Background(), "user-1", []MappingRequest{{
+		OwnGroup:                 "vip",
+		UpstreamTargets:          []UpstreamGroupRef{{SiteID: "site-a", GroupName: "shared"}},
+		PrimaryUpstreamSiteID:    "site-a",
+		PrimaryUpstreamGroupName: "shared",
+	}})
+	if err != nil {
+		t.Fatalf("SaveMappings returned error: %v", err)
+	}
+	if len(response.Mappings) != 1 || len(response.Mappings[0].UpstreamTargets) != 1 {
+		t.Fatalf("unexpected mappings: %#v", response.Mappings)
+	}
+	mapping := response.Mappings[0]
+	if mapping.UpstreamTargets[0].GroupID != "54" || mapping.PrimaryUpstreamGroupID != "54" {
+		t.Fatalf("expected stable IDs to survive a legacy save, got %#v", mapping)
+	}
+	if mapping.LastAutoPricingRun == nil || mapping.LastAutoPricingRun.Status != "applied" {
+		t.Fatalf("expected response round-trip status to remain preserved, got %#v", mapping.LastAutoPricingRun)
 	}
 }
 
@@ -461,6 +502,119 @@ func TestApplyAutoPricingAfterSyncPersistsStatus(t *testing.T) {
 	}
 }
 
+func TestApplyAutoPricingAfterSyncHandlesGroupRenameByStableID(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Session:        testSession(""),
+		Mappings: []GroupMapping{{
+			OwnGroup:                 "vip",
+			UpstreamTargets:          []UpstreamGroupRef{{SiteID: "sync-site", GroupName: "old-name"}},
+			EnableAutoPricing:        true,
+			AutoPricingSource:        "primary_upstream",
+			PrimaryUpstreamSiteID:    "sync-site",
+			PrimaryUpstreamGroupName: "old-name",
+			AutoPricingStrategy:      "percentage",
+			PercentageIncrease:       10,
+			AdjustThresholdPercent:   50,
+		}},
+		OwnGroups: []GroupOption{{Name: "vip", Multiplier: 1.1}},
+	}}
+	connRepo := &testConnRepo{
+		stateRepo: repo,
+		connection: &RealConnection{
+			ID:                      "conn-1",
+			UserID:                  "user-1",
+			WorkspaceAdminAccountID: "admin-1",
+			UpstreamSiteID:          "sync-site",
+			UpstreamGroupID:         "54",
+			UpstreamGroupName:       "old-name",
+			OwnGroupIDs:             []string{"vip"},
+		},
+	}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+	service.connRepository = connRepo
+
+	service.ApplyAutoPricingAfterSync(
+		context.Background(),
+		"user-1",
+		"admin-1",
+		"sync-site",
+		"sync-site-name",
+		upstream.Metrics{Groups: []upstream.GroupInfo{{ID: "54", Name: "old-name", Multiplier: floatPtr(1.0)}}},
+		upstream.Metrics{Groups: []upstream.GroupInfo{
+			{ID: "99", Name: "old-name", Multiplier: floatPtr(9.9)},
+			{ID: "54", Name: "new-name", Multiplier: floatPtr(1.2)},
+		}},
+	)
+
+	if len(repo.state.OwnGroups) != 1 || repo.state.OwnGroups[0].Multiplier != 1.32 {
+		t.Fatalf("expected renamed group to persist multiplier 1.32, got %#v", repo.state.OwnGroups)
+	}
+	mapping := repo.state.Mappings[0]
+	if len(mapping.UpstreamTargets) != 1 || mapping.UpstreamTargets[0].GroupID != "54" || mapping.UpstreamTargets[0].GroupName != "new-name" {
+		t.Fatalf("expected stable target to refresh during sync, got %#v", mapping.UpstreamTargets)
+	}
+	if mapping.PrimaryUpstreamGroupID != "54" || mapping.PrimaryUpstreamGroupName != "new-name" {
+		t.Fatalf("expected primary target to stay on stable ID 54 during sync, got %#v", mapping)
+	}
+	if mapping.LastAutoPricingRun == nil || mapping.LastAutoPricingRun.Status != "applied" {
+		t.Fatalf("expected auto pricing to apply after rename, got %#v", mapping.LastAutoPricingRun)
+	}
+	if mapping.LastAutoPricingRun.TargetMultiplier == nil || *mapping.LastAutoPricingRun.TargetMultiplier != 1.32 {
+		t.Fatalf("expected persisted target multiplier 1.32, got %#v", mapping.LastAutoPricingRun.TargetMultiplier)
+	}
+}
+
+func TestApplyAutoPricingAfterSyncRefreshesSavedStableTargetWithoutConnection(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Session:        testSession(""),
+		Mappings: []GroupMapping{{
+			OwnGroup:                 "vip",
+			UpstreamTargets:          []UpstreamGroupRef{{SiteID: "sync-site", GroupID: "54", GroupName: "old-name"}},
+			EnableAutoPricing:        true,
+			AutoPricingSource:        "primary_upstream",
+			PrimaryUpstreamSiteID:    "sync-site",
+			PrimaryUpstreamGroupName: "old-name",
+			AutoPricingStrategy:      "fixed",
+			AdjustThresholdPercent:   50,
+		}},
+		OwnGroups: []GroupOption{{Name: "vip", Multiplier: 1.0}},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.0}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	service.ApplyAutoPricingAfterSync(
+		context.Background(),
+		"user-1",
+		"admin-1",
+		"sync-site",
+		"sync-site-name",
+		upstream.Metrics{Groups: []upstream.GroupInfo{{ID: "54", Name: "old-name", Multiplier: floatPtr(1.0)}}},
+		upstream.Metrics{Groups: []upstream.GroupInfo{
+			{ID: "99", Name: "old-name", Multiplier: floatPtr(9.9)},
+			{ID: "54", Name: "new-name", Multiplier: floatPtr(1.2)},
+		}},
+	)
+
+	mapping := repo.state.Mappings[0]
+	if mapping.UpstreamTargets[0].GroupID != "54" || mapping.UpstreamTargets[0].GroupName != "new-name" || mapping.PrimaryUpstreamGroupID != "54" || mapping.PrimaryUpstreamGroupName != "new-name" {
+		t.Fatalf("expected saved stable target names to refresh, got %#v", mapping)
+	}
+	if mapping.LastAutoPricingRun == nil || mapping.LastAutoPricingRun.Status != "applied" || mapping.LastAutoPricingRun.TargetMultiplier == nil || *mapping.LastAutoPricingRun.TargetMultiplier != 1.2 {
+		t.Fatalf("expected auto pricing to apply using refreshed name, got %#v", mapping.LastAutoPricingRun)
+	}
+}
+
 func TestRealDisconnectAtomicRollbackOnDeleteFailure(t *testing.T) {
 	repo := &testStateRepo{state: &State{
 		UserID:         "user-1",
@@ -520,6 +674,36 @@ func TestMappingOptionsPrunesOnlyAuthoritativeMissingTargets(t *testing.T) {
 	}
 }
 
+func TestPruneTargetsKeepsSameNameWithDifferentStableID(t *testing.T) {
+	targets := []UpstreamGroupRef{
+		{SiteID: "site-a", GroupID: "54", GroupName: "shared"},
+		{SiteID: "site-a", GroupID: "99", GroupName: "shared"},
+	}
+	missing := map[string]struct{}{targetKey(targets[0]): {}}
+
+	cleaned := pruneTargetsByKey(targets, missing)
+
+	if len(cleaned) != 1 || cleaned[0].GroupID != "99" {
+		t.Fatalf("expected only stable ID 99 to remain, got %#v", cleaned)
+	}
+}
+
+func TestRemoveMappingTargetKeepsSameNameWithDifferentStableID(t *testing.T) {
+	state := &State{Mappings: []GroupMapping{{
+		OwnGroup: "vip",
+		UpstreamTargets: []UpstreamGroupRef{
+			{SiteID: "site-a", GroupID: "54", GroupName: "shared"},
+			{SiteID: "site-a", GroupID: "99", GroupName: "shared"},
+		},
+	}}}
+
+	removeMappingTargetFromState(state, "site-a", "54", "shared")
+
+	if len(state.Mappings) != 1 || len(state.Mappings[0].UpstreamTargets) != 1 || state.Mappings[0].UpstreamTargets[0].GroupID != "99" {
+		t.Fatalf("expected disconnect cleanup to preserve stable ID 99, got %#v", state.Mappings)
+	}
+}
+
 func TestMappingOptionsDoesNotResurrectDisconnectedBackfillTarget(t *testing.T) {
 	repo := &testStateRepo{state: &State{
 		UserID:         "user-1",
@@ -538,7 +722,7 @@ func TestMappingOptionsDoesNotResurrectDisconnectedBackfillTarget(t *testing.T) 
 	defer server.Close()
 	repo.state.Session = testSession(server.URL)
 	repo.mutateBefore = func(latest *State) {
-		removeMappingTargetFromState(latest, "site-a", "g1")
+		removeMappingTargetFromState(latest, "site-a", "", "g1")
 		connRepo.connection = nil
 	}
 	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
@@ -554,6 +738,128 @@ func TestMappingOptionsDoesNotResurrectDisconnectedBackfillTarget(t *testing.T) 
 	}
 	if connRepo.deleteCalls != 0 {
 		t.Fatalf("test should simulate completed disconnect without invoking delete, got %d", connRepo.deleteCalls)
+	}
+}
+
+func TestMappingOptionsRefreshesRenamedRealConnectionTargetByGroupID(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Session:        testSession(""),
+		Mappings: []GroupMapping{{
+			OwnGroup: "vip",
+			UpstreamTargets: []UpstreamGroupRef{{
+				SiteID:    "site-a",
+				GroupName: "old-name",
+			}},
+			PrimaryUpstreamSiteID:    "site-a",
+			PrimaryUpstreamGroupName: "old-name",
+		}},
+	}}
+	connRepo := &testConnRepo{
+		stateRepo: repo,
+		connection: &RealConnection{
+			ID:                      "conn-1",
+			UserID:                  "user-1",
+			WorkspaceAdminAccountID: "admin-1",
+			UpstreamSiteID:          "site-a",
+			UpstreamGroupID:         "54",
+			UpstreamGroupName:       "old-name",
+			OwnGroupIDs:             []string{"vip"},
+		},
+	}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	lookup := testUpstreamLookup{sites: map[string]*upstream.Site{
+		"site-a": {
+			ID: "site-a", UserID: "user-1", AdminAccountID: "admin-1",
+			Status: upstream.StatusConnected, LastSyncedAt: int64Ptr(1),
+			Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{
+				{ID: "99", Name: "old-name", Multiplier: floatPtr(9.9)},
+				{ID: "54", Name: "new-name", Multiplier: floatPtr(0.015)},
+			}},
+		},
+	}}
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), lookup)
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+	service.connRepository = connRepo
+
+	response, err := service.MappingOptions(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("MappingOptions returned error: %v", err)
+	}
+	if len(response.Mappings) != 1 || len(response.Mappings[0].UpstreamTargets) != 1 {
+		t.Fatalf("unexpected mappings: %#v", response.Mappings)
+	}
+	target := response.Mappings[0].UpstreamTargets[0]
+	if target.GroupID != "54" || target.GroupName != "new-name" {
+		t.Fatalf("expected refreshed target, got %#v", target)
+	}
+	if response.Mappings[0].PrimaryUpstreamGroupID != "54" || response.Mappings[0].PrimaryUpstreamGroupName != "new-name" {
+		t.Fatalf("expected primary target name refreshed, got %#v", response.Mappings[0])
+	}
+	if repo.state.Mappings[0].UpstreamTargets[0] != target {
+		t.Fatalf("expected refreshed target persisted, got %#v", repo.state.Mappings)
+	}
+}
+
+func TestMappingOptionsDoesNotRebindLegacyNameBeforeStableConnectionBackfill(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings: []GroupMapping{{
+			OwnGroup:                 "vip",
+			UpstreamTargets:          []UpstreamGroupRef{{SiteID: "site-a", GroupName: "shared"}},
+			PrimaryUpstreamSiteID:    "site-a",
+			PrimaryUpstreamGroupName: "shared",
+		}},
+	}}
+	connRepo := &testConnRepo{
+		stateRepo: repo,
+		connection: &RealConnection{
+			ID:                      "conn-1",
+			UserID:                  "user-1",
+			WorkspaceAdminAccountID: "admin-1",
+			UpstreamSiteID:          "site-a",
+			UpstreamGroupID:         "54",
+			UpstreamGroupName:       "shared",
+			OwnGroupIDs:             []string{"vip"},
+		},
+	}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	lookup := testUpstreamLookup{sites: map[string]*upstream.Site{
+		"site-a": {
+			ID: "site-a", UserID: "user-1", AdminAccountID: "admin-1",
+			Status: upstream.StatusConnected, LastSyncedAt: int64Ptr(1),
+			Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{{
+				ID: "99", Name: "shared", Multiplier: floatPtr(9.9),
+			}}},
+		},
+	}}
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), lookup)
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+	service.connRepository = connRepo
+
+	response, err := service.MappingOptions(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("MappingOptions returned error: %v", err)
+	}
+	if len(response.Mappings) != 1 || len(response.Mappings[0].UpstreamTargets) != 0 {
+		t.Fatalf("unexpected mappings: %#v", response.Mappings)
+	}
+	if connRepo.connection == nil || connRepo.connection.UpstreamGroupID != "54" {
+		t.Fatalf("expected the real connection to remain on stable ID 54, got %#v", connRepo.connection)
+	}
+
+	second, err := service.MappingOptions(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("second MappingOptions returned error: %v", err)
+	}
+	if len(second.Mappings) != 1 || len(second.Mappings[0].UpstreamTargets) != 0 {
+		t.Fatalf("expected missing ID 54 to remain pruned without rebinding to ID 99, got %#v", second.Mappings)
 	}
 }
 

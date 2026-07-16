@@ -5,6 +5,7 @@ import { Layers, Loader2, Save, CheckCircle2, CircleHelp, Zap, Settings2, Play }
 import { getMySiteMappingOptions, runAutoPricing, saveMySiteMappings } from '../../api/mySites'
 import { listUpstreamSites } from '../../api/upstream'
 import { getNotificationChannelSettings } from '../../api/settings'
+import { mySiteGroupMultiplierKey, mySiteGroupRefKey } from '../../types/mySites'
 import type { AutoPricingRunResult, MySiteMapping, MySiteMappingOwnGroupOption } from '../../types/mySites'
 import AutoPricingConfigDrawer from './AutoPricingConfigDrawer.vue'
 import type { BotOption } from './AutoPricingConfigDrawer.vue'
@@ -71,11 +72,15 @@ const statusLabel = (status: string): string => {
   return result === key ? status : result
 }
 
+const upstreamMultiplier = (siteId: string, groupId: string | undefined, groupName: string): number | null => (
+  upstreamMultiplierMap.value.get(mySiteGroupMultiplierKey(siteId, groupId, groupName)) ?? null
+)
+
 const mappingRows = computed(() => {
   const mappingIndex = new Map(mappings.value.map(m => [m.ownGroup, m]))
   const seen = new Set<string>()
 
-  const rows: { index: number; ownGroup: string; ownMultiplier: number | null; platform: string; status: string; isExclusive: boolean; subscriptionType: string; upstreamTargets: { siteId: string; groupName: string; label: string; multiplier: number | null; targetIndex: number }[] }[] = []
+  const rows: { index: number; ownGroup: string; ownMultiplier: number | null; platform: string; status: string; isExclusive: boolean; subscriptionType: string; upstreamTargets: { siteId: string; groupId?: string; groupName: string; label: string; multiplier: number | null; targetIndex: number }[] }[] = []
 
   for (const group of ownGroups.value) {
     seen.add(group.groupName)
@@ -91,7 +96,7 @@ const mappingRows = computed(() => {
       upstreamTargets: mapping
         ? mapping.upstreamTargets.map((target, targetIndex) => ({
             ...target, label: target.groupName,
-            multiplier: upstreamMultiplierMap.value.get(`${target.siteId}::${target.groupName}`) ?? null,
+            multiplier: upstreamMultiplier(target.siteId, target.groupId, target.groupName),
             targetIndex,
           }))
         : []
@@ -110,7 +115,7 @@ const mappingRows = computed(() => {
       subscriptionType: '',
       upstreamTargets: mapping.upstreamTargets.map((target, targetIndex) => ({
         ...target, label: target.groupName,
-        multiplier: upstreamMultiplierMap.value.get(`${target.siteId}::${target.groupName}`) ?? null,
+        multiplier: upstreamMultiplier(target.siteId, target.groupId, target.groupName),
         targetIndex,
       }))
     })
@@ -274,7 +279,8 @@ const loadData = async () => {
       if (!site.metrics?.groups) continue
       for (const g of site.metrics.groups) {
         if (g.multiplier != null) {
-          mMap.set(`${site.id}::${g.name}`, g.multiplier)
+          if (g.id) mMap.set(mySiteGroupMultiplierKey(site.id, g.id, g.name), g.multiplier)
+          mMap.set(mySiteGroupMultiplierKey(site.id, undefined, g.name), g.multiplier)
         }
       }
     }
@@ -471,7 +477,7 @@ onMounted(() => {
             <tr
               v-for="target in mapping.upstreamTargets"
               v-else
-              :key="`${mapping.ownGroup}-${target.siteId}-${target.groupName}`"
+              :key="`${mapping.ownGroup}-${mySiteGroupRefKey(target)}`"
               class="last:border-b-0"
               :class="{'border-b border-border/20': target.targetIndex !== mapping.upstreamTargets.length - 1}"
               @mouseenter="setHovered(mappingIndex, target.targetIndex)"

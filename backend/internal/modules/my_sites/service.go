@@ -34,7 +34,7 @@ type RealConnectionRepository interface {
 }
 
 type AtomicRealDisconnectRepository interface {
-	RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupName string) error
+	RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupID string, groupName string) error
 }
 
 // UpstreamSiteLookup 根据 ID 获取上游站点信息（含 Session），供真实对接流程使用。
@@ -118,16 +118,48 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 	for _, g := range freshOwnGroups {
 		freshGroupSet[strings.TrimSpace(g.Name)] = struct{}{}
 	}
-	prunableTargets := s.authoritativeMissingTargets(ctx, userID, adminAccountID, state.Mappings)
-	state, err = s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
-		var backfillConnections []RealConnection
-		if s.connRepository != nil {
-			backfillConnections, err = s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
-			if err != nil {
-				return err
-			}
+	var backfillConnections []RealConnection
+	if s.connRepository != nil {
+		backfillConnections, err = s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+		if err != nil {
+			return MappingOptionsResponse{}, err
 		}
-		applyMappingsFromRealConnections(latest, idToName, backfillConnections)
+	}
+	resolvedConnections := make(map[string]UpstreamGroupRef, len(backfillConnections))
+	resolvedTargets := make(map[string]UpstreamGroupRef)
+	for _, conn := range backfillConnections {
+		target := s.currentUpstreamTarget(ctx, userID, adminAccountID, UpstreamGroupRef{
+			SiteID: conn.UpstreamSiteID, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName,
+		})
+		resolvedConnections[conn.ID] = target
+		resolvedTargets[targetKey(target)] = target
+	}
+	for _, mapping := range state.Mappings {
+		for _, target := range mapping.UpstreamTargets {
+			current := s.currentUpstreamTarget(ctx, userID, adminAccountID, target)
+			resolvedTargets[targetKey(target)] = current
+			resolvedTargets[targetKey(current)] = current
+		}
+	}
+	refreshTargets := func(current *State) {
+		applyMappingsFromRealConnections(current, idToName, backfillConnections, func(conn RealConnection) UpstreamGroupRef {
+			if target, ok := resolvedConnections[conn.ID]; ok {
+				return target
+			}
+			return UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName}
+		})
+		refreshSavedMappingTargets(current, func(target UpstreamGroupRef) UpstreamGroupRef {
+			if resolved, ok := resolvedTargets[targetKey(target)]; ok {
+				return resolved
+			}
+			return target
+		})
+	}
+	preview := cloneStateForMutation(state)
+	refreshTargets(preview)
+	prunableTargets := s.authoritativeMissingTargets(ctx, userID, adminAccountID, preview.Mappings)
+	state, err = s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
+		refreshTargets(latest)
 		cleanedMappings := make([]GroupMapping, 0, len(latest.Mappings))
 		for _, m := range latest.Mappings {
 			if _, exists := freshGroupSet[strings.TrimSpace(m.OwnGroup)]; exists {
@@ -196,12 +228,31 @@ func (s *Service) SaveMappings(ctx context.Context, userID string, mappings []Ma
 		if ownGroup == "" {
 			continue
 		}
+		persistedMapping, _ := findMappingByOwnGroup(state.Mappings, ownGroup)
 		targets := make([]UpstreamGroupRef, 0, len(mapping.UpstreamTargets))
 		for _, target := range mapping.UpstreamTargets {
 			if strings.TrimSpace(target.SiteID) == "" || strings.TrimSpace(target.GroupName) == "" {
 				continue
 			}
-			targets = append(targets, UpstreamGroupRef{SiteID: strings.TrimSpace(target.SiteID), GroupName: strings.TrimSpace(target.GroupName)})
+			normalized := UpstreamGroupRef{
+				SiteID:    strings.TrimSpace(target.SiteID),
+				GroupID:   strings.TrimSpace(target.GroupID),
+				GroupName: strings.TrimSpace(target.GroupName),
+			}
+			if normalized.GroupID == "" {
+				for _, persisted := range persistedMapping.UpstreamTargets {
+					if persisted.SiteID == normalized.SiteID && persisted.GroupName == normalized.GroupName && persisted.GroupID != "" {
+						normalized.GroupID = persisted.GroupID
+						break
+					}
+				}
+			}
+			if normalized.GroupID == "" {
+				normalized = s.currentUpstreamTarget(ctx, userID, adminAccountID, normalized)
+			}
+			if !hasUpstreamTarget(targets, normalized) {
+				targets = append(targets, normalized)
+			}
 		}
 
 		// 归一化自动调价配置默认值（指针 nil 表示未传，此时用默认值；显式传 0 保留 0）
@@ -228,19 +279,39 @@ func (s *Service) SaveMappings(ctx context.Context, userID string, mappings []Ma
 			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
 		}
 
+		primarySiteID := strings.TrimSpace(mapping.PrimaryUpstreamSiteID)
+		primaryGroupID := strings.TrimSpace(mapping.PrimaryUpstreamGroupID)
+		primaryGroupName := strings.TrimSpace(mapping.PrimaryUpstreamGroupName)
+		if primaryGroupID == "" && primarySiteID != "" && primaryGroupName != "" {
+			for _, target := range targets {
+				if target.SiteID == primarySiteID && target.GroupName == primaryGroupName {
+					primaryGroupID = target.GroupID
+					break
+				}
+			}
+		}
+
 		// 校验：开启自动调价且来源为 primary_upstream 时，主上游必须在 targets 中
 		if mapping.EnableAutoPricing && source == "primary_upstream" {
-			primarySiteID := strings.TrimSpace(mapping.PrimaryUpstreamSiteID)
-			primaryGroupName := strings.TrimSpace(mapping.PrimaryUpstreamGroupName)
 			if primarySiteID == "" || primaryGroupName == "" {
 				return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
 			}
 			found := false
 			for _, t := range targets {
-				if t.SiteID == primarySiteID && t.GroupName == primaryGroupName {
-					found = true
-					break
+				if t.SiteID != primarySiteID {
+					continue
 				}
+				if primaryGroupID != "" {
+					if t.GroupID != primaryGroupID {
+						continue
+					}
+				} else if t.GroupName != primaryGroupName {
+					continue
+				}
+				primaryGroupID = t.GroupID
+				primaryGroupName = t.GroupName
+				found = true
+				break
 			}
 			if !found {
 				return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
@@ -266,8 +337,9 @@ func (s *Service) SaveMappings(ctx context.Context, userID string, mappings []Ma
 			UpstreamTargets:           targets,
 			EnableAutoPricing:         mapping.EnableAutoPricing,
 			AutoPricingSource:         source,
-			PrimaryUpstreamSiteID:     strings.TrimSpace(mapping.PrimaryUpstreamSiteID),
-			PrimaryUpstreamGroupName:  strings.TrimSpace(mapping.PrimaryUpstreamGroupName),
+			PrimaryUpstreamSiteID:     primarySiteID,
+			PrimaryUpstreamGroupID:    primaryGroupID,
+			PrimaryUpstreamGroupName:  primaryGroupName,
 			AutoPricingStrategy:       strategy,
 			FixedIncrease:             fixedIncrease,
 			PercentageIncrease:        percentageIncrease,
@@ -393,7 +465,7 @@ func (s *Service) RealConnect(ctx context.Context, userID string, req RealConnec
 		}
 	}
 
-	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
+	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, req.UpstreamGroupID, groupName)
 
 	log.Printf("[real-connect] 真实对接完成 conn_id=%s site=%s group=%s type=%s platform=%s", conn.ID, upstreamSite.Name, groupName, groupType, upstreamSite.Platform)
 	return RealConnectResponse{Connection: conn}, nil
@@ -652,7 +724,7 @@ func (s *Service) RealBind(ctx context.Context, userID string, req RealBindReque
 		}
 	}
 
-	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
+	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, req.UpstreamGroupID, groupName)
 
 	log.Printf("[real-bind] 手动绑定完成 conn_id=%s site=%s group=%s type=%s", connID, upstreamSite.Name, groupName, groupType)
 	return RealConnectResponse{Connection: conn}, nil
@@ -754,7 +826,7 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 		}
 	}
 
-	if err := s.removeUpstreamMappingAndDeleteConnection(ctx, userID, adminAccountID, req.ConnectionID, conn.UpstreamSiteID, conn.UpstreamGroupName); err != nil {
+	if err := s.removeUpstreamMappingAndDeleteConnection(ctx, userID, adminAccountID, req.ConnectionID, conn.UpstreamSiteID, conn.UpstreamGroupID, conn.UpstreamGroupName); err != nil {
 		return err
 	}
 
@@ -763,9 +835,9 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 }
 
 // removeUpstreamMappingAndDeleteConnection atomically removes the local mapping target and real_connection row.
-func (s *Service) removeUpstreamMappingAndDeleteConnection(ctx context.Context, userID, adminAccountID, connectionID, siteID, groupName string) error {
+func (s *Service) removeUpstreamMappingAndDeleteConnection(ctx context.Context, userID, adminAccountID, connectionID, siteID, groupID, groupName string) error {
 	if repo, ok := s.connRepository.(AtomicRealDisconnectRepository); ok {
-		return repo.RemoveUpstreamMappingAndDeleteConnection(ctx, userID, adminAccountID, connectionID, siteID, groupName)
+		return repo.RemoveUpstreamMappingAndDeleteConnection(ctx, userID, adminAccountID, connectionID, siteID, groupID, groupName)
 	}
 	state, err := s.repository.Get(ctx, userID, adminAccountID)
 	if err != nil {
@@ -773,7 +845,7 @@ func (s *Service) removeUpstreamMappingAndDeleteConnection(ctx context.Context, 
 	}
 	before := cloneStateForMutation(state)
 	if state != nil {
-		removeMappingTargetFromState(state, siteID, groupName)
+		removeMappingTargetFromState(state, siteID, groupID, groupName)
 		if err := s.repository.Save(ctx, *state); err != nil {
 			return err
 		}
@@ -802,21 +874,29 @@ func (s *Service) backfillMappingsFromRealConnections(ctx context.Context, state
 	if len(connections) == 0 {
 		return nil
 	}
-	applyMappingsFromRealConnections(state, idToName, connections)
+	applyMappingsFromRealConnections(state, idToName, connections, func(conn RealConnection) UpstreamGroupRef {
+		return s.currentUpstreamTarget(ctx, state.UserID, state.AdminAccountID, UpstreamGroupRef{
+			SiteID: conn.UpstreamSiteID, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName,
+		})
+	})
 	return nil
 }
 
-func applyMappingsFromRealConnections(state *State, idToName map[string]string, connections []RealConnection) {
+func applyMappingsFromRealConnections(state *State, idToName map[string]string, connections []RealConnection, resolveTarget func(RealConnection) UpstreamGroupRef) bool {
 	if state == nil || len(connections) == 0 {
-		return
+		return false
 	}
+	changed := false
 	existing := make(map[string]int, len(state.Mappings))
 	for i := range state.Mappings {
 		existing[state.Mappings[i].OwnGroup] = i
 	}
 
 	for _, conn := range connections {
-		target := UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupName: conn.UpstreamGroupName}
+		target := UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName}
+		if resolveTarget != nil {
+			target = resolveTarget(conn)
+		}
 		for _, ownID := range conn.OwnGroupIDs {
 			ownName, ok := idToName[ownID]
 			if !ok {
@@ -830,28 +910,178 @@ func applyMappingsFromRealConnections(state *State, idToName map[string]string, 
 					UpstreamTargets: []UpstreamGroupRef{target},
 				})
 				existing[ownName] = len(state.Mappings) - 1
+				changed = true
 				continue
 			}
-			if !hasUpstreamTarget(state.Mappings[mappingIndex].UpstreamTargets, target) {
-				state.Mappings[mappingIndex].UpstreamTargets = append(state.Mappings[mappingIndex].UpstreamTargets, target)
+			if upsertRealConnectionTarget(&state.Mappings[mappingIndex], conn, target) {
+				changed = true
 			}
 		}
 	}
+	return changed
 }
 
 func hasUpstreamTarget(targets []UpstreamGroupRef, target UpstreamGroupRef) bool {
 	for _, existing := range targets {
-		if existing.SiteID == target.SiteID && existing.GroupName == target.GroupName {
+		if sameUpstreamTarget(existing, target) {
 			return true
 		}
 	}
 	return false
 }
 
+func sameUpstreamTarget(first, second UpstreamGroupRef) bool {
+	if strings.TrimSpace(first.SiteID) != strings.TrimSpace(second.SiteID) {
+		return false
+	}
+	firstID := strings.TrimSpace(first.GroupID)
+	secondID := strings.TrimSpace(second.GroupID)
+	if firstID != "" || secondID != "" {
+		return firstID != "" && secondID != "" && firstID == secondID
+	}
+	return strings.TrimSpace(first.GroupName) == strings.TrimSpace(second.GroupName)
+}
+
+func upsertRealConnectionTarget(mapping *GroupMapping, conn RealConnection, current UpstreamGroupRef) bool {
+	for i, existing := range mapping.UpstreamTargets {
+		if existing.SiteID != current.SiteID {
+			continue
+		}
+		matchesID := current.GroupID != "" && existing.GroupID != "" && existing.GroupID == current.GroupID
+		matchesLegacy := existing.GroupID == "" && (existing.GroupName == conn.UpstreamGroupName || existing.GroupName == current.GroupName)
+		if !matchesID && !matchesLegacy {
+			continue
+		}
+		primaryChanged := updatePrimaryTarget(mapping, existing, current)
+		mapping.UpstreamTargets[i] = current
+		return primaryChanged || existing != current
+	}
+	mapping.UpstreamTargets = append(mapping.UpstreamTargets, current)
+	return true
+}
+
+func updatePrimaryTarget(mapping *GroupMapping, previous, current UpstreamGroupRef) bool {
+	if mapping.PrimaryUpstreamSiteID != previous.SiteID {
+		return false
+	}
+	if mapping.PrimaryUpstreamGroupID != "" {
+		if previous.GroupID == "" || mapping.PrimaryUpstreamGroupID != previous.GroupID {
+			return false
+		}
+	} else if mapping.PrimaryUpstreamGroupName != previous.GroupName {
+		return false
+	}
+	changed := mapping.PrimaryUpstreamGroupID != current.GroupID || mapping.PrimaryUpstreamGroupName != current.GroupName
+	mapping.PrimaryUpstreamGroupID = current.GroupID
+	mapping.PrimaryUpstreamGroupName = current.GroupName
+	return changed
+}
+
+func refreshSavedMappingTargets(state *State, resolve func(UpstreamGroupRef) UpstreamGroupRef) bool {
+	if state == nil || resolve == nil {
+		return false
+	}
+	changed := false
+	for i := range state.Mappings {
+		for j, previous := range state.Mappings[i].UpstreamTargets {
+			current := resolve(previous)
+			matchesLegacyName := previous.GroupID == "" && previous.SiteID == current.SiteID && previous.GroupName == current.GroupName
+			if !sameUpstreamTarget(previous, current) && !matchesLegacyName {
+				continue
+			}
+			primaryChanged := updatePrimaryTarget(&state.Mappings[i], previous, current)
+			if previous != current {
+				state.Mappings[i].UpstreamTargets[j] = current
+				changed = true
+			}
+			changed = changed || primaryChanged
+		}
+	}
+	return changed
+}
+
+func (s *Service) currentUpstreamTarget(ctx context.Context, userID, adminAccountID string, target UpstreamGroupRef) UpstreamGroupRef {
+	target.SiteID = strings.TrimSpace(target.SiteID)
+	target.GroupID = strings.TrimSpace(target.GroupID)
+	target.GroupName = strings.TrimSpace(target.GroupName)
+	site, err := s.upstreamLookup.GetSite(ctx, target.SiteID)
+	if err != nil || site == nil || site.UserID != userID || site.AdminAccountID != adminAccountID || site.Status != upstream.StatusConnected || site.LastSyncedAt == nil {
+		return target
+	}
+	group := findUpstreamGroup(site.Metrics.Groups, target)
+	if group == nil {
+		return target
+	}
+	return UpstreamGroupRef{SiteID: target.SiteID, GroupID: strings.TrimSpace(group.ID), GroupName: strings.TrimSpace(group.Name)}
+}
+
+func refreshRealConnectionTarget(mapping *GroupMapping, conn RealConnection, current UpstreamGroupRef) bool {
+	for i, previous := range mapping.UpstreamTargets {
+		if previous.SiteID != current.SiteID {
+			continue
+		}
+		matchesID := current.GroupID != "" && previous.GroupID != "" && previous.GroupID == current.GroupID
+		matchesLegacy := previous.GroupID == "" && (previous.GroupName == conn.UpstreamGroupName || previous.GroupName == current.GroupName)
+		if !matchesID && !matchesLegacy {
+			continue
+		}
+		primaryChanged := updatePrimaryTarget(mapping, previous, current)
+		mapping.UpstreamTargets[i] = current
+		return primaryChanged || previous != current
+	}
+	return false
+}
+
+func (s *Service) refreshMappingTargetsAfterSync(ctx context.Context, userID, adminAccountID, siteID string, groups []upstream.GroupInfo, state *State) bool {
+	changed := false
+	if s.connRepository == nil || state == nil {
+		return refreshSavedMappingTargets(state, func(target UpstreamGroupRef) UpstreamGroupRef {
+			return refreshedTargetFromGroups(target, siteID, groups)
+		})
+	}
+	connections, err := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[auto-pricing] list real connections failed user_id=%s err=%v", userID, err)
+		return refreshSavedMappingTargets(state, func(target UpstreamGroupRef) UpstreamGroupRef {
+			if target.GroupID == "" {
+				return target
+			}
+			return refreshedTargetFromGroups(target, siteID, groups)
+		})
+	}
+	for _, conn := range connections {
+		if conn.UpstreamSiteID != siteID {
+			continue
+		}
+		current := UpstreamGroupRef{SiteID: siteID, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName}
+		if group := findUpstreamGroup(groups, current); group != nil {
+			current.GroupID = strings.TrimSpace(group.ID)
+			current.GroupName = strings.TrimSpace(group.Name)
+		}
+		for i := range state.Mappings {
+			changed = refreshRealConnectionTarget(&state.Mappings[i], conn, current) || changed
+		}
+	}
+	return refreshSavedMappingTargets(state, func(target UpstreamGroupRef) UpstreamGroupRef {
+		return refreshedTargetFromGroups(target, siteID, groups)
+	}) || changed
+}
+
+func refreshedTargetFromGroups(target UpstreamGroupRef, siteID string, groups []upstream.GroupInfo) UpstreamGroupRef {
+	if target.SiteID != siteID {
+		return target
+	}
+	group := findUpstreamGroup(groups, target)
+	if group == nil {
+		return target
+	}
+	return UpstreamGroupRef{SiteID: target.SiteID, GroupID: strings.TrimSpace(group.ID), GroupName: strings.TrimSpace(group.Name)}
+}
+
 // addUpstreamMapping 将上游站点+分组添加到用户 my_site_states.mappings 中每个关联的自有分组里。
 // 如果自有分组尚未有映射记录则创建，如果已有则在 upstreamTargets 中追加（去重）。
 // 注意：mappings 中 OwnGroup 存储的是分组名称（非数字 ID），与仪表盘分组关联一致。
-func (s *Service) addUpstreamMapping(ctx context.Context, userID string, adminAccountID string, ownGroupIDs []string, siteID, groupName string) {
+func (s *Service) addUpstreamMapping(ctx context.Context, userID string, adminAccountID string, ownGroupIDs []string, siteID, groupID, groupName string) {
 	state, err := s.repository.Get(ctx, userID, adminAccountID)
 	if err != nil || state == nil {
 		return
@@ -871,7 +1101,7 @@ func (s *Service) addUpstreamMapping(ctx context.Context, userID string, adminAc
 		}
 	}
 
-	target := UpstreamGroupRef{SiteID: siteID, GroupName: groupName}
+	target := UpstreamGroupRef{SiteID: siteID, GroupID: groupID, GroupName: groupName}
 
 	existing := make(map[string]*GroupMapping, len(state.Mappings))
 	for i := range state.Mappings {
@@ -887,16 +1117,11 @@ func (s *Service) addUpstreamMapping(ctx context.Context, userID string, adminAc
 		}
 
 		if m, found := existing[ownName]; found {
-			alreadyHas := false
-			for _, t := range m.UpstreamTargets {
-				if t.SiteID == siteID && t.GroupName == groupName {
-					alreadyHas = true
-					break
-				}
-			}
-			if !alreadyHas {
-				m.UpstreamTargets = append(m.UpstreamTargets, target)
-			}
+			upsertRealConnectionTarget(m, RealConnection{
+				UpstreamSiteID:    siteID,
+				UpstreamGroupID:   groupID,
+				UpstreamGroupName: groupName,
+			}, target)
 		} else {
 			newMapping := GroupMapping{
 				OwnGroup:        ownName,
@@ -1184,8 +1409,12 @@ func cloneStateForMutation(state *State) *State {
 	return &copy
 }
 
-func targetKey(siteID string, groupName string) string {
-	return strings.TrimSpace(siteID) + "\x00" + strings.TrimSpace(groupName)
+func targetKey(target UpstreamGroupRef) string {
+	siteID := strings.TrimSpace(target.SiteID)
+	if groupID := strings.TrimSpace(target.GroupID); groupID != "" {
+		return siteID + "\x00id:" + groupID
+	}
+	return siteID + "\x00name:" + strings.TrimSpace(target.GroupName)
 }
 
 func (s *Service) authoritativeMissingTargets(ctx context.Context, userID string, adminAccountID string, mappings []GroupMapping) map[string]struct{} {
@@ -1193,7 +1422,7 @@ func (s *Service) authoritativeMissingTargets(ctx context.Context, userID string
 	seen := map[string]struct{}{}
 	for _, mapping := range mappings {
 		for _, target := range mapping.UpstreamTargets {
-			key := targetKey(target.SiteID, target.GroupName)
+			key := targetKey(target)
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -1202,7 +1431,7 @@ func (s *Service) authoritativeMissingTargets(ctx context.Context, userID string
 			if err != nil || site == nil || site.UserID != userID || site.AdminAccountID != adminAccountID || site.Status != upstream.StatusConnected || site.LastSyncedAt == nil {
 				continue
 			}
-			if !hasUpstreamGroup(site.Metrics.Groups, target.GroupName) {
+			if findUpstreamGroup(site.Metrics.Groups, target) == nil {
 				missing[key] = struct{}{}
 			}
 		}
@@ -1216,7 +1445,7 @@ func pruneTargetsByKey(targets []UpstreamGroupRef, missing map[string]struct{}) 
 	}
 	cleaned := make([]UpstreamGroupRef, 0, len(targets))
 	for _, target := range targets {
-		if _, drop := missing[targetKey(target.SiteID, target.GroupName)]; drop {
+		if _, drop := missing[targetKey(target)]; drop {
 			continue
 		}
 		cleaned = append(cleaned, target)
@@ -1224,7 +1453,7 @@ func pruneTargetsByKey(targets []UpstreamGroupRef, missing map[string]struct{}) 
 	return cleaned
 }
 
-func removeMappingTargetFromState(state *State, siteID string, groupName string) {
+func removeMappingTargetFromState(state *State, siteID string, groupID string, groupName string) {
 	if state == nil || len(state.Mappings) == 0 {
 		return
 	}
@@ -1232,7 +1461,9 @@ func removeMappingTargetFromState(state *State, siteID string, groupName string)
 	for _, mapping := range state.Mappings {
 		targets := make([]UpstreamGroupRef, 0, len(mapping.UpstreamTargets))
 		for _, target := range mapping.UpstreamTargets {
-			if target.SiteID == siteID && target.GroupName == groupName {
+			matchesID := groupID != "" && target.GroupID != "" && target.GroupID == groupID
+			matchesLegacyName := target.GroupID == "" && target.GroupName == groupName
+			if target.SiteID == siteID && (matchesID || matchesLegacyName) {
 				continue
 			}
 			targets = append(targets, target)
@@ -1259,19 +1490,30 @@ type groupMultiplierChange struct {
 	New float64
 }
 
+type multiplierLookup func(UpstreamGroupRef) *float64
+
+func groupIdentity(groupID, groupName string) string {
+	if groupID = strings.TrimSpace(groupID); groupID != "" {
+		return "id:" + groupID
+	}
+	return "name:" + strings.TrimSpace(groupName)
+}
+
+func targetIdentity(target UpstreamGroupRef) string {
+	return groupIdentity(target.GroupID, target.GroupName)
+}
+
 // changedUpstreamGroups 对比同步前后的 Metrics，返回倍率发生变化的上游分组列表。
-// 使用 group.ID + "|" + group.Name 作为匹配 key，与通知逻辑保持一致。
+// 有稳定 ID 时按 ID 匹配，旧数据缺少 ID 时才回退名称。
 func changedUpstreamGroups(oldMetrics, newMetrics upstream.Metrics) []changedGroup {
 	if len(oldMetrics.Groups) == 0 || len(newMetrics.Groups) == 0 {
 		return nil
 	}
 	oldMap := make(map[string]float64, len(oldMetrics.Groups))
-	oldNameMap := make(map[string]string, len(oldMetrics.Groups))
 	for _, g := range oldMetrics.Groups {
 		if g.Multiplier != nil {
-			key := g.ID + "|" + g.Name
+			key := groupIdentity(g.ID, g.Name)
 			oldMap[key] = *g.Multiplier
-			oldNameMap[key] = g.Name
 		}
 	}
 	var result []changedGroup
@@ -1279,7 +1521,7 @@ func changedUpstreamGroups(oldMetrics, newMetrics upstream.Metrics) []changedGro
 		if g.Multiplier == nil {
 			continue
 		}
-		key := g.ID + "|" + g.Name
+		key := groupIdentity(g.ID, g.Name)
 		oldVal, existed := oldMap[key]
 		if !existed || oldVal == *g.Multiplier {
 			continue
@@ -1336,19 +1578,19 @@ func thresholdExceeded(oldRef, newRef, thresholdPercent float64) bool {
 // 参数：
 //   - source: 调价来源（primary_upstream / lowest_upstream / highest_upstream / average_upstream）
 //   - targets: mapping 关联的上游分组列表
-//   - primarySiteID, primaryGroupName: 主上游配置
+//   - primarySiteID, primaryGroupID, primaryGroupName: 主上游配置
 //   - syncSiteID: 本次同步的站点 ID
-//   - changesByGroup: 本次同步站点所有变化分组的 old/new 快照（按 GroupName 索引）
+//   - changesByGroup: 本次同步站点所有变化分组的 old/new 快照（稳定 ID 优先，legacy 数据回退名称）
 //   - newMetricsGroups: 本次同步站点的最新分组列表（用于查找未变化分组的当前倍率）
 //   - lookupMultiplier: 查询其他站点分组倍率的回调（从缓存读取）
 func computeReferenceMultipliers(
 	source string,
 	targets []UpstreamGroupRef,
-	primarySiteID, primaryGroupName string,
+	primarySiteID, primaryGroupID, primaryGroupName string,
 	syncSiteID string,
 	changesByGroup map[string]groupMultiplierChange,
 	newMetricsGroups []upstream.GroupInfo,
-	lookupMultiplier func(siteID, groupName string) *float64,
+	lookupMultiplier multiplierLookup,
 ) (oldRef, newRef float64, ok bool, reason string) {
 	switch source {
 	case "primary_upstream":
@@ -1356,7 +1598,7 @@ func computeReferenceMultipliers(
 		if primarySiteID != syncSiteID {
 			return 0, 0, false, "primary_upstream_not_affected"
 		}
-		change, found := changesByGroup[primaryGroupName]
+		change, found := changesByGroup[groupIdentity(primaryGroupID, primaryGroupName)]
 		if !found {
 			return 0, 0, false, "primary_upstream_not_affected"
 		}
@@ -1368,12 +1610,12 @@ func computeReferenceMultipliers(
 		for _, t := range targets {
 			if t.SiteID == syncSiteID {
 				// 同步站点内的分组：优先从变化快照取值
-				if change, changed := changesByGroup[t.GroupName]; changed {
+				if change, changed := changesByGroup[targetIdentity(t)]; changed {
 					oldMultipliers = append(oldMultipliers, change.Old)
 					newMultipliers = append(newMultipliers, change.New)
 				} else {
 					// 同步站点但未变化的分组：old=new=当前值
-					m := findGroupMultiplier(newMetricsGroups, t.GroupName)
+					m := findGroupMultiplier(newMetricsGroups, t)
 					if m == nil {
 						return 0, 0, false, "missing_reference_multiplier"
 					}
@@ -1382,7 +1624,7 @@ func computeReferenceMultipliers(
 				}
 			} else {
 				// 其他站点的分组：从缓存读取（不受本次同步影响）
-				m := lookupMultiplier(t.SiteID, t.GroupName)
+				m := lookupMultiplier(t)
 				if m == nil {
 					return 0, 0, false, "missing_reference_multiplier"
 				}
@@ -1403,24 +1645,24 @@ func computeReferenceMultipliers(
 }
 
 // buildLookupMultiplier 构建从缓存查询其他站点分组倍率的回调函数。
-func (s *Service) buildLookupMultiplier(ctx context.Context) func(siteID, groupName string) *float64 {
-	return func(siteID, groupName string) *float64 {
-		site, err := s.upstreamLookup.GetSite(ctx, siteID)
+func (s *Service) buildLookupMultiplier(ctx context.Context) multiplierLookup {
+	return func(target UpstreamGroupRef) *float64 {
+		site, err := s.upstreamLookup.GetSite(ctx, target.SiteID)
 		if err != nil || site == nil {
 			return nil
 		}
-		return findGroupMultiplier(site.Metrics.Groups, groupName)
+		return findGroupMultiplier(site.Metrics.Groups, target)
 	}
 }
 
 // buildWorkspaceLookupMultiplier 只读取当前用户和当前 workspace 的上游缓存，避免跨工作区引用倍率。
-func (s *Service) buildWorkspaceLookupMultiplier(ctx context.Context, userID string, adminAccountID string) func(siteID, groupName string) *float64 {
-	return func(siteID, groupName string) *float64 {
-		site, err := s.upstreamLookup.GetSite(ctx, siteID)
+func (s *Service) buildWorkspaceLookupMultiplier(ctx context.Context, userID string, adminAccountID string) multiplierLookup {
+	return func(target UpstreamGroupRef) *float64 {
+		site, err := s.upstreamLookup.GetSite(ctx, target.SiteID)
 		if err != nil || site == nil || site.UserID != userID || site.AdminAccountID != adminAccountID || site.Status != upstream.StatusConnected || site.LastSyncedAt == nil {
 			return nil
 		}
-		return findGroupMultiplier(site.Metrics.Groups, groupName)
+		return findGroupMultiplier(site.Metrics.Groups, target)
 	}
 }
 
@@ -1434,7 +1676,7 @@ func (s *Service) pruneAuthoritativeMissingTargets(ctx context.Context, userID s
 			cleaned = append(cleaned, target)
 			continue
 		}
-		if hasUpstreamGroup(site.Metrics.Groups, target.GroupName) {
+		if findUpstreamGroup(site.Metrics.Groups, target) != nil {
 			cleaned = append(cleaned, target)
 		}
 	}
@@ -1442,12 +1684,25 @@ func (s *Service) pruneAuthoritativeMissingTargets(ctx context.Context, userID s
 }
 
 func hasUpstreamGroup(groups []upstream.GroupInfo, groupName string) bool {
-	for _, group := range groups {
-		if group.Name == groupName {
-			return true
+	return findUpstreamGroup(groups, UpstreamGroupRef{GroupName: groupName}) != nil
+}
+
+func findUpstreamGroup(groups []upstream.GroupInfo, target UpstreamGroupRef) *upstream.GroupInfo {
+	if groupID := strings.TrimSpace(target.GroupID); groupID != "" {
+		for i := range groups {
+			if strings.TrimSpace(groups[i].ID) == groupID {
+				return &groups[i]
+			}
+		}
+		return nil
+	}
+	groupName := strings.TrimSpace(target.GroupName)
+	for i := range groups {
+		if strings.TrimSpace(groups[i].Name) == groupName {
+			return &groups[i]
 		}
 	}
-	return false
+	return nil
 }
 
 func normalizedOwnGroupKey(ownGroup string) string {
@@ -1492,14 +1747,12 @@ func pointerFloat64(value float64) *float64 {
 	return &value
 }
 
-// findGroupMultiplier 在分组列表中按 Name 查找倍率。
-func findGroupMultiplier(groups []upstream.GroupInfo, name string) *float64 {
-	for _, g := range groups {
-		if g.Name == name && g.Multiplier != nil {
-			return g.Multiplier
-		}
+func findGroupMultiplier(groups []upstream.GroupInfo, target UpstreamGroupRef) *float64 {
+	group := findUpstreamGroup(groups, target)
+	if group == nil {
+		return nil
 	}
-	return nil
+	return group.Multiplier
 }
 
 // aggregateMultipliers 按聚合策略计算多个倍率的聚合值。
@@ -1556,16 +1809,22 @@ func calculateAutoPricingTarget(mapping GroupMapping, newReference float64) floa
 // 只处理本次同步站点 siteID 相关的 mappings，每个 mapping 最多计算和更新一次。
 // 使用 oldMetrics/newMetrics 构建变化快照，避免从缓存读取已被同步覆盖的旧值。
 func (s *Service) ApplyAutoPricingAfterSync(ctx context.Context, userID, adminAccountID, siteID, siteName string, oldMetrics, newMetrics upstream.Metrics) {
-	// 1. 构建本次同步站点的倍率变化快照（按 GroupName 索引）
-	changesByGroup := buildChangesByGroup(oldMetrics, newMetrics)
-	if len(changesByGroup) == 0 {
-		return
-	}
-
-	// 2. 读取用户的 admin 状态和 mappings
+	// 1. 读取用户的 admin 状态和 mappings
 	state, err := s.repository.Get(ctx, userID, adminAccountID)
 	if err != nil || state == nil || !state.Session.IsAuthenticated() {
 		log.Printf("[auto-pricing] 无法读取用户状态或未认证 user_id=%s err=%v", userID, err)
+		return
+	}
+	if s.refreshMappingTargetsAfterSync(ctx, userID, adminAccountID, siteID, newMetrics.Groups, state) {
+		if err := s.repository.Save(ctx, *state); err != nil {
+			log.Printf("[auto-pricing] persist refreshed mapping targets failed user_id=%s err=%v", userID, err)
+			return
+		}
+	}
+
+	// 2. 以稳定 ID 构建变化快照；即使名称变化也能识别为同一分组。
+	changesByGroup := buildChangesByGroup(oldMetrics, newMetrics)
+	if len(changesByGroup) == 0 {
 		return
 	}
 
@@ -1611,7 +1870,7 @@ func (s *Service) ApplyAutoPricingAfterSync(ctx context.Context, userID, adminAc
 		affected := false
 		for _, t := range mapping.UpstreamTargets {
 			if t.SiteID == siteID {
-				if _, changed := changesByGroup[t.GroupName]; changed {
+				if _, changed := changesByGroup[targetIdentity(t)]; changed {
 					affected = true
 					break
 				}
@@ -1626,7 +1885,7 @@ func (s *Service) ApplyAutoPricingAfterSync(ctx context.Context, userID, adminAc
 	}
 }
 
-// buildChangesByGroup 从同步前后的 Metrics 构建按 GroupName 索引的倍率变化快照。
+// buildChangesByGroup 从同步前后的 Metrics 构建按稳定 ID（旧数据回退名称）索引的倍率变化快照。
 // 只包含倍率确实发生变化的分组。
 func buildChangesByGroup(oldMetrics, newMetrics upstream.Metrics) map[string]groupMultiplierChange {
 	if len(oldMetrics.Groups) == 0 || len(newMetrics.Groups) == 0 {
@@ -1635,7 +1894,7 @@ func buildChangesByGroup(oldMetrics, newMetrics upstream.Metrics) map[string]gro
 	oldMap := make(map[string]float64, len(oldMetrics.Groups))
 	for _, g := range oldMetrics.Groups {
 		if g.Multiplier != nil {
-			oldMap[g.ID+"|"+g.Name] = *g.Multiplier
+			oldMap[groupIdentity(g.ID, g.Name)] = *g.Multiplier
 		}
 	}
 	result := make(map[string]groupMultiplierChange)
@@ -1643,12 +1902,12 @@ func buildChangesByGroup(oldMetrics, newMetrics upstream.Metrics) map[string]gro
 		if g.Multiplier == nil {
 			continue
 		}
-		key := g.ID + "|" + g.Name
+		key := groupIdentity(g.ID, g.Name)
 		oldVal, existed := oldMap[key]
 		if !existed || oldVal == *g.Multiplier {
 			continue
 		}
-		result[g.Name] = groupMultiplierChange{Old: oldVal, New: *g.Multiplier}
+		result[key] = groupMultiplierChange{Old: oldVal, New: *g.Multiplier}
 	}
 	return result
 }
@@ -1656,7 +1915,7 @@ func buildChangesByGroup(oldMetrics, newMetrics upstream.Metrics) map[string]gro
 // processAutoPricing 处理单个 mapping 的自动调价逻辑。
 // 使用 changesByGroup 快照和 newMetricsGroups 计算参考倍率，保证每个 mapping 只处理一次。
 // siteName 为触发同步的上游站点名称，用于调价成功通知的模板变量。
-func (s *Service) processAutoPricing(ctx context.Context, userID string, adminAccountID string, state *State, mapping GroupMapping, siteID, siteName string, changesByGroup map[string]groupMultiplierChange, newMetricsGroups []upstream.GroupInfo, adminGroupMap map[string]upstream.AdminGroupInfo, lookupFn func(string, string) *float64) (result autoPricingResult) {
+func (s *Service) processAutoPricing(ctx context.Context, userID string, adminAccountID string, state *State, mapping GroupMapping, siteID, siteName string, changesByGroup map[string]groupMultiplierChange, newMetricsGroups []upstream.GroupInfo, adminGroupMap map[string]upstream.AdminGroupInfo, lookupFn multiplierLookup) (result autoPricingResult) {
 	result = autoPricingResult{OwnGroup: mapping.OwnGroup}
 	defer func() {
 		if result.Status == "" {
@@ -1677,7 +1936,7 @@ func (s *Service) processAutoPricing(ctx context.Context, userID string, adminAc
 	oldRef, newRef, ok, reason := computeReferenceMultipliers(
 		mapping.AutoPricingSource,
 		mapping.UpstreamTargets,
-		mapping.PrimaryUpstreamSiteID, mapping.PrimaryUpstreamGroupName,
+		mapping.PrimaryUpstreamSiteID, mapping.PrimaryUpstreamGroupID, mapping.PrimaryUpstreamGroupName,
 		siteID,
 		changesByGroup,
 		newMetricsGroups,
@@ -1759,7 +2018,7 @@ func (s *Service) processAutoPricing(ctx context.Context, userID string, adminAc
 }
 
 // processManualAutoPricing 使用当前缓存倍率执行一次手动自动调价，并持久化本次运行状态。
-func (s *Service) processManualAutoPricing(ctx context.Context, userID string, adminAccountID string, state *State, mapping GroupMapping, adminGroupMap map[string]upstream.AdminGroupInfo, lookupFn func(string, string) *float64) (autoPricingResult, GroupMapping, error) {
+func (s *Service) processManualAutoPricing(ctx context.Context, userID string, adminAccountID string, state *State, mapping GroupMapping, adminGroupMap map[string]upstream.AdminGroupInfo, lookupFn multiplierLookup) (autoPricingResult, GroupMapping, error) {
 	result := autoPricingResult{OwnGroup: mapping.OwnGroup}
 	ref, ok, reason := computeCurrentReferenceMultiplier(mapping, lookupFn)
 	if !ok {
@@ -1812,13 +2071,15 @@ func (s *Service) processManualAutoPricing(ctx context.Context, userID string, a
 }
 
 // computeCurrentReferenceMultiplier 计算手动运行需要的当前参考倍率，不使用同步阈值或旧值快照。
-func computeCurrentReferenceMultiplier(mapping GroupMapping, lookupFn func(string, string) *float64) (float64, bool, string) {
+func computeCurrentReferenceMultiplier(mapping GroupMapping, lookupFn multiplierLookup) (float64, bool, string) {
 	switch mapping.AutoPricingSource {
 	case "primary_upstream":
 		if strings.TrimSpace(mapping.PrimaryUpstreamSiteID) == "" || strings.TrimSpace(mapping.PrimaryUpstreamGroupName) == "" {
 			return 0, false, "invalid_auto_pricing_config"
 		}
-		multiplier := lookupFn(mapping.PrimaryUpstreamSiteID, mapping.PrimaryUpstreamGroupName)
+		multiplier := lookupFn(UpstreamGroupRef{
+			SiteID: mapping.PrimaryUpstreamSiteID, GroupID: mapping.PrimaryUpstreamGroupID, GroupName: mapping.PrimaryUpstreamGroupName,
+		})
 		if multiplier == nil {
 			return 0, false, "missing_reference_multiplier"
 		}
@@ -1826,7 +2087,7 @@ func computeCurrentReferenceMultiplier(mapping GroupMapping, lookupFn func(strin
 	case "lowest_upstream", "highest_upstream", "average_upstream":
 		multipliers := make([]float64, 0, len(mapping.UpstreamTargets))
 		for _, target := range mapping.UpstreamTargets {
-			multiplier := lookupFn(target.SiteID, target.GroupName)
+			multiplier := lookupFn(target)
 			if multiplier == nil {
 				return 0, false, "missing_reference_multiplier"
 			}
