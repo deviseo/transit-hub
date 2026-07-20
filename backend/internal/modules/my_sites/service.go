@@ -37,6 +37,21 @@ type AtomicRealDisconnectRepository interface {
 	RemoveUpstreamMappingAndDeleteConnection(ctx context.Context, userID string, adminAccountID string, connectionID string, siteID string, groupName string) error
 }
 
+// AtomicRealConnectionRepository is implemented by the PostgreSQL repository.
+// Keeping it optional preserves lightweight test repositories and rolling code
+// paths while production gets one local transaction for connection + pricing.
+type AtomicRealConnectionRepository interface {
+	SaveRealConnectionWithPricingMapping(ctx context.Context, conn RealConnection) error
+}
+
+type IdempotentRealConnectionRepository interface {
+	GetRealConnectionByOperationID(ctx context.Context, userID string, adminAccountID string, operationID string) (*RealConnection, error)
+}
+
+type ScopedRealDisconnectRepository interface {
+	DeleteRealConnectionWithPricingMapping(ctx context.Context, conn RealConnection, removePricingMapping bool) error
+}
+
 // UpstreamSiteLookup 根据 ID 获取上游站点信息（含 Session），供真实对接流程使用。
 type UpstreamSiteLookup interface {
 	GetSite(ctx context.Context, siteID string) (*upstream.Site, error)
@@ -84,8 +99,9 @@ func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
 	s.accounts = accounts
 }
 
-// MappingOptions 获取分组映射选项：自有分组（通过 admin 接口拉取全量）与上游分组（从缓存读取）。
-// 每次调用会刷新自有分组列表并清理引用了已不存在分组的映射关系。
+// MappingOptions 获取分组映射选项：自有分组通过 admin 接口拉取全量，上游分组从缓存读取。
+// 该查询保持只读：已失效的自有分组和上游目标通过附加字段返回，由用户确认后再修改，
+// 避免远端接口偶发返回不完整数据时，仅仅打开页面就永久删除映射和自动调价配置。
 func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOptionsResponse, error) {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
@@ -99,7 +115,8 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 	if err != nil {
 		return MappingOptionsResponse{}, err
 	}
-	// 用最新拉取的分组列表更新缓存，并将历史真实对接记录补偿回 mappings。
+	// 构造最新自有分组视图。State.OwnGroups 是旧版本留下的缓存字段，本查询不再写回它；
+	// 自动调价执行时始终以远端 FetchAdminAllGroups 返回的数据为准。
 	freshOwnGroups := make([]GroupOption, 0, len(adminGroups))
 	idToName := make(map[string]string, len(adminGroups))
 	for _, g := range adminGroups {
@@ -113,38 +130,69 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 		}
 		freshOwnGroups = append(freshOwnGroups, GroupOption{Name: name, Multiplier: multiplier})
 	}
-	// 自有分组变化时，自动清理引用了已不存在分组的映射关系
 	freshGroupSet := make(map[string]struct{}, len(freshOwnGroups))
 	for _, g := range freshOwnGroups {
-		freshGroupSet[strings.TrimSpace(g.Name)] = struct{}{}
+		if name := strings.TrimSpace(g.Name); name != "" {
+			freshGroupSet[name] = struct{}{}
+		}
 	}
-	prunableTargets := s.authoritativeMissingTargets(ctx, userID, adminAccountID, state.Mappings)
-	state, err = s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
-		var backfillConnections []RealConnection
-		if s.connRepository != nil {
-			backfillConnections, err = s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
-			if err != nil {
-				return err
-			}
+
+	viewState := cloneStateForMutation(state)
+	// Historical rows may contain a missing/null upstreamTargets field. Keep the
+	// stored JSON untouched on this read path, but always expose an array so old
+	// data cannot crash array-based clients.
+	for index := range viewState.Mappings {
+		if viewState.Mappings[index].UpstreamTargets == nil {
+			viewState.Mappings[index].UpstreamTargets = []UpstreamGroupRef{}
 		}
-		applyMappingsFromRealConnections(latest, idToName, backfillConnections)
-		cleanedMappings := make([]GroupMapping, 0, len(latest.Mappings))
-		for _, m := range latest.Mappings {
-			if _, exists := freshGroupSet[strings.TrimSpace(m.OwnGroup)]; exists {
-				m.UpstreamTargets = pruneTargetsByKey(m.UpstreamTargets, prunableTargets)
-				cleanedMappings = append(cleanedMappings, m)
-			}
+	}
+	viewState.OwnGroups = freshOwnGroups
+	if s.connRepository != nil {
+		backfillConnections, listErr := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+		if listErr != nil {
+			return MappingOptionsResponse{}, listErr
 		}
-		latest.OwnGroups = freshOwnGroups
-		latest.Mappings = cleanedMappings
-		return nil
+		// 真实对接记录只补偿到本次响应，避免 GET 请求产生持久化副作用。
+		applyMappingsFromRealConnections(viewState, idToName, backfillConnections)
+	}
+
+	staleOwnGroups := make([]string, 0)
+	staleOwnSeen := make(map[string]struct{})
+	for _, mapping := range viewState.Mappings {
+		ownGroup := strings.TrimSpace(mapping.OwnGroup)
+		if _, exists := freshGroupSet[ownGroup]; exists || ownGroup == "" {
+			continue
+		}
+		if _, exists := staleOwnSeen[ownGroup]; exists {
+			continue
+		}
+		staleOwnSeen[ownGroup] = struct{}{}
+		staleOwnGroups = append(staleOwnGroups, ownGroup)
+	}
+	sort.Strings(staleOwnGroups)
+
+	missingTargetKeys := s.authoritativeMissingTargets(ctx, userID, adminAccountID, viewState.Mappings)
+	staleTargets := make([]UpstreamGroupRef, 0, len(missingTargetKeys))
+	staleTargetSeen := make(map[string]struct{}, len(missingTargetKeys))
+	for _, mapping := range viewState.Mappings {
+		for _, target := range mapping.UpstreamTargets {
+			key := targetKey(target.SiteID, target.GroupName)
+			if _, missing := missingTargetKeys[key]; !missing {
+				continue
+			}
+			if _, exists := staleTargetSeen[key]; exists {
+				continue
+			}
+			staleTargetSeen[key] = struct{}{}
+			staleTargets = append(staleTargets, target)
+		}
+	}
+	sort.Slice(staleTargets, func(i, j int) bool {
+		if staleTargets[i].SiteID == staleTargets[j].SiteID {
+			return staleTargets[i].GroupName < staleTargets[j].GroupName
+		}
+		return staleTargets[i].SiteID < staleTargets[j].SiteID
 	})
-	if err != nil {
-		return MappingOptionsResponse{}, err
-	}
-	if state == nil {
-		return MappingOptionsResponse{}, requestError(ErrorAuthRequired)
-	}
 
 	groups := make([]MappingOwnGroupOption, 0, len(adminGroups))
 	for _, g := range adminGroups {
@@ -156,7 +204,7 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 			}
 			groups = append(groups, MappingOwnGroupOption{
 				ID:               g.ID,
-				SiteName:         state.Email,
+				SiteName:         viewState.Email,
 				GroupName:        name,
 				Multiplier:       multiplier,
 				Platform:         g.Platform,
@@ -172,7 +220,13 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 		}
 		return groups[i].SiteName < groups[j].SiteName
 	})
-	return MappingOptionsResponse{OwnGroups: groups, Mappings: state.Mappings}, nil
+	return MappingOptionsResponse{
+		OwnGroups:              groups,
+		Mappings:               viewState.Mappings,
+		StaleOwnGroups:         staleOwnGroups,
+		StaleTargets:           staleTargets,
+		ConnectionCapabilities: connectionCapabilities(viewState.Session.Platform),
+	}, nil
 }
 
 // SaveMappings 保存用户的分组映射关系，包含自动调价配置。
@@ -192,93 +246,14 @@ func (s *Service) SaveMappings(ctx context.Context, userID string, mappings []Ma
 	}
 	next := make([]GroupMapping, 0, len(mappings))
 	for _, mapping := range mappings {
-		ownGroup := strings.TrimSpace(mapping.OwnGroup)
-		if ownGroup == "" {
+		groupMapping, include, normalizeErr := normalizeMappingRequest(mapping)
+		if normalizeErr != nil {
+			return StatusResponse{}, normalizeErr
+		}
+		if !include {
 			continue
 		}
-		targets := make([]UpstreamGroupRef, 0, len(mapping.UpstreamTargets))
-		for _, target := range mapping.UpstreamTargets {
-			if strings.TrimSpace(target.SiteID) == "" || strings.TrimSpace(target.GroupName) == "" {
-				continue
-			}
-			targets = append(targets, UpstreamGroupRef{SiteID: strings.TrimSpace(target.SiteID), GroupName: strings.TrimSpace(target.GroupName)})
-		}
-
-		// 归一化自动调价配置默认值（指针 nil 表示未传，此时用默认值；显式传 0 保留 0）
-		source := strings.TrimSpace(mapping.AutoPricingSource)
-		if source == "" {
-			source = "primary_upstream"
-		}
-		strategy := strings.TrimSpace(mapping.AutoPricingStrategy)
-		if strategy == "" {
-			strategy = "percentage"
-		}
-		fixedIncrease := floatOrDefault(mapping.FixedIncrease, 0.1)
-		percentageIncrease := floatOrDefault(mapping.PercentageIncrease, 10)
-		thresholdPercent := floatOrDefault(mapping.AdjustThresholdPercent, 10)
-
-		// 校验：数值字段不能为负
-		if fixedIncrease < 0 || percentageIncrease < 0 || thresholdPercent < 0 {
-			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-		}
-		if mapping.MinMultiplier != nil && *mapping.MinMultiplier < 0 {
-			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-		}
-		if mapping.MaxMultiplier != nil && *mapping.MaxMultiplier < 0 {
-			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-		}
-
-		// 校验：开启自动调价且来源为 primary_upstream 时，主上游必须在 targets 中
-		if mapping.EnableAutoPricing && source == "primary_upstream" {
-			primarySiteID := strings.TrimSpace(mapping.PrimaryUpstreamSiteID)
-			primaryGroupName := strings.TrimSpace(mapping.PrimaryUpstreamGroupName)
-			if primarySiteID == "" || primaryGroupName == "" {
-				return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-			}
-			found := false
-			for _, t := range targets {
-				if t.SiteID == primarySiteID && t.GroupName == primaryGroupName {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-			}
-		}
-
-		// 校验：min <= max
-		if mapping.MinMultiplier != nil && mapping.MaxMultiplier != nil && *mapping.MinMultiplier > *mapping.MaxMultiplier {
-			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-		}
-
-		// 归一化自动调价通知配置
-		notifyBotIDs := filterEmptyStrings(mapping.AutoPricingNotifyBotIDs)
-		notifyTemplate := strings.TrimSpace(mapping.AutoPricingNotifyTemplate)
-
-		// 校验：开启通知时必须至少选择一个机器人
-		if mapping.EnableAutoPricingNotify && len(notifyBotIDs) == 0 {
-			return StatusResponse{}, requestError(ErrorInvalidAutoPricingConf)
-		}
-
-		gm := GroupMapping{
-			OwnGroup:                  ownGroup,
-			UpstreamTargets:           targets,
-			EnableAutoPricing:         mapping.EnableAutoPricing,
-			AutoPricingSource:         source,
-			PrimaryUpstreamSiteID:     strings.TrimSpace(mapping.PrimaryUpstreamSiteID),
-			PrimaryUpstreamGroupName:  strings.TrimSpace(mapping.PrimaryUpstreamGroupName),
-			AutoPricingStrategy:       strategy,
-			FixedIncrease:             fixedIncrease,
-			PercentageIncrease:        percentageIncrease,
-			AdjustThresholdPercent:    thresholdPercent,
-			MinMultiplier:             mapping.MinMultiplier,
-			MaxMultiplier:             mapping.MaxMultiplier,
-			EnableAutoPricingNotify:   mapping.EnableAutoPricingNotify,
-			AutoPricingNotifyBotIDs:   notifyBotIDs,
-			AutoPricingNotifyTemplate: notifyTemplate,
-		}
-		next = append(next, gm)
+		next = append(next, groupMapping)
 	}
 	state, err = s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
 		merged := make([]GroupMapping, len(next))
@@ -296,6 +271,155 @@ func (s *Service) SaveMappings(ctx context.Context, userID string, mappings []Ma
 		return StatusResponse{}, requestError(ErrorAuthRequired)
 	}
 	return StatusResponse{Authenticated: true, BaseURL: state.BaseURL, Email: state.Email, Mappings: state.Mappings}, nil
+}
+
+// SaveMapping 原子更新单个自有分组，保留同一 workspace 中其他分组的最新映射。
+// 该方法与 SaveMappings 共用归一化和校验规则，避免新旧客户端产生不同的数据语义。
+func (s *Service) SaveMapping(ctx context.Context, userID string, mapping MappingRequest) (StatusResponse, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if _, err = s.authenticatedState(ctx, userID, adminAccountID); err != nil {
+		return StatusResponse{}, err
+	}
+	next, include, err := normalizeMappingRequest(mapping)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if !include {
+		return StatusResponse{}, requestError(ErrorRequest)
+	}
+
+	state, err := s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
+		index := findMappingIndexByOwnGroup(latest.Mappings, next.OwnGroup)
+		if index >= 0 {
+			if latest.Mappings[index].LastAutoPricingRun != nil {
+				next.LastAutoPricingRun = latest.Mappings[index].LastAutoPricingRun
+			}
+			latest.Mappings[index] = cloneGroupMappingValue(next)
+			return nil
+		}
+		latest.Mappings = append(latest.Mappings, cloneGroupMappingValue(next))
+		return nil
+	})
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if state == nil {
+		return StatusResponse{}, requestError(ErrorAuthRequired)
+	}
+	return StatusResponse{Authenticated: true, BaseURL: state.BaseURL, Email: state.Email, Mappings: state.Mappings}, nil
+}
+
+// RemoveMapping removes one mapping by normalized own-group name while retaining
+// every other mapping and its latest server-owned auto-pricing run state.
+func (s *Service) RemoveMapping(ctx context.Context, userID string, ownGroup string) (StatusResponse, error) {
+	ownGroup = strings.TrimSpace(ownGroup)
+	if ownGroup == "" {
+		return StatusResponse{}, requestError(ErrorRequest)
+	}
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if _, err = s.authenticatedState(ctx, userID, adminAccountID); err != nil {
+		return StatusResponse{}, err
+	}
+	state, err := s.mutateState(ctx, userID, adminAccountID, func(latest *State) error {
+		index := findMappingIndexByOwnGroup(latest.Mappings, ownGroup)
+		if index < 0 {
+			return requestError(ErrorRequest)
+		}
+		latest.Mappings = append(latest.Mappings[:index], latest.Mappings[index+1:]...)
+		return nil
+	})
+	if err != nil {
+		return StatusResponse{}, err
+	}
+	if state == nil {
+		return StatusResponse{}, requestError(ErrorAuthRequired)
+	}
+	return StatusResponse{Authenticated: true, BaseURL: state.BaseURL, Email: state.Email, Mappings: state.Mappings}, nil
+}
+
+// normalizeMappingRequest applies the stable defaults and validation shared by
+// full-array PUT and single-group PATCH. The boolean is false for an empty group name.
+func normalizeMappingRequest(mapping MappingRequest) (GroupMapping, bool, error) {
+	ownGroup := strings.TrimSpace(mapping.OwnGroup)
+	if ownGroup == "" {
+		return GroupMapping{}, false, nil
+	}
+	targets := make([]UpstreamGroupRef, 0, len(mapping.UpstreamTargets))
+	seenTargets := make(map[string]struct{}, len(mapping.UpstreamTargets))
+	for _, target := range mapping.UpstreamTargets {
+		siteID := strings.TrimSpace(target.SiteID)
+		groupName := strings.TrimSpace(target.GroupName)
+		if siteID == "" || groupName == "" {
+			continue
+		}
+		key := targetKey(siteID, groupName)
+		if _, exists := seenTargets[key]; exists {
+			continue
+		}
+		seenTargets[key] = struct{}{}
+		targets = append(targets, UpstreamGroupRef{SiteID: siteID, GroupName: groupName})
+	}
+
+	source := strings.TrimSpace(mapping.AutoPricingSource)
+	if source == "" {
+		source = "primary_upstream"
+	}
+	strategy := strings.TrimSpace(mapping.AutoPricingStrategy)
+	if strategy == "" {
+		strategy = "percentage"
+	}
+	fixedIncrease := floatOrDefault(mapping.FixedIncrease, 0.1)
+	percentageIncrease := floatOrDefault(mapping.PercentageIncrease, 10)
+	thresholdPercent := floatOrDefault(mapping.AdjustThresholdPercent, 10)
+	if fixedIncrease < 0 || percentageIncrease < 0 || thresholdPercent < 0 ||
+		(mapping.MinMultiplier != nil && *mapping.MinMultiplier < 0) ||
+		(mapping.MaxMultiplier != nil && *mapping.MaxMultiplier < 0) ||
+		(mapping.MinMultiplier != nil && mapping.MaxMultiplier != nil && *mapping.MinMultiplier > *mapping.MaxMultiplier) {
+		return GroupMapping{}, false, requestError(ErrorInvalidAutoPricingConf)
+	}
+
+	primarySiteID := strings.TrimSpace(mapping.PrimaryUpstreamSiteID)
+	primaryGroupName := strings.TrimSpace(mapping.PrimaryUpstreamGroupName)
+	if mapping.EnableAutoPricing && source == "primary_upstream" {
+		found := false
+		for _, target := range targets {
+			if target.SiteID == primarySiteID && target.GroupName == primaryGroupName {
+				found = true
+				break
+			}
+		}
+		if primarySiteID == "" || primaryGroupName == "" || !found {
+			return GroupMapping{}, false, requestError(ErrorInvalidAutoPricingConf)
+		}
+	}
+
+	notifyBotIDs := filterEmptyStrings(mapping.AutoPricingNotifyBotIDs)
+	if mapping.EnableAutoPricingNotify && len(notifyBotIDs) == 0 {
+		return GroupMapping{}, false, requestError(ErrorInvalidAutoPricingConf)
+	}
+	return GroupMapping{
+		OwnGroup:                  ownGroup,
+		UpstreamTargets:           targets,
+		EnableAutoPricing:         mapping.EnableAutoPricing,
+		AutoPricingSource:         source,
+		PrimaryUpstreamSiteID:     primarySiteID,
+		PrimaryUpstreamGroupName:  primaryGroupName,
+		AutoPricingStrategy:       strategy,
+		FixedIncrease:             fixedIncrease,
+		PercentageIncrease:        percentageIncrease,
+		AdjustThresholdPercent:    thresholdPercent,
+		MinMultiplier:             mapping.MinMultiplier,
+		MaxMultiplier:             mapping.MaxMultiplier,
+		EnableAutoPricingNotify:   mapping.EnableAutoPricingNotify,
+		AutoPricingNotifyBotIDs:   notifyBotIDs,
+		AutoPricingNotifyTemplate: strings.TrimSpace(mapping.AutoPricingNotifyTemplate),
+	}, true, nil
 }
 
 // RunAutoPricingNow 手动触发单个自有分组的自动调价。
@@ -341,171 +465,7 @@ func (s *Service) RunAutoPricingNow(ctx context.Context, userID string, req Auto
 
 // RealConnect 执行真实对接流程：按平台分支创建上游 Key/Token 和 admin 端转发目标（账号/Channel），最后持久化绑定记录。
 func (s *Service) RealConnect(ctx context.Context, userID string, req RealConnectRequest) (RealConnectResponse, error) {
-	if strings.TrimSpace(req.UpstreamSiteID) == "" || strings.TrimSpace(req.UpstreamGroupID) == "" ||
-		len(req.OwnGroupIDs) == 0 {
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
-	if err != nil {
-		return RealConnectResponse{}, err
-	}
-	state, err := s.authenticatedState(ctx, userID, adminAccountID)
-	if err != nil {
-		return RealConnectResponse{}, err
-	}
-
-	upstreamSite, err := s.upstreamLookup.GetSite(ctx, req.UpstreamSiteID)
-	if err != nil || upstreamSite == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != adminAccountID || upstreamSite.Session == nil {
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	groupType, multiplierDisplay := resolveGroupInfo(upstreamSite.Metrics.Groups, req.UpstreamGroupID)
-	if groupType == "" && strings.TrimSpace(req.GroupType) != "" {
-		groupType = req.GroupType
-	}
-	// new-api 的分组是纯名称，不强制要求分组平台类型；sub2api 仍然必填。
-	if groupType == "" && upstreamSite.Platform != upstream.PlatformNewAPI {
-		log.Printf("[real-connect] 无法识别分组平台类型 site=%s group_id=%s", upstreamSite.Name, req.UpstreamGroupID)
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	groupName := strings.TrimSpace(req.UpstreamGroupName)
-	if groupName == "" {
-		groupName = req.UpstreamGroupID
-	}
-
-	var conn RealConnection
-	switch upstreamSite.Platform {
-	case upstream.PlatformNewAPI:
-		conn, err = s.realConnectNewAPI(ctx, userID, req, state, upstreamSite, groupType, groupName)
-	default:
-		conn, err = s.realConnectSub2API(ctx, userID, req, state, upstreamSite, groupType, groupName, multiplierDisplay)
-	}
-	if err != nil {
-		return RealConnectResponse{}, err
-	}
-
-	if s.connRepository != nil {
-		if err := s.connRepository.SaveRealConnection(ctx, conn); err != nil {
-			log.Printf("[real-connect] 保存绑定记录失败 conn_id=%s err=%v", conn.ID, err)
-			return RealConnectResponse{}, err
-		}
-	}
-
-	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
-
-	log.Printf("[real-connect] 真实对接完成 conn_id=%s site=%s group=%s type=%s platform=%s", conn.ID, upstreamSite.Name, groupName, groupType, upstreamSite.Platform)
-	return RealConnectResponse{Connection: conn}, nil
-}
-
-// realConnectSub2API 原有的 Sub2API 对接流程：创建 API Key + 创建转发账号。
-func (s *Service) realConnectSub2API(_ context.Context, userID string, req RealConnectRequest, state *State, upstreamSite *upstream.Site, groupType, groupName, multiplierDisplay string) (RealConnection, error) {
-	groupIDInt, err := strconv.Atoi(req.UpstreamGroupID)
-	if err != nil {
-		return RealConnection{}, requestError(ErrorRequest)
-	}
-
-	keyName := fmt.Sprintf("%s-%s-%s", randomKeyPrefix(), upstreamSite.Name, groupName)
-	typePrefix := groupTypePrefix(groupType)
-	rateLabel := multiplierDisplay
-	if rateLabel == "" {
-		rateLabel = groupName
-	}
-	accountName := fmt.Sprintf("%s-【%s】-%s", typePrefix, upstreamSite.Name, rateLabel)
-
-	log.Printf("[real-connect] sub2api 开始创建上游 key site=%s group=%s type=%s", upstreamSite.Name, groupName, groupType)
-	upstreamSession := *upstreamSite.Session
-	keyID, key, err := s.platformService.CreateSub2APIKey(upstreamSession, keyName, groupIDInt)
-	if err != nil {
-		log.Printf("[real-connect] 创建上游 key 失败 site=%s err=%v", upstreamSite.Name, err)
-		return RealConnection{}, err
-	}
-	log.Printf("[real-connect] 上游 key 创建成功 key_id=%s", keyID)
-
-	ownGroupIDInts, err := stringsToInts(req.OwnGroupIDs)
-	if err != nil {
-		log.Printf("[real-connect] 自有分组 ID 转换失败 err=%v", err)
-		return RealConnection{}, requestError(ErrorRequest)
-	}
-
-	payload := buildAccountPayload(groupType, upstreamSite.BaseURL, key, ownGroupIDInts, accountName)
-	accountID, err := s.platformService.CreateSub2APIAdminAccount(state.Session, payload)
-	if err != nil {
-		log.Printf("[real-connect] 创建 admin 账号失败 key_id=%s err=%v", keyID, err)
-		return RealConnection{}, err
-	}
-	log.Printf("[real-connect] admin 账号创建成功 account_id=%s name=%s", accountID, accountName)
-
-	connID, err := randomConnID()
-	if err != nil {
-		return RealConnection{}, err
-	}
-	return RealConnection{
-		ID:                      connID,
-		UserID:                  userID,
-		WorkspaceAdminAccountID: state.AdminAccountID,
-		UpstreamSiteID:          req.UpstreamSiteID,
-		UpstreamGroupID:         req.UpstreamGroupID,
-		UpstreamGroupName:       groupName,
-		UpstreamKeyID:           keyID,
-		UpstreamKey:             key,
-		AdminAccountID:          accountID,
-		AdminAccountName:        accountName,
-		OwnGroupIDs:             req.OwnGroupIDs,
-		GroupType:               groupType,
-		CreatedAt:               time.Now().Format(time.RFC3339),
-	}, nil
-}
-
-// realConnectNewAPI new-api 对接流程：创建 Token → 回查 Token ID → 获取完整 Key → 创建 Channel → 回查 Channel ID。
-func (s *Service) realConnectNewAPI(_ context.Context, userID string, req RealConnectRequest, state *State, upstreamSite *upstream.Site, groupType, groupName string) (RealConnection, error) {
-	log.Printf("[real-connect] new-api 开始对接 site=%s group=%s type=%s", upstreamSite.Name, groupName, groupType)
-	upstreamSession := *upstreamSite.Session
-
-	// 步骤 1：在上游站点创建 Token
-	tokenName := fmt.Sprintf("%s-%s-%s", randomKeyPrefix(), upstreamSite.Name, groupName)
-	tokenID, tokenKey, err := s.platformService.CreateNewAPIToken(upstreamSession, tokenName, req.UpstreamGroupID)
-	if err != nil {
-		log.Printf("[real-connect] new-api 创建 token 失败 site=%s err=%v", upstreamSite.Name, err)
-		return RealConnection{}, err
-	}
-	log.Printf("[real-connect] new-api token 创建成功 token_id=%s key=%s...", tokenID, safeKeyPreview(tokenKey))
-
-	// 步骤 2：在 admin 端创建 Channel
-	// 优先使用前端传入的 channelType（new-api 渠道类型 ID），否则按 groupType 字符串映射
-	channelType := req.ChannelType
-	if channelType <= 0 {
-		channelType = groupTypeToNewAPIChannelType(groupType)
-	}
-	channelTypeName := newAPIChannelTypeName(channelType)
-	channelName := fmt.Sprintf("%s-【%s】-%s", channelTypeName, upstreamSite.Name, groupName)
-	channelID, err := s.platformService.CreateNewAPIChannel(state.Session, channelName, upstreamSite.BaseURL, tokenKey, channelType, req.OwnGroupIDs)
-	if err != nil {
-		log.Printf("[real-connect] new-api 创建 channel 失败 token_id=%s err=%v", tokenID, err)
-		return RealConnection{}, err
-	}
-	log.Printf("[real-connect] new-api channel 创建成功 channel_id=%s name=%s", channelID, channelName)
-
-	connID, err := randomConnID()
-	if err != nil {
-		return RealConnection{}, err
-	}
-	return RealConnection{
-		ID:                      connID,
-		UserID:                  userID,
-		WorkspaceAdminAccountID: state.AdminAccountID,
-		UpstreamSiteID:          req.UpstreamSiteID,
-		UpstreamGroupID:         req.UpstreamGroupID,
-		UpstreamGroupName:       groupName,
-		UpstreamKeyID:           tokenID,
-		UpstreamKey:             tokenKey,
-		AdminAccountID:          channelID,
-		AdminAccountName:        channelName,
-		OwnGroupIDs:             req.OwnGroupIDs,
-		GroupType:               groupType,
-		CreatedAt:               time.Now().Format(time.RFC3339),
-	}, nil
+	return s.realConnectManaged(ctx, userID, req)
 }
 
 // groupTypeToNewAPIChannelType 将分组平台类型映射为 new-api channel type 数字（回退用）。
@@ -525,35 +485,51 @@ func groupTypeToNewAPIChannelType(groupType string) int {
 }
 
 // newAPIChannelTypeName 返回 new-api channel type ID 对应的短名称，用于 channel 命名前缀。
+var newAPIChannelTypeNames = map[int]string{
+	1: "OpenAI", 2: "Midjourney", 3: "Azure", 4: "Ollama",
+	5: "MJ+", 6: "OpenAIMax", 7: "OhMyGPT", 8: "Custom",
+	9: "AILS", 10: "AIProxy", 11: "PaLM", 12: "API2GPT",
+	13: "AIGC2D", 14: "Anthropic", 15: "Baidu", 16: "Zhipu",
+	17: "Ali", 18: "Xunfei", 19: "360", 20: "OpenRouter",
+	21: "AIProxyLib", 22: "FastGPT", 23: "Tencent", 24: "Gemini",
+	25: "Moonshot", 26: "ZhipuV4", 27: "Perplexity", 31: "LingYi",
+	33: "AWS", 34: "Cohere", 35: "MiniMax", 36: "SunoAPI",
+	37: "Dify", 38: "Jina", 39: "Cloudflare", 40: "SiliconFlow",
+	41: "VertexAI", 42: "Mistral", 43: "DeepSeek", 44: "MokaAI",
+	45: "VolcEngine", 46: "BaiduV2", 47: "Xinference", 48: "xAI",
+	49: "Coze", 50: "Kling", 51: "Jimeng", 52: "Vidu",
+	53: "Submodel", 54: "DoubaoVideo", 55: "Sora", 56: "Replicate",
+	57: "Codex",
+}
+
 func newAPIChannelTypeName(channelType int) string {
-	names := map[int]string{
-		1: "OpenAI", 2: "Midjourney", 3: "Azure", 4: "Ollama",
-		5: "MJ+", 6: "OpenAIMax", 7: "OhMyGPT", 8: "Custom",
-		9: "AILS", 10: "AIProxy", 11: "PaLM", 12: "API2GPT",
-		13: "AIGC2D", 14: "Anthropic", 15: "Baidu", 16: "Zhipu",
-		17: "Ali", 18: "Xunfei", 19: "360", 20: "OpenRouter",
-		21: "AIProxyLib", 22: "FastGPT", 23: "Tencent", 24: "Gemini",
-		25: "Moonshot", 26: "ZhipuV4", 27: "Perplexity", 31: "LingYi",
-		33: "AWS", 34: "Cohere", 35: "MiniMax", 36: "SunoAPI",
-		37: "Dify", 38: "Jina", 39: "Cloudflare", 40: "SiliconFlow",
-		41: "VertexAI", 42: "Mistral", 43: "DeepSeek", 44: "MokaAI",
-		45: "VolcEngine", 46: "BaiduV2", 47: "Xinference", 48: "xAI",
-		49: "Coze", 50: "Kling", 51: "Jimeng", 52: "Vidu",
-		53: "Submodel", 54: "DoubaoVideo", 55: "Sora", 56: "Replicate",
-		57: "Codex",
-	}
-	if name, ok := names[channelType]; ok {
+	if name, ok := newAPIChannelTypeNames[channelType]; ok {
 		return name
 	}
 	return "OpenAI"
 }
 
-// safeKeyPreview 返回 key 的安全预览（前8个字符）。
-func safeKeyPreview(key string) string {
-	if len(key) > 8 {
-		return key[:8]
+func connectionCapabilities(platform upstream.Platform) *ConnectionCapabilities {
+	if platform != upstream.PlatformNewAPI {
+		return &ConnectionCapabilities{Mode: "account", RequiresGroupType: true}
 	}
-	return key
+	ids := make([]int, 0, len(newAPIChannelTypeNames))
+	for id := range newAPIChannelTypeNames {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	options := make([]ChannelTypeOption, 0, len(ids))
+	for _, id := range ids {
+		options = append(options, ChannelTypeOption{ID: id, Name: newAPIChannelTypeNames[id]})
+	}
+	return &ConnectionCapabilities{
+		Mode:                "channel",
+		RequiresChannelType: true,
+		ChannelTypes:        options,
+		SuggestedChannelTypeByGroup: map[string]int{
+			"openai": 1, "anthropic": 14, "gemini": 24, "deepseek": 43,
+		},
+	}
 }
 
 // ListUpstreamKeys 获取指定上游站点的 API Key 列表。
@@ -564,8 +540,12 @@ func (s *Service) ListUpstreamKeys(ctx context.Context, userID string, siteID st
 	if strings.TrimSpace(siteID) == "" {
 		return nil, requestError(ErrorRequest)
 	}
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	upstreamSite, err := s.upstreamLookup.GetSite(ctx, siteID)
-	if err != nil || upstreamSite == nil || upstreamSite.Session == nil {
+	if err != nil || upstreamSite == nil || upstreamSite.Session == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != adminAccountID {
 		return nil, requestError(ErrorRequest)
 	}
 	session := *upstreamSite.Session
@@ -586,76 +566,7 @@ func (s *Service) ListUpstreamKeys(ctx context.Context, userID string, siteID st
 // RealBind 手动绑定已有的上游 Key/Token，仅创建绑定记录。
 // new-api 场景下 token 列表返回的 key 是脱敏的，需要通过 /api/token/:id/key 获取完整 key。
 func (s *Service) RealBind(ctx context.Context, userID string, req RealBindRequest) (RealConnectResponse, error) {
-	if strings.TrimSpace(req.UpstreamSiteID) == "" || strings.TrimSpace(req.UpstreamGroupID) == "" ||
-		strings.TrimSpace(req.UpstreamKeyID) == "" || len(req.OwnGroupIDs) == 0 {
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
-	if err != nil {
-		return RealConnectResponse{}, err
-	}
-	upstreamSite, err := s.upstreamLookup.GetSite(ctx, req.UpstreamSiteID)
-	if err != nil || upstreamSite == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != adminAccountID {
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	groupType, _ := resolveGroupInfo(upstreamSite.Metrics.Groups, req.UpstreamGroupID)
-	if groupType == "" && strings.TrimSpace(req.GroupType) != "" {
-		groupType = strings.ToLower(strings.TrimSpace(req.GroupType))
-	}
-	isNewAPI := upstreamSite.Session != nil && upstreamSite.Session.Platform == upstream.PlatformNewAPI
-	if groupType == "" && !isNewAPI {
-		log.Printf("[real-bind] 无法识别分组平台类型 site=%s group_id=%s", upstreamSite.Name, req.UpstreamGroupID)
-		return RealConnectResponse{}, requestError(ErrorRequest)
-	}
-
-	groupName := strings.TrimSpace(req.UpstreamGroupName)
-	if groupName == "" {
-		groupName = req.UpstreamGroupID
-	}
-
-	// new-api 场景：token 列表中的 key 是脱敏的，需要获取完整 key
-	upstreamKey := strings.TrimSpace(req.UpstreamKey)
-	if upstreamSite.Session != nil && upstreamSite.Session.Platform == upstream.PlatformNewAPI {
-		fullKey, fErr := s.platformService.FetchNewAPITokenKey(*upstreamSite.Session, strings.TrimSpace(req.UpstreamKeyID))
-		if fErr != nil {
-			log.Printf("[real-bind] new-api 获取完整 token key 失败 token_id=%s err=%v", req.UpstreamKeyID, fErr)
-			return RealConnectResponse{}, fErr
-		}
-		upstreamKey = fullKey
-	}
-
-	connID, err := randomConnID()
-	if err != nil {
-		return RealConnectResponse{}, err
-	}
-	conn := RealConnection{
-		ID:                      connID,
-		UserID:                  userID,
-		WorkspaceAdminAccountID: adminAccountID,
-		UpstreamSiteID:          req.UpstreamSiteID,
-		UpstreamGroupID:         req.UpstreamGroupID,
-		UpstreamGroupName:       groupName,
-		UpstreamKeyID:           strings.TrimSpace(req.UpstreamKeyID),
-		UpstreamKey:             upstreamKey,
-		AdminAccountID:          "",
-		AdminAccountName:        "",
-		OwnGroupIDs:             req.OwnGroupIDs,
-		GroupType:               groupType,
-		CreatedAt:               time.Now().Format(time.RFC3339),
-	}
-	if s.connRepository != nil {
-		if err := s.connRepository.SaveRealConnection(ctx, conn); err != nil {
-			log.Printf("[real-bind] 保存绑定记录失败 conn_id=%s err=%v", connID, err)
-			return RealConnectResponse{}, err
-		}
-	}
-
-	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
-
-	log.Printf("[real-bind] 手动绑定完成 conn_id=%s site=%s group=%s type=%s", connID, upstreamSite.Name, groupName, groupType)
-	return RealConnectResponse{Connection: conn}, nil
+	return s.realBindExisting(ctx, userID, req)
 }
 
 // ListRealConnections 获取指定用户的所有真实对接绑定记录。
@@ -667,7 +578,14 @@ func (s *Service) ListRealConnections(ctx context.Context, userID string) ([]Rea
 	if err != nil {
 		return nil, err
 	}
-	return s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	connections, err := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range connections {
+		connections[i] = publicRealConnection(connections[i])
+	}
+	return connections, nil
 }
 
 // ListRealConnectionsForWorkspace 按显式传入的 userID + adminAccountID 查询真实对接绑定记录，
@@ -685,81 +603,7 @@ func (s *Service) ListRealConnectionsForWorkspace(ctx context.Context, userID st
 // mode == "unlink"：仅删除 real_connections 记录（所有平台通用）。
 // mode == "full"：按平台分支删除远端资源（sub2api 删 admin 账号+上游 key，new-api 删 channel+token），再删除记录。
 func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDisconnectRequest) error {
-	if strings.TrimSpace(req.ConnectionID) == "" || (req.Mode != "unlink" && req.Mode != "full") {
-		return requestError(ErrorRequest)
-	}
-	if s.connRepository == nil {
-		return requestError(ErrorRequest)
-	}
-
-	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
-	if err != nil {
-		return err
-	}
-	conn, err := s.connRepository.GetRealConnection(ctx, req.ConnectionID, userID, adminAccountID)
-	if err != nil {
-		return err
-	}
-	if conn == nil {
-		return requestError(ErrorRequest)
-	}
-
-	if req.Mode == "full" {
-		state, err := s.authenticatedState(ctx, userID, adminAccountID)
-		if err != nil {
-			return err
-		}
-
-		upstreamSite, err := s.upstreamLookup.GetSite(ctx, conn.UpstreamSiteID)
-		if err != nil || upstreamSite == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != adminAccountID || upstreamSite.Session == nil {
-			return requestError(ErrorRequest)
-		}
-		upstreamSession := *upstreamSite.Session
-
-		switch upstreamSession.Platform {
-		case upstream.PlatformNewAPI:
-			// new-api：先删 admin channel，再删上游 token
-			if conn.AdminAccountID != "" {
-				log.Printf("[real-disconnect] new-api 开始删除 channel channel_id=%s", conn.AdminAccountID)
-				if err := s.platformService.DeleteNewAPIChannel(state.Session, conn.AdminAccountID); err != nil {
-					log.Printf("[real-disconnect] new-api 删除 channel 失败 channel_id=%s err=%v", conn.AdminAccountID, err)
-					return err
-				}
-				log.Printf("[real-disconnect] new-api channel 已删除 channel_id=%s", conn.AdminAccountID)
-			}
-			if conn.UpstreamKeyID != "" {
-				log.Printf("[real-disconnect] new-api 开始删除 token token_id=%s", conn.UpstreamKeyID)
-				if err := s.platformService.DeleteNewAPIToken(upstreamSession, conn.UpstreamKeyID); err != nil {
-					log.Printf("[real-disconnect] new-api 删除 token 失败 token_id=%s err=%v", conn.UpstreamKeyID, err)
-					return err
-				}
-				log.Printf("[real-disconnect] new-api token 已删除 token_id=%s", conn.UpstreamKeyID)
-			}
-
-		default:
-			// sub2api：先删 admin 账号，再删上游 key（保持原有逻辑）
-			log.Printf("[real-disconnect] 开始删除 admin 账号 account_id=%s", conn.AdminAccountID)
-			if err := s.platformService.DeleteSub2APIAdminAccount(state.Session, conn.AdminAccountID); err != nil {
-				log.Printf("[real-disconnect] 删除 admin 账号失败 account_id=%s err=%v", conn.AdminAccountID, err)
-				return err
-			}
-			log.Printf("[real-disconnect] admin 账号已删除 account_id=%s", conn.AdminAccountID)
-
-			log.Printf("[real-disconnect] 开始删除上游 key key_id=%s", conn.UpstreamKeyID)
-			if err := s.platformService.DeleteSub2APIKey(upstreamSession, conn.UpstreamKeyID); err != nil {
-				log.Printf("[real-disconnect] 删除上游 key 失败 key_id=%s err=%v", conn.UpstreamKeyID, err)
-				return err
-			}
-			log.Printf("[real-disconnect] 上游 key 已删除 key_id=%s", conn.UpstreamKeyID)
-		}
-	}
-
-	if err := s.removeUpstreamMappingAndDeleteConnection(ctx, userID, adminAccountID, req.ConnectionID, conn.UpstreamSiteID, conn.UpstreamGroupName); err != nil {
-		return err
-	}
-
-	log.Printf("[real-disconnect] 取消对接完成 conn_id=%s mode=%s", req.ConnectionID, req.Mode)
-	return nil
+	return s.realDisconnectConnection(ctx, userID, req)
 }
 
 // removeUpstreamMappingAndDeleteConnection atomically removes the local mapping target and real_connection row.
@@ -816,6 +660,11 @@ func applyMappingsFromRealConnections(state *State, idToName map[string]string, 
 	}
 
 	for _, conn := range connections {
+		// Historical rows (and older in-memory callers) have no mode/flag but the
+		// legacy behavior always treated their target as a pricing source.
+		if !conn.PricingMappingEnabled && conn.ProvisioningMode != "" && conn.ProvisioningMode != ProvisioningModeLegacy {
+			continue
+		}
 		target := UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupName: conn.UpstreamGroupName}
 		for _, ownID := range conn.OwnGroupIDs {
 			ownName, ok := idToName[ownID]

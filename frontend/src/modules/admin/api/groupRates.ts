@@ -57,6 +57,8 @@ export const listGroupRates = async (query: GroupRatesQuery): Promise<PaginatedG
     search: query.search.trim(),
     type: query.type,
     platform: query.platform,
+    status: query.status,
+    sort: query.sort,
   })
 
   return requestJson<PaginatedGroupRatesResponse>(`/group-rates?${params.toString()}`)

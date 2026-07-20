@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { listGroupRateHistory, listGroupRates, updateGroupRateType } from '../api/groupRates'
-import type { GroupRate, GroupRateHistoryQuery, GroupRateHistoryRow } from '../types/groupRates'
+import type { GroupRate, GroupRateHistoryQuery, GroupRateHistoryRow, GroupRateSort, GroupRateStatusCounts, GroupRateStatusFilter } from '../types/groupRates'
 
 export const useGroupRates = () => {
   const rates = ref<GroupRate[]>([])
@@ -14,6 +14,10 @@ export const useGroupRates = () => {
   const search = ref('')
   const typeFilter = ref('')
   const platformFilter = ref('')
+  const statusFilter = ref<GroupRateStatusFilter>('all')
+  const sortMode = ref<GroupRateSort>('multiplierAsc')
+  const statusCounts = ref<GroupRateStatusCounts>({ all: 0, mapped: 0, unmapped: 0, deleted: 0 })
+  const serverSupportsStatusFilters = ref(false)
   const isLoading = ref(false)
   const isHistoryLoading = ref(false)
   const isActionLoading = ref(false)
@@ -31,6 +35,8 @@ export const useGroupRates = () => {
         search: search.value,
         type: typeFilter.value,
         platform: platformFilter.value,
+        status: statusFilter.value,
+        sort: sortMode.value,
       })
 
       if (requestId !== ratesRequestId) return
@@ -42,6 +48,13 @@ export const useGroupRates = () => {
       totalPages.value = response.totalPages
       types.value = response.types
       platforms.value = response.platforms
+      serverSupportsStatusFilters.value = response.statusCounts != null
+      statusCounts.value = response.statusCounts ?? {
+        all: response.items.filter(item => !item.deleted).length,
+        mapped: response.items.filter(item => item.mapped && !item.deleted).length,
+        unmapped: response.items.filter(item => !item.mapped && !item.deleted).length,
+        deleted: response.items.filter(item => item.deleted).length,
+      }
     } catch (error) {
       if (requestId !== ratesRequestId) return
       errorKey.value = error instanceof Error ? error.message : 'admin.groupRates.errors.unknown'
@@ -69,6 +82,16 @@ export const useGroupRates = () => {
 
   const setPlatformFilter = async (value: string) => {
     platformFilter.value = value
+    await resetPageAndLoadRates()
+  }
+
+  const setStatusFilter = async (value: GroupRateStatusFilter) => {
+    statusFilter.value = value
+    await resetPageAndLoadRates()
+  }
+
+  const setSortMode = async (value: GroupRateSort) => {
+    sortMode.value = value
     await resetPageAndLoadRates()
   }
 
@@ -106,8 +129,6 @@ export const useGroupRates = () => {
     }
   }
 
-  void loadRates()
-
   return {
     rates,
     history,
@@ -120,6 +141,10 @@ export const useGroupRates = () => {
     search,
     typeFilter,
     platformFilter,
+    statusFilter,
+    sortMode,
+    statusCounts,
+    serverSupportsStatusFilters,
     isLoading,
     isHistoryLoading,
     isActionLoading,
@@ -131,6 +156,8 @@ export const useGroupRates = () => {
     setSearch,
     setTypeFilter,
     setPlatformFilter,
+    setStatusFilter,
+    setSortMode,
     goToPage,
   }
 }

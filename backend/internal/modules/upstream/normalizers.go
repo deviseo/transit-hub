@@ -334,10 +334,14 @@ func newAPIGroups(groupsPayload any, pricingPayload any) []GroupInfo {
 		}
 		ratio := groupRatios[name]
 		if ratio == nil {
+			if strings.EqualFold(name, "auto") {
+				result = append(result, GroupInfo{ID: name, Name: name, Platform: platforms[name], MultiplierMode: "auto", MultiplierDisplay: "auto"})
+				seen[name] = struct{}{}
+			}
 			return
 		}
 		platform := platforms[name]
-		result = append(result, GroupInfo{ID: name, Name: name, Platform: platform, Multiplier: ratio, MultiplierDisplay: multiplier(ratio)})
+		result = append(result, GroupInfo{ID: name, Name: name, Platform: platform, Multiplier: ratio, MultiplierDisplay: multiplier(ratio), MultiplierMode: "fixed"})
 		seen[name] = struct{}{}
 	}
 	for name := range usableGroups {

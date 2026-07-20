@@ -121,7 +121,7 @@ export default {
       upstream: 'Upstream',
       groupManagement: 'Group Management',
       groupRates: 'Group Rates',
-      groupAssociations: 'Group Associations',
+      groupAssociations: 'Pricing Mappings',
       connectionHealth: 'Group Health',
       groupRateCampaigns: 'Rate Campaigns',
       sub2apiFeatures: 'Embedded Features',
@@ -572,13 +572,55 @@ export default {
       }
     },
     groupAssociations: {
-      title: 'Group Mappings',
-      subtitle: '{count} groups · {associated} associated · {unassociated} unassociated',
+      title: 'Pricing Mappings',
+      detailsLabel: 'Pricing mapping details',
+      subtitle: '{count} groups · {associated} configured · {unassociated} not configured',
+      common: {
+        placeholder: '—',
+        multiplier: '{value}x',
+        unknown: 'Unknown platform'
+      },
+      actions: {
+        refresh: 'Refresh', retry: 'Retry', cleanup: 'Clean up stale config', editTargets: 'Edit sources', manage: 'Manage pricing mapping'
+      },
+      filters: {
+        searchLabel: 'Search pricing mappings', searchPlaceholder: 'Search own groups or upstream sources...',
+        all: 'All', associated: 'Configured', unassociated: 'Not configured', stale: 'Stale'
+      },
+      listAria: 'My group list',
+      targetCount: '{count} pricing sources',
+      detailSubtitle: '{count} upstream groups used as pricing sources',
+      staleOwnGroup: 'The admin site no longer returns this group. Its configuration is preserved until you confirm cleanup.',
+      staleTarget: 'Upstream stale',
+      metrics: {
+        ownMultiplier: 'My group multiplier', targets: 'Pricing sources', autoPricing: 'Auto-pricing', effectiveUpstream: 'Effective upstream multiplier'
+      },
+      sections: {
+        targets: 'Pricing sources', targetsSummary: '{count} upstream sources', autoPricing: 'Auto-pricing policy'
+      },
+      noTargets: {
+        title: 'No pricing sources', description: 'Add an upstream source before configuring auto-pricing.'
+      },
+      targetsDrawer: {
+        titleWithGroup: '{group} · Edit pricing sources', selectedCount: '{count} upstream groups selected',
+        searchLabel: 'Search upstream groups', searchPlaceholder: 'Search site, platform, or group...',
+        emptyTitle: 'No matching upstream groups', emptyDescription: 'Adjust the search or sync an upstream site first.',
+        unknownMultiplier: 'No multiplier', autoMultiplier: 'Auto', multiplier: '{value}x', stale: 'Stale',
+        close: 'Close source editor', cancel: 'Cancel', save: 'Save sources', saving: 'Saving...'
+      },
+      cleanup: {
+        title: 'Clean up stale configuration',
+        description: 'This removes pricing sources and auto-pricing settings for “{group}”. It does not delete the remote group.',
+        cancel: 'Cancel', confirm: 'Confirm cleanup'
+      },
+      errors: {
+        primaryTargetRequired: 'The current primary upstream is used by auto-pricing. Change or disable auto-pricing before removing it.'
+      },
       close: 'Close',
       empty: 'No group mappings found.',
       loadError: 'Failed to load group list.',
       runError: 'Failed to run auto-pricing. Please try again.',
-      unassociatedLabel: 'No upstream linked',
+      unassociatedLabel: 'No pricing source',
       unassociatedMultiplier: 'Not available',
       columns: {
         index: '#',
@@ -1219,6 +1261,8 @@ export default {
         type: 'Group Type',
         platform: 'Site Platform',
         currentMultiplier: 'Current Multiplier',
+        effectiveMultiplier: 'Converted Cost Multiplier',
+        multiplierFormula: 'Upstream {upstream} × recharge factor {recharge}',
         delta: 'Rise/Fall',
         updatedAt: 'Updated Time',
         actions: 'Actions'
@@ -1231,7 +1275,7 @@ export default {
         closeHistory: 'Close History',
         editType: 'Edit',
         closeEdit: 'Close Group Type Editor',
-        connect: 'Click to Connect',
+        connect: 'Configure Connection',
         closeConnect: 'Close connect dialog',
         saveConnect: 'Connect',
         cancel: 'Cancel',
@@ -1266,12 +1310,15 @@ export default {
       status: {
         loading: 'Loading group rates...',
         mapped: 'Connected',
+        pricingMapped: 'Pricing Source',
         unmapped: 'Not Connected',
         deleted: 'Deleted'
       },
       empty: {
         title: 'No group rates yet',
-        description: 'Synced upstream group multiplier data will appear here.'
+        description: 'Synced upstream group multiplier data will appear here.',
+        filteredTitle: 'No records match these filters',
+        filteredDescription: 'Change the status, search, type, or platform filter.'
       },
       history: {
         title: 'Multiplier History',
@@ -1292,8 +1339,8 @@ export default {
         typePlaceholder: 'Select group type'
       },
       connect: {
-        titleWithGroup: 'Connect {site} · {group}',
-        description: 'Choose one of your site groups to add this upstream group to its mapping.',
+        titleWithGroup: 'Configure {site} · {group}',
+        description: 'Let the system create both resources, or link resources that already exist.',
         ownGroupLabel: 'My Site Groups',
         ownGroupPlaceholder: 'Select my site groups',
         upstreamGroupLabel: 'Connected Group',
@@ -1303,8 +1350,8 @@ export default {
         upstreamMultiplierLabel: 'Upstream Multiplier',
         upstreamPlatformLabel: 'Platform',
         modeData: 'Data Stats',
-        modeReal: 'Real Connect',
-        realDescription: 'This will automatically create an API key on the upstream site and a forwarding account on your admin site.',
+        modeReal: 'Create Resources',
+        realDescription: 'Create an upstream Key/Token and an account or channel on the current admin site.',
         groupTypeLabel: 'Group Type',
         groupTypePlaceholder: 'Select group type',
         groupTypeOpenai: 'OpenAI',
@@ -1317,12 +1364,24 @@ export default {
         realConnecting: 'Creating connection...',
         realSuccess: 'Real connection created successfully',
         realFailed: 'Failed to create real connection',
-        modeBind: 'Manual Bind',
-        bindDescription: 'Select an existing upstream Key to bind to this group without creating new resources.',
-        bindSelectKey: 'Select Upstream Key',
-        bindKeysLoading: 'Loading key list...',
-        bindKeysEmpty: 'No keys available for this site',
-        bindFailed: 'Failed to bind'
+        modeBind: 'Use Existing Resources',
+        bindDescription: 'Link an existing upstream Key/Token and admin account/channel without taking ownership of them.',
+        bindSelectKey: 'Upstream Key / Token',
+        bindKeysLoading: 'Loading credentials for this group...',
+        bindKeysEmpty: 'No credentials are available for this upstream group',
+        bindSelectAdminGroup: 'Admin Group',
+        bindAdminGroupPlaceholder: 'Select the group containing the existing resource',
+        bindSelectAdminResource: 'Existing Account / Channel',
+        adminResourcesLoading: 'Loading admin resources...',
+        adminResourcesEmpty: 'No accounts or channels are available in this group',
+        adminResourcesFailed: 'Failed to load existing admin resources. Refresh and try again.',
+        resourceActive: 'Active',
+        resourceInactive: 'Inactive',
+        addToPricingMapping: 'Also use as a pricing source',
+        addToPricingMappingHint: 'Enabled by default. Turn it off to create only the traffic connection.',
+        submitManaged: 'Create and Connect',
+        submitExisting: 'Save Existing Link',
+        bindFailed: 'Failed to link existing resources'
       },
       disconnect: {
         action: 'Disconnect',
@@ -1332,6 +1391,8 @@ export default {
         unlinkOnlyHint: 'Only remove the local binding record, keep the upstream Key and Admin account',
         deleteAll: 'Delete Account & Key',
         deleteAllHint: 'Also delete the upstream Key and the Admin site forwarding account',
+        removePricingMapping: 'Also remove the pricing source',
+        removePricingMappingHint: 'Turn this off to keep the upstream group in pricing mappings.',
         confirm: 'Confirm',
         disconnecting: 'Disconnecting...',
         failed: 'Failed to disconnect'
@@ -1481,7 +1542,9 @@ export default {
     },
     mySites: {
       errors: {
-        invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.'
+        invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.',
+        connectionExists: 'A real connection already exists for this upstream group.',
+        managedDeleteOnly: 'Existing-resource links can only be unlinked locally; remote resources cannot be deleted.'
       }
     },
     tickets: {

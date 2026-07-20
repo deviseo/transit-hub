@@ -143,28 +143,33 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 	for _, record := range records.Items {
 		delta, deltaPercent := change(record.Multiplier, record.PreviousMultiplier)
 		rows = append(rows, RateRow{
-			SiteID:            record.SiteID,
-			SiteName:          record.SiteName,
-			GroupID:           record.GroupID,
-			GroupName:         record.GroupName,
-			Platform:          record.Platform,
-			Type:              record.Type,
-			Mapped:            record.Mapped,
-			Deleted:           record.Deleted,
-			CurrentMultiplier: record.Multiplier * record.RechargeRate,
-			Delta:             delta,
-			DeltaPercent:      deltaPercent,
-			UpdatedAt:         record.CreatedAt,
+			SiteID:             record.SiteID,
+			SiteName:           record.SiteName,
+			GroupID:            record.GroupID,
+			GroupName:          record.GroupName,
+			Platform:           record.Platform,
+			Type:               record.Type,
+			Mapped:             record.Mapped,
+			Connected:          record.Mapped,
+			PricingMapped:      record.PricingMapped,
+			Deleted:            record.Deleted,
+			UpstreamMultiplier: record.Multiplier,
+			RechargeRate:       record.RechargeRate,
+			CurrentMultiplier:  record.Multiplier * record.RechargeRate,
+			Delta:              delta,
+			DeltaPercent:       deltaPercent,
+			UpdatedAt:          record.LastSeenAt,
 		})
 	}
 	return ListResult{
-		Items:      rows,
-		Total:      records.Total,
-		Page:       query.Page,
-		PageSize:   query.PageSize,
-		TotalPages: totalPages(records.Total, query.PageSize),
-		Types:      records.Types,
-		Platforms:  records.Platforms,
+		Items:        rows,
+		Total:        records.Total,
+		Page:         query.Page,
+		PageSize:     query.PageSize,
+		TotalPages:   totalPages(records.Total, query.PageSize),
+		Types:        records.Types,
+		Platforms:    records.Platforms,
+		StatusCounts: records.StatusCounts,
 	}, nil
 }
 
@@ -206,7 +211,7 @@ func (s *Service) History(ctx context.Context, userID string, adminAccountID str
 			Delta:             delta,
 			DeltaPercent:      deltaPercent,
 			CreatedAt:         record.CreatedAt,
-			UpdatedAt:         record.CreatedAt,
+			UpdatedAt:         record.LastSeenAt,
 		})
 	}
 	return rows, nil
@@ -216,6 +221,23 @@ func normalizeListQuery(query ListQuery) ListQuery {
 	query.Search = strings.TrimSpace(query.Search)
 	query.Type = strings.TrimSpace(query.Type)
 	query.Platform = strings.TrimSpace(query.Platform)
+	query.Status = strings.TrimSpace(query.Status)
+	query.Sort = strings.TrimSpace(query.Sort)
+	switch query.Status {
+	case "":
+		// Empty is the legacy contract: return active and deleted rows together.
+		// New clients always send an explicit status and receive accurate totals.
+		query.Status = "legacy"
+	case "mapped", "unmapped", "deleted":
+	case "all":
+	default:
+		query.Status = "legacy"
+	}
+	switch query.Sort {
+	case "multiplierAsc", "multiplierDesc", "siteNameAsc", "groupNameAsc":
+	default:
+		query.Sort = "default"
+	}
 	if query.Page < 1 {
 		query.Page = 1
 	}

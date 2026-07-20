@@ -59,6 +59,7 @@ func (r *testStateRepo) MutateState(ctx context.Context, userID string, adminAcc
 type testConnRepo struct {
 	connection   *RealConnection
 	stateRepo    *testStateRepo
+	saveErr      error
 	deleteErr    error
 	deleteCalls  int
 	saveCalls    int
@@ -67,6 +68,9 @@ type testConnRepo struct {
 
 func (r *testConnRepo) SaveRealConnection(ctx context.Context, conn RealConnection) error {
 	r.saveCalls++
+	if r.saveErr != nil {
+		return r.saveErr
+	}
 	r.connection = &conn
 	r.lastSavedIDs = append(r.lastSavedIDs, conn.ID)
 	return nil
@@ -304,6 +308,59 @@ func TestSaveMappingsMergesLockedLatestStatusAndOwnGroups(t *testing.T) {
 	}
 }
 
+func TestSaveMappingPreservesOtherLatestMappings(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings: []GroupMapping{
+			{OwnGroup: "vip", UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-old", GroupName: "old"}}},
+		},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	repo.mutateBefore = func(latest *State) {
+		latest.Mappings = append(latest.Mappings, GroupMapping{OwnGroup: "concurrent", UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-b", GroupName: "g2"}}})
+	}
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	response, err := service.SaveMapping(context.Background(), "user-1", MappingRequest{
+		OwnGroup:        "vip",
+		UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-new", GroupName: "new"}},
+	})
+	if err != nil {
+		t.Fatalf("SaveMapping returned error: %v", err)
+	}
+	if len(response.Mappings) != 2 {
+		t.Fatalf("expected concurrent mapping to survive, got %#v", response.Mappings)
+	}
+	if response.Mappings[0].UpstreamTargets[0].SiteID != "site-new" || response.Mappings[1].OwnGroup != "concurrent" {
+		t.Fatalf("unexpected atomic mapping update: %#v", response.Mappings)
+	}
+}
+
+func TestRemoveMappingPreservesOtherMappings(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings:       []GroupMapping{{OwnGroup: "stale"}, {OwnGroup: "active"}},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"active": 1.1}, []string{"active"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	response, err := service.RemoveMapping(context.Background(), "user-1", " stale ")
+	if err != nil {
+		t.Fatalf("RemoveMapping returned error: %v", err)
+	}
+	if len(response.Mappings) != 1 || response.Mappings[0].OwnGroup != "active" {
+		t.Fatalf("expected only selected stale mapping removed, got %#v", response.Mappings)
+	}
+}
+
 func TestPersistAutoPricingRunStatusPreservesLockedLatestMapping(t *testing.T) {
 	repo := &testStateRepo{state: &State{
 		UserID:         "user-1",
@@ -484,7 +541,7 @@ func TestRealDisconnectAtomicRollbackOnDeleteFailure(t *testing.T) {
 	}
 }
 
-func TestMappingOptionsPrunesOnlyAuthoritativeMissingTargets(t *testing.T) {
+func TestMappingOptionsMarksAuthoritativeMissingTargetsWithoutPruning(t *testing.T) {
 	repo := &testStateRepo{state: &State{
 		UserID:         "user-1",
 		AdminAccountID: "admin-1",
@@ -515,32 +572,31 @@ func TestMappingOptionsPrunesOnlyAuthoritativeMissingTargets(t *testing.T) {
 		t.Fatalf("expected one mapping, got %#v", response.Mappings)
 	}
 	targets := response.Mappings[0].UpstreamTargets
-	if len(targets) != 1 || targets[0].SiteID != "site-offline" {
-		t.Fatalf("expected only offline target to remain, got %#v", targets)
+	if len(targets) != 2 {
+		t.Fatalf("expected read-only response to preserve both targets, got %#v", targets)
+	}
+	if len(response.StaleTargets) != 1 || response.StaleTargets[0].SiteID != "site-ok" {
+		t.Fatalf("expected authoritative missing target to be marked stale, got %#v", response.StaleTargets)
+	}
+	if len(repo.state.Mappings[0].UpstreamTargets) != 2 {
+		t.Fatalf("expected stored mappings to remain unchanged, got %#v", repo.state.Mappings)
 	}
 }
 
-func TestMappingOptionsDoesNotResurrectDisconnectedBackfillTarget(t *testing.T) {
+func TestMappingOptionsBackfillsRealConnectionWithoutPersisting(t *testing.T) {
 	repo := &testStateRepo{state: &State{
 		UserID:         "user-1",
 		AdminAccountID: "admin-1",
 		Session:        testSession(""),
-		Mappings: []GroupMapping{{
-			OwnGroup:        "vip",
-			UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-a", GroupName: "g1"}},
-		}},
+		Mappings:       []GroupMapping{},
 	}}
 	connRepo := &testConnRepo{
 		stateRepo:  repo,
-		connection: &RealConnection{ID: "conn-1", UserID: "user-1", WorkspaceAdminAccountID: "admin-1", UpstreamSiteID: "site-a", UpstreamGroupName: "g1", OwnGroupIDs: []string{"1"}},
+		connection: &RealConnection{ID: "conn-1", UserID: "user-1", WorkspaceAdminAccountID: "admin-1", UpstreamSiteID: "site-a", UpstreamGroupName: "g1", OwnGroupIDs: []string{"vip"}},
 	}
 	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
 	defer server.Close()
 	repo.state.Session = testSession(server.URL)
-	repo.mutateBefore = func(latest *State) {
-		removeMappingTargetFromState(latest, "site-a", "g1")
-		connRepo.connection = nil
-	}
 	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
 	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
 	service.connRepository = connRepo
@@ -549,11 +605,59 @@ func TestMappingOptionsDoesNotResurrectDisconnectedBackfillTarget(t *testing.T) 
 	if err != nil {
 		t.Fatalf("MappingOptions returned error: %v", err)
 	}
-	if len(response.Mappings) != 0 {
-		t.Fatalf("expected disconnected target not to be resurrected, got %#v", response.Mappings)
+	if len(response.Mappings) != 1 || len(response.Mappings[0].UpstreamTargets) != 1 {
+		t.Fatalf("expected connection to be backfilled into response, got %#v", response.Mappings)
 	}
-	if connRepo.deleteCalls != 0 {
-		t.Fatalf("test should simulate completed disconnect without invoking delete, got %d", connRepo.deleteCalls)
+	if len(repo.state.Mappings) != 0 {
+		t.Fatalf("expected GET backfill not to persist state, got %#v", repo.state.Mappings)
+	}
+}
+
+func TestMappingOptionsMarksMissingOwnGroupWithoutDeletingMapping(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings:       []GroupMapping{{OwnGroup: "removed", UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-a", GroupName: "g1"}}}},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	response, err := service.MappingOptions(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("MappingOptions returned error: %v", err)
+	}
+	if len(response.StaleOwnGroups) != 1 || response.StaleOwnGroups[0] != "removed" {
+		t.Fatalf("expected missing own group marker, got %#v", response.StaleOwnGroups)
+	}
+	if len(response.Mappings) != 1 || len(repo.state.Mappings) != 1 {
+		t.Fatalf("expected missing own-group mapping to be preserved, response=%#v stored=%#v", response.Mappings, repo.state.Mappings)
+	}
+}
+
+func TestMappingOptionsNormalizesNilTargetsInResponseOnly(t *testing.T) {
+	repo := &testStateRepo{state: &State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Mappings:       []GroupMapping{{OwnGroup: "vip", UpstreamTargets: nil}},
+	}}
+	server, _ := newNewAPITestServer(t, map[string]float64{"vip": 1.1}, []string{"vip"})
+	defer server.Close()
+	repo.state.Session = testSession(server.URL)
+	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), testUpstreamLookup{})
+	service.SetAdminAccountResolver(testAdminResolver{currentID: "admin-1"})
+
+	response, err := service.MappingOptions(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("MappingOptions returned error: %v", err)
+	}
+	if len(response.Mappings) != 1 || response.Mappings[0].UpstreamTargets == nil {
+		t.Fatalf("expected response targets to be a non-nil empty array, got %#v", response.Mappings)
+	}
+	if repo.state.Mappings[0].UpstreamTargets != nil {
+		t.Fatalf("expected stored historical value to remain untouched, got %#v", repo.state.Mappings)
 	}
 }
 

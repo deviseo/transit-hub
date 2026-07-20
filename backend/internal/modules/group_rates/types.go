@@ -15,22 +15,26 @@ type SnapshotGroup struct {
 // RateRow is the list API shape consumed by the admin UI. Delta values compare the latest
 // snapshot with the immediately previous snapshot for the same site/group/platform tuple.
 type RateRow struct {
-	SiteID            string    `json:"siteId"`
-	SiteName          string    `json:"siteName"`
-	GroupID           string    `json:"groupId"`
-	GroupName         string    `json:"groupName"`
-	Platform          string    `json:"platform"`
-	Type              string    `json:"type"`
-	Mapped            bool      `json:"mapped"`
-	Deleted           bool      `json:"deleted"`
-	CurrentMultiplier float64   `json:"currentMultiplier"`
-	Delta             *float64  `json:"delta"`
-	DeltaPercent      *float64  `json:"deltaPercent"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	SiteID             string    `json:"siteId"`
+	SiteName           string    `json:"siteName"`
+	GroupID            string    `json:"groupId"`
+	GroupName          string    `json:"groupName"`
+	Platform           string    `json:"platform"`
+	Type               string    `json:"type"`
+	Mapped             bool      `json:"mapped"`
+	Connected          bool      `json:"connected"`
+	PricingMapped      bool      `json:"pricingMapped"`
+	Deleted            bool      `json:"deleted"`
+	UpstreamMultiplier float64   `json:"upstreamMultiplier"`
+	RechargeRate       float64   `json:"rechargeRate"`
+	CurrentMultiplier  float64   `json:"currentMultiplier"`
+	Delta              *float64  `json:"delta"`
+	DeltaPercent       *float64  `json:"deltaPercent"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // ListQuery describes all list controls exposed by the admin page. PageSize is
-// intentionally fixed by the handler to 10 for now, but keeping it explicit here
+// intentionally fixed by the handler to 30 for now, but keeping it explicit here
 // makes repository pagination deterministic and easy to test.
 type ListQuery struct {
 	Page     int
@@ -38,16 +42,28 @@ type ListQuery struct {
 	Search   string
 	Type     string
 	Platform string
+	Status   string
+	Sort     string
+}
+
+// StatusCounts provides tab totals after search/type/platform filters but before
+// the active status filter. Deleted rows are kept separate from active totals.
+type StatusCounts struct {
+	All      int `json:"all"`
+	Mapped   int `json:"mapped"`
+	Unmapped int `json:"unmapped"`
+	Deleted  int `json:"deleted"`
 }
 
 type ListResult struct {
-	Items      []RateRow `json:"items"`
-	Total      int       `json:"total"`
-	Page       int       `json:"page"`
-	PageSize   int       `json:"pageSize"`
-	TotalPages int       `json:"totalPages"`
-	Types      []string  `json:"types"`
-	Platforms  []string  `json:"platforms"`
+	Items        []RateRow    `json:"items"`
+	Total        int          `json:"total"`
+	Page         int          `json:"page"`
+	PageSize     int          `json:"pageSize"`
+	TotalPages   int          `json:"totalPages"`
+	Types        []string     `json:"types"`
+	Platforms    []string     `json:"platforms"`
+	StatusCounts StatusCounts `json:"statusCounts"`
 }
 
 type UpdateTypeRequest struct {
@@ -91,10 +107,12 @@ type snapshotRecord struct {
 	Platform           string
 	Type               string
 	Mapped             bool
+	PricingMapped      bool
 	Deleted            bool
 	Multiplier         float64
 	RechargeRate       float64
 	CreatedAt          time.Time
+	LastSeenAt         time.Time
 	PreviousMultiplier *float64
 }
 
@@ -108,8 +126,9 @@ type latestGroupKey struct {
 }
 
 type listRecords struct {
-	Items     []snapshotRecord
-	Total     int
-	Types     []string
-	Platforms []string
+	Items        []snapshotRecord
+	Total        int
+	Types        []string
+	Platforms    []string
+	StatusCounts StatusCounts
 }
