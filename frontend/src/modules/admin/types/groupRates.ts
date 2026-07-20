@@ -6,7 +6,11 @@ export interface GroupRate {
   type: string | null
   platform: string | null
   mapped: boolean
+  connected?: boolean
+  pricingMapped?: boolean
   deleted: boolean
+  upstreamMultiplier?: number | null
+  rechargeRate?: number | null
   currentMultiplier: number | null
   delta: number | null
   deltaPercent: number | null
@@ -18,6 +22,18 @@ export interface GroupRatesQuery {
   search: string
   type: string
   platform: string
+  status: GroupRateStatusFilter
+  sort: GroupRateSort
+}
+
+export type GroupRateStatusFilter = 'all' | 'mapped' | 'unmapped' | 'deleted'
+export type GroupRateSort = 'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc'
+
+export interface GroupRateStatusCounts {
+  all: number
+  mapped: number
+  unmapped: number
+  deleted: number
 }
 
 export interface PaginatedGroupRatesResponse {
@@ -28,6 +44,7 @@ export interface PaginatedGroupRatesResponse {
   totalPages: number
   types: string[]
   platforms: string[]
+  statusCounts?: GroupRateStatusCounts
 }
 
 export interface GroupRateHistoryQuery {

@@ -12,6 +12,15 @@ const (
 	ErrorRequest                = "admin.mySites.errors.request"
 	ErrorUnknown                = "admin.mySites.errors.unknown"
 	ErrorInvalidAutoPricingConf = "admin.mySites.errors.invalidAutoPricingConfig"
+	ErrorConnectionExists       = "admin.mySites.errors.connectionExists"
+	ErrorManagedDeleteOnly      = "admin.mySites.errors.managedDeleteOnly"
+)
+
+const (
+	ProvisioningModeLegacy   = "legacy"
+	ProvisioningModeManaged  = "managed"
+	ProvisioningModeExisting = "existing"
+	ConnectionStatusActive   = "active"
 )
 
 // MappingRequest 前端保存映射关系时的请求体，包含自动调价配置字段。
@@ -107,8 +116,26 @@ type StatusResponse struct {
 
 // MappingOptionsResponse mapping-options 接口的响应体。
 type MappingOptionsResponse struct {
-	OwnGroups []MappingOwnGroupOption `json:"ownGroups"`
-	Mappings  []GroupMapping          `json:"mappings"`
+	OwnGroups              []MappingOwnGroupOption `json:"ownGroups"`
+	Mappings               []GroupMapping          `json:"mappings"`
+	StaleOwnGroups         []string                `json:"staleOwnGroups,omitempty"`
+	StaleTargets           []UpstreamGroupRef      `json:"staleTargets,omitempty"`
+	ConnectionCapabilities *ConnectionCapabilities `json:"connectionCapabilities,omitempty"`
+}
+
+// ConnectionCapabilities describes the platform-specific fields required by
+// RealConnect so the Vue layer does not need to own upstream channel semantics.
+type ConnectionCapabilities struct {
+	Mode                        string              `json:"mode"`
+	RequiresGroupType           bool                `json:"requiresGroupType"`
+	RequiresChannelType         bool                `json:"requiresChannelType"`
+	ChannelTypes                []ChannelTypeOption `json:"channelTypes,omitempty"`
+	SuggestedChannelTypeByGroup map[string]int      `json:"suggestedChannelTypeByGroup,omitempty"`
+}
+
+type ChannelTypeOption struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 // MappingOwnGroupOption 自有分组选项，包含 ID、平台、状态、专属性等属性。
@@ -139,13 +166,18 @@ type RealConnectRequest struct {
 	GroupType         string   `json:"groupType"`
 	ChannelType       int      `json:"channelType"`
 	OwnGroupIDs       []string `json:"ownGroupIds"`
+	// AddToPricingMapping is a pointer so rolling deployments preserve the old
+	// behavior: an omitted field still adds the target to automatic pricing.
+	AddToPricingMapping *bool  `json:"addToPricingMapping"`
+	OperationID         string `json:"operationId"`
 }
 
 // RealDisconnectRequest 取消真实对接请求体。
 // Mode: "unlink" 仅删除本地绑定记录，"full" 同时删除上游 Key 和 admin 转发账号。
 type RealDisconnectRequest struct {
-	ConnectionID string `json:"connectionId"`
-	Mode         string `json:"mode"`
+	ConnectionID         string `json:"connectionId"`
+	Mode                 string `json:"mode"`
+	RemovePricingMapping *bool  `json:"removePricingMapping"`
 }
 
 // RealBindRequest 手动绑定请求体。
@@ -158,6 +190,36 @@ type RealBindRequest struct {
 	UpstreamKey       string   `json:"upstreamKey"`
 	OwnGroupIDs       []string `json:"ownGroupIds"`
 	GroupType         string   `json:"groupType"`
+	// AdminGroupID and AdminResourceID identify an already-created account or
+	// channel on the current admin site. They are optional only for compatibility
+	// with older clients, whose records continue to be stored as legacy bindings.
+	AdminGroupID        string `json:"adminGroupId"`
+	AdminResourceID     string `json:"adminResourceId"`
+	AddToPricingMapping *bool  `json:"addToPricingMapping"`
+	OperationID         string `json:"operationId"`
+}
+
+// UpstreamCredentialOption is the non-secret credential metadata returned to
+// the browser for existing-resource binding. The backend resolves the full key
+// again after submission and never trusts a secret echoed by the client.
+type UpstreamCredentialOption struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	GroupID    string `json:"groupId"`
+	GroupName  string `json:"groupName"`
+	Status     string `json:"status"`
+	KeyPreview string `json:"keyPreview"`
+}
+
+// AdminResourceOption describes an existing admin forwarding resource without
+// exposing credentials. GroupIDs are the actual groups read from the admin API.
+type AdminResourceOption struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Status   string   `json:"status"`
+	Platform string   `json:"platform"`
+	GroupIDs []string `json:"groupIds"`
 }
 
 // RealConnectResponse 真实对接成功后返回的绑定记录。
@@ -186,6 +248,14 @@ type RealConnection struct {
 	AdminAccountID          string   `json:"adminAccountId"` // 上游平台 admin 转发账号 ID（业务字段）
 	AdminAccountName        string   `json:"adminAccountName"`
 	OwnGroupIDs             []string `json:"ownGroupIds"`
+	OwnGroupNames           []string `json:"ownGroupNames"`
 	GroupType               string   `json:"groupType"`
+	ProvisioningMode        string   `json:"provisioningMode"`
+	Status                  string   `json:"status"`
+	UpstreamPlatform        string   `json:"upstreamPlatform"`
+	AdminPlatform           string   `json:"adminPlatform"`
+	PricingMappingEnabled   bool     `json:"pricingMappingEnabled"`
+	OperationID             string   `json:"-"`
+	CanDeleteRemote         bool     `json:"canDeleteRemote"`
 	CreatedAt               string   `json:"createdAt"`
 }

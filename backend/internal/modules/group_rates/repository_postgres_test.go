@@ -73,6 +73,22 @@ func TestRepositoryListMappedWithPostgres(t *testing.T) {
 				insertJSONMapping(t, pool, "workspace-a")
 			},
 		},
+		{
+			name:            "null upstream targets are ignored",
+			snapshotGroupID: "54",
+			wantMapped:      false,
+			arrange: func(t *testing.T, pool *pgxpool.Pool) {
+				insertRawJSONMapping(t, pool, "workspace-a", `[{"ownGroup":"own-a","upstreamTargets":null}]`)
+			},
+		},
+		{
+			name:            "scalar mapping payload is ignored",
+			snapshotGroupID: "54",
+			wantMapped:      false,
+			arrange: func(t *testing.T, pool *pgxpool.Pool) {
+				insertRawJSONMapping(t, pool, "workspace-a", `"legacy-invalid-value"`)
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -308,6 +324,19 @@ func insertJSONMapping(t *testing.T, pool *pgxpool.Pool, workspaceID string) {
 	`, workspaceID)
 	if err != nil {
 		t.Fatalf("insert JSON mapping: %v", err)
+	}
+}
+
+func insertRawJSONMapping(t *testing.T, pool *pgxpool.Pool, workspaceID string, mappings string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
+	defer cancel()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO my_site_states (user_id, admin_account_id, base_url, email, session, mappings, own_groups)
+		VALUES ('user-a', $1, 'https://admin.example', 'admin@example.com', '{}'::jsonb, $2::jsonb, '[]'::jsonb)
+	`, workspaceID, mappings)
+	if err != nil {
+		t.Fatalf("insert raw JSON mapping: %v", err)
 	}
 }
 

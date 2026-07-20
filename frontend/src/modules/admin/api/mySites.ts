@@ -10,6 +10,7 @@ import type {
   RealConnection,
   RealDisconnectRequest,
   UpstreamKeyItem,
+  AdminResourceOption,
 } from '../types/mySites'
 import {
   authUnauthorizedErrorKey,
@@ -32,6 +33,38 @@ type AdminErrorPayload = {
   message?: string
 }
 
+const normalizeMappings = (value: unknown): MySiteMapping[] => {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (entry == null || typeof entry !== 'object') return []
+    const mapping = entry as MySiteMapping
+    if (typeof mapping.ownGroup !== 'string' || !mapping.ownGroup.trim()) return []
+    const upstreamTargets = Array.isArray(mapping.upstreamTargets)
+      ? mapping.upstreamTargets.filter(target => (
+          target != null &&
+          typeof target.siteId === 'string' &&
+          typeof target.groupName === 'string'
+        ))
+      : []
+    return [{ ...mapping, upstreamTargets }]
+  })
+}
+
+const normalizeStatus = (status: MySiteStatus): MySiteStatus => ({
+  ...status,
+  ...(Object.prototype.hasOwnProperty.call(status, 'mappings')
+    ? { mappings: normalizeMappings(status.mappings) }
+    : {}),
+})
+
+const normalizeMappingOptions = (response: MySiteMappingOptionsResponse): MySiteMappingOptionsResponse => ({
+  ...response,
+  ownGroups: Array.isArray(response.ownGroups) ? response.ownGroups : [],
+  mappings: normalizeMappings(response.mappings),
+  staleOwnGroups: Array.isArray(response.staleOwnGroups) ? response.staleOwnGroups : [],
+  staleTargets: Array.isArray(response.staleTargets) ? response.staleTargets : [],
+})
+
 const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   let response: Response
   try {
@@ -49,7 +82,14 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
   }
 
   const text = await response.text()
-  const payload = text ? JSON.parse(text) as T & AdminErrorPayload : ({} as T & AdminErrorPayload)
+  let payload = {} as T & AdminErrorPayload
+  if (text) {
+    try {
+      payload = JSON.parse(text) as T & AdminErrorPayload
+    } catch {
+      payload = {} as T & AdminErrorPayload
+    }
+  }
 
   if (!response.ok) {
     if (isUnauthorizedApiResponse(response.status, payload)) {
@@ -63,13 +103,15 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
   return payload
 }
 
-export const getMySiteMappingOptions = async (): Promise<MySiteMappingOptionsResponse> => requestJson<MySiteMappingOptionsResponse>('/my-sites/mapping-options')
+export const getMySiteMappingOptions = async (): Promise<MySiteMappingOptionsResponse> => (
+  normalizeMappingOptions(await requestJson<MySiteMappingOptionsResponse>('/my-sites/mapping-options'))
+)
 
 export const saveMySiteMappings = async (mappings: MySiteMapping[]): Promise<MySiteStatus> => (
-  requestJson<MySiteStatus>('/my-sites/mappings', {
+  normalizeStatus(await requestJson<MySiteStatus>('/my-sites/mappings', {
     method: 'PUT',
     body: JSON.stringify({ mappings }),
-  })
+  }))
 )
 
 export const realConnect = async (req: RealConnectRequest): Promise<RealConnectResponse> => (
@@ -82,8 +124,23 @@ export const realConnect = async (req: RealConnectRequest): Promise<RealConnectR
 export const listRealConnections = async (): Promise<RealConnection[]> =>
   requestJson<RealConnection[]>('/my-sites/real-connections')
 
-export const listUpstreamKeys = async (siteId: string): Promise<UpstreamKeyItem[]> =>
-  requestJson<UpstreamKeyItem[]>(`/my-sites/upstream-keys?siteId=${encodeURIComponent(siteId)}`)
+export const listUpstreamKeys = async (siteId: string, groupId: string, groupName: string): Promise<UpstreamKeyItem[]> => {
+  const params = new URLSearchParams({ siteId, groupId, groupName })
+  const items = await requestJson<UpstreamKeyItem[]>(`/my-sites/upstream-keys?${params.toString()}`)
+  return Array.isArray(items)
+    ? items.map(item => ({
+        ...item,
+        // Older backends returned the full key. Keep it only as an internal
+        // compatibility fallback; the UI renders the non-secret preview.
+        keyPreview: item.keyPreview || (item.key ? `${item.key.slice(0, 6)}...${item.key.slice(-4)}` : ''),
+      }))
+    : []
+}
+
+export const listAdminResources = async (groupId: string): Promise<AdminResourceOption[]> => {
+  const items = await requestJson<AdminResourceOption[]>(`/my-sites/admin-resources?groupId=${encodeURIComponent(groupId)}`)
+  return Array.isArray(items) ? items : []
+}
 
 export const realBind = async (req: RealBindRequest): Promise<RealConnectResponse> => (
   requestJson<RealConnectResponse>('/my-sites/real-bind', {
@@ -99,9 +156,39 @@ export const realDisconnect = async (req: RealDisconnectRequest): Promise<void> 
   })
 }
 
-export const runAutoPricing = async (req: RunAutoPricingRequest): Promise<RunAutoPricingResponse> => (
-  requestJson<RunAutoPricingResponse>('/my-sites/auto-pricing/run', {
+export const runAutoPricing = async (req: RunAutoPricingRequest): Promise<RunAutoPricingResponse> => {
+  const response = await requestJson<RunAutoPricingResponse>('/my-sites/auto-pricing/run', {
     method: 'POST',
     body: JSON.stringify(req),
   })
-)
+  return {
+    ...response,
+    mapping: normalizeMappings([response.mapping])[0] ?? response.mapping,
+  }
+}
+
+// New backends update one mapping atomically. A generic method-not-supported
+// response falls back to the legacy full-array PUT so rolling deployments remain usable.
+export const saveMySiteMapping = async (mapping: MySiteMapping, currentMappings: MySiteMapping[]): Promise<MySiteStatus> => {
+  try {
+    return normalizeStatus(await requestJson<MySiteStatus>('/my-sites/mappings', {
+      method: 'PATCH',
+      body: JSON.stringify({ mapping }),
+    }))
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'admin.mySites.errors.request') throw error
+    const nextMappings = currentMappings.some(item => item.ownGroup === mapping.ownGroup)
+      ? currentMappings.map(item => item.ownGroup === mapping.ownGroup ? mapping : item)
+      : [...currentMappings, mapping]
+    return saveMySiteMappings(nextMappings)
+  }
+}
+
+export const removeMySiteMapping = async (ownGroup: string, currentMappings: MySiteMapping[]): Promise<MySiteStatus> => {
+  try {
+    return normalizeStatus(await requestJson<MySiteStatus>(`/my-sites/mappings/${encodeURIComponent(ownGroup)}`, { method: 'DELETE' }))
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'admin.mySites.errors.request') throw error
+    return saveMySiteMappings(currentMappings.filter(item => item.ownGroup !== ownGroup))
+  }
+}

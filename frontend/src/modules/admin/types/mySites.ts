@@ -58,6 +58,25 @@ export interface MySiteStatus {
 export interface MySiteMappingOptionsResponse {
   ownGroups: MySiteMappingOwnGroupOption[]
   mappings: MySiteMapping[]
+  staleOwnGroups?: string[]
+  staleTargets?: MySiteGroupRef[]
+  connectionCapabilities?: ConnectionCapabilities
+}
+
+export interface ConnectionCapabilities {
+  mode: 'account' | 'channel' | string
+  requiresGroupType: boolean
+  requiresChannelType: boolean
+  channelTypes?: NewAPIChannelType[]
+  suggestedChannelTypeByGroup?: Record<string, number>
+}
+
+export interface MySiteUpstreamTargetOption extends MySiteGroupRef {
+  siteName: string
+  platform: string
+  multiplier: number | null
+  multiplierMode?: string
+  stale: boolean
 }
 
 export interface MySiteMappingOwnGroupOption {
@@ -78,6 +97,8 @@ export interface RealConnectRequest {
   groupType: string
   channelType?: number
   ownGroupIds: string[]
+  addToPricingMapping?: boolean
+  operationId?: string
 }
 
 export interface NewAPIChannelType {
@@ -141,17 +162,33 @@ export const NEW_API_CHANNEL_TYPES: NewAPIChannelType[] = [
   { id: 57, name: 'Codex' },
 ]
 
+// Used only while a new frontend is temporarily connected to an older backend
+// that does not yet return connectionCapabilities.
+export const LEGACY_NEW_API_CHANNEL_SUGGESTIONS: Record<string, number> = {
+  openai: 1,
+  anthropic: 14,
+  gemini: 24,
+  deepseek: 43,
+}
+
 export interface RealConnection {
   id: string
   upstreamSiteId: string
   upstreamGroupId: string
   upstreamGroupName: string
   upstreamKeyId: string
-  upstreamKey: string
+  upstreamKey?: string
   adminAccountId: string
   adminAccountName: string
   ownGroupIds: string[]
+  ownGroupNames?: string[]
   groupType: string
+  provisioningMode?: 'legacy' | 'managed' | 'existing' | string
+  status?: string
+  upstreamPlatform?: string
+  adminPlatform?: string
+  pricingMappingEnabled?: boolean
+  canDeleteRemote?: boolean
   createdAt: string
 }
 
@@ -160,18 +197,32 @@ export interface RealBindRequest {
   upstreamGroupId: string
   upstreamGroupName: string
   upstreamKeyId: string
-  upstreamKey: string
+  upstreamKey?: string
   ownGroupIds: string[]
   groupType: string
+  adminGroupId?: string
+  adminResourceId?: string
+  addToPricingMapping?: boolean
+  operationId?: string
 }
 
 export interface UpstreamKeyItem {
   id: string
-  key: string
+  key?: string
+  keyPreview?: string
   name: string
   groupId: string
   groupName: string
   status: string
+}
+
+export interface AdminResourceOption {
+  id: string
+  name: string
+  type: string
+  status: string
+  platform: string
+  groupIds: string[]
 }
 
 export interface RealConnectResponse {
@@ -181,4 +232,5 @@ export interface RealConnectResponse {
 export interface RealDisconnectRequest {
   connectionId: string
   mode: 'unlink' | 'full'
+  removePricingMapping?: boolean
 }

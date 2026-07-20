@@ -75,6 +75,7 @@ type GroupInfo struct {
 	Platform          *string  `json:"platform"`
 	Multiplier        *float64 `json:"multiplier"`
 	MultiplierDisplay string   `json:"multiplierDisplay"`
+	MultiplierMode    string   `json:"multiplierMode,omitempty"`
 	// 以下字段为 sub2api 专属倍率合并规则新增的向后兼容字段：/groups/available 默认倍率
 	// 与 /groups/rates 专属倍率覆盖后，Multiplier 始终表示最终生效倍率；这些字段仅供前端
 	// 展示"默认倍率 -> 专属倍率"提示，不参与业务计算。旧数据缺少这些字段时 omitempty 生效，

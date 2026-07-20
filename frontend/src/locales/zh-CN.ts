@@ -121,7 +121,7 @@ export default {
       upstream: '上游管理',
       groupManagement: '分组管理',
       groupRates: '分组倍率',
-      groupAssociations: '分组关联',
+      groupAssociations: '调价映射',
       connectionHealth: '分组健康',
       groupRateCampaigns: '活动调价',
       sub2apiFeatures: '嵌入功能',
@@ -572,13 +572,55 @@ export default {
       }
     },
     groupAssociations: {
-      title: '分组关联',
-      subtitle: '共 {count} 组 · {associated} 组已关联 · {unassociated} 组未关联',
+      title: '调价映射',
+      detailsLabel: '调价映射详情',
+      subtitle: '共 {count} 组 · {associated} 组已配置数据源 · {unassociated} 组未配置',
+      common: {
+        placeholder: '—',
+        multiplier: '{value}x',
+        unknown: '未知平台'
+      },
+      actions: {
+        refresh: '刷新', retry: '重试', cleanup: '清理失效配置', editTargets: '编辑数据源', manage: '管理调价映射'
+      },
+      filters: {
+        searchLabel: '搜索调价映射', searchPlaceholder: '搜索自有分组或上游数据源...',
+        all: '全部', associated: '已配置', unassociated: '未配置', stale: '失效'
+      },
+      listAria: '我的分组列表',
+      targetCount: '{count} 个数据源',
+      detailSubtitle: '当前使用 {count} 个上游分组作为调价数据源',
+      staleOwnGroup: '管理员站点已不再返回此分组。配置仍被保留，请确认后再清理。',
+      staleTarget: '上游已失效',
+      metrics: {
+        ownMultiplier: '我的分组倍率', targets: '调价数据源', autoPricing: '自动调价', effectiveUpstream: '上游生效倍率'
+      },
+      sections: {
+        targets: '调价数据源', targetsSummary: '共 {count} 个上游数据源', autoPricing: '自动调价策略'
+      },
+      noTargets: {
+        title: '尚未配置调价数据源', description: '添加上游数据源后，可为该分组配置自动调价。'
+      },
+      targetsDrawer: {
+        titleWithGroup: '{group} · 编辑调价数据源', selectedCount: '已选择 {count} 个上游分组',
+        searchLabel: '搜索上游分组', searchPlaceholder: '搜索站点、平台或分组...',
+        emptyTitle: '没有匹配的上游分组', emptyDescription: '请调整搜索条件或先同步上游站点。',
+        unknownMultiplier: '暂无倍率', autoMultiplier: '自动', multiplier: '{value}x', stale: '已失效',
+        close: '关闭数据源编辑', cancel: '取消', save: '保存数据源', saving: '保存中...'
+      },
+      cleanup: {
+        title: '清理失效配置',
+        description: '将删除“{group}”的调价数据源和自动调价配置。此操作不会删除远端分组。',
+        cancel: '取消', confirm: '确认清理'
+      },
+      errors: {
+        primaryTargetRequired: '当前主上游正在用于自动调价。请先修改或关闭自动调价，再移除此关联。'
+      },
       close: '关闭',
       empty: '暂无分组映射数据。',
       loadError: '加载分组列表失败。',
       runError: '执行自动调价失败，请重试。',
-      unassociatedLabel: '未关联上游',
+      unassociatedLabel: '未配置数据源',
       unassociatedMultiplier: '暂无倍率',
       columns: {
         index: '序号',
@@ -1219,6 +1261,8 @@ export default {
         type: '分组类型',
         platform: '站点平台',
         currentMultiplier: '当前倍率',
+        effectiveMultiplier: '换算后成本倍率',
+        multiplierFormula: '上游 {upstream} × 充值系数 {recharge}',
         delta: '涨跌幅',
         updatedAt: '更新时间',
         actions: '操作'
@@ -1231,7 +1275,7 @@ export default {
         closeHistory: '关闭历史',
         editType: '修改',
         closeEdit: '关闭修改分组类型',
-        connect: '点击对接',
+        connect: '配置对接',
         closeConnect: '关闭对接窗口',
         saveConnect: '确认对接',
         cancel: '取消',
@@ -1266,12 +1310,15 @@ export default {
       status: {
         loading: '正在加载分组倍率...',
         mapped: '已对接',
+        pricingMapped: '已用于调价',
         unmapped: '未对接',
         deleted: '已删除'
       },
       empty: {
         title: '暂无分组倍率',
-        description: '同步上游站点后，这里会显示分组倍率数据。'
+        description: '同步上游站点后，这里会显示分组倍率数据。',
+        filteredTitle: '当前条件下没有记录',
+        filteredDescription: '切换状态或调整搜索、类型和平台筛选。'
       },
       history: {
         title: '倍率历史',
@@ -1292,8 +1339,8 @@ export default {
         typePlaceholder: '请选择分组类型'
       },
       connect: {
-        titleWithGroup: '对接 {site} · {group}',
-        description: '选择我的站点分组后，会把当前上游分组加入该分组的对接关系。',
+        titleWithGroup: '配置 {site} · {group}',
+        description: '选择由系统创建资源，或关联两端已经存在的资源。',
         ownGroupLabel: '我的站点分组',
         ownGroupPlaceholder: '请选择我的站点分组',
         upstreamGroupLabel: '对接分组',
@@ -1303,8 +1350,8 @@ export default {
         upstreamMultiplierLabel: '上游倍率',
         upstreamPlatformLabel: '平台',
         modeData: '数据统计',
-        modeReal: '真实对接',
-        realDescription: '将自动在上游站点创建 API Key，并在 admin 站点创建对应的转发账号。',
+        modeReal: '自动创建资源',
+        realDescription: '创建上游 Key/Token，并在当前管理端创建账号或渠道。',
         groupTypeLabel: '分组类型',
         groupTypePlaceholder: '请选择分组类型',
         groupTypeOpenai: 'OpenAI',
@@ -1317,12 +1364,24 @@ export default {
         realConnecting: '正在创建对接...',
         realSuccess: '真实对接创建成功',
         realFailed: '真实对接创建失败',
-        modeBind: '手动绑定',
-        bindDescription: '选择已有的上游 Key 绑定到当前分组，不会创建新资源。',
-        bindSelectKey: '选择上游 Key',
-        bindKeysLoading: '正在加载 Key 列表...',
-        bindKeysEmpty: '该站点暂无可用 Key',
-        bindFailed: '手动绑定失败'
+        modeBind: '使用已有资源',
+        bindDescription: '关联已有上游 Key/Token 和管理端账号/渠道，不创建或接管远端资源。',
+        bindSelectKey: '上游 Key / Token',
+        bindKeysLoading: '正在加载当前分组的凭据...',
+        bindKeysEmpty: '当前上游分组没有可用凭据',
+        bindSelectAdminGroup: '管理端分组',
+        bindAdminGroupPlaceholder: '选择已有账号或渠道所在分组',
+        bindSelectAdminResource: '已有账号 / 渠道',
+        adminResourcesLoading: '正在读取管理端资源...',
+        adminResourcesEmpty: '该分组下没有可关联的账号或渠道',
+        adminResourcesFailed: '读取管理端已有资源失败，请刷新后重试。',
+        resourceActive: '启用',
+        resourceInactive: '停用',
+        addToPricingMapping: '同时作为调价数据源',
+        addToPricingMappingHint: '默认开启；取消后只建立流量连接，不加入自动调价映射。',
+        submitManaged: '创建并对接',
+        submitExisting: '保存已有资源关联',
+        bindFailed: '已有资源关联失败'
       },
       disconnect: {
         action: '取消对接',
@@ -1332,6 +1391,8 @@ export default {
         unlinkOnlyHint: '仅删除本地绑定记录，保留上游 Key 和 Admin 账号',
         deleteAll: '删除账号和 Key',
         deleteAllHint: '同时删除上游 Key 和 Admin 站点的转发账号',
+        removePricingMapping: '同时移除调价数据源',
+        removePricingMappingHint: '取消勾选可保留当前上游分组的调价映射。',
         confirm: '确定',
         disconnecting: '正在取消对接...',
         failed: '取消对接失败'
@@ -1481,7 +1542,9 @@ export default {
     },
     mySites: {
       errors: {
-        invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。'
+        invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。',
+        connectionExists: '该上游分组已经存在真实连接。',
+        managedDeleteOnly: '已有资源关联只能取消本地关联，不能删除远端资源。'
       }
     },
     tickets: {

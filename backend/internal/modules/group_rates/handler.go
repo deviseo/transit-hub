@@ -45,6 +45,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		Search:   query.Get("search"),
 		Type:     query.Get("type"),
 		Platform: query.Get("platform"),
+		Status:   query.Get("status"),
+		Sort:     query.Get("sort"),
 	})
 	if err != nil {
 		log.Printf("list group rates: %v", err)

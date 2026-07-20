@@ -15,6 +15,7 @@ const props = defineProps<{
   open: boolean
   mapping: MySiteMapping | null
   upstreamMultipliers: Map<string, number>
+  upstreamLabels?: Map<string, string>
   availableBots: BotOption[]
   saving?: boolean
 }>()
@@ -107,6 +108,8 @@ const primaryUpstreamKey = computed({
 const getUpstreamMultiplier = (siteId: string, groupName: string): number | null => {
   return props.upstreamMultipliers.get(`${siteId}::${groupName}`) ?? null
 }
+
+const getUpstreamLabel = (siteId: string): string => props.upstreamLabels?.get(siteId) ?? siteId
 
 const referenceMultiplier = computed<number | null>(() => {
   const targets = upstreamTargets.value
@@ -336,7 +339,7 @@ const parseNumberInput = (value: string): number | null => {
                         :key="`${target.siteId}::${target.groupName}`"
                         :value="`${target.siteId}::${target.groupName}`"
                       >
-                        {{ target.groupName }} ({{ target.siteId }}){{ getUpstreamMultiplier(target.siteId, target.groupName) != null ? ` — ${Number(getUpstreamMultiplier(target.siteId, target.groupName)!.toFixed(4))}×` : '' }}
+                        {{ target.groupName }} · {{ getUpstreamLabel(target.siteId) }}{{ getUpstreamMultiplier(target.siteId, target.groupName) != null ? ` · ${Number(getUpstreamMultiplier(target.siteId, target.groupName)!.toFixed(4))}×` : '' }}
                       </option>
                     </select>
                   </div>
