@@ -273,9 +273,9 @@ func TestActions_Sub2APIRestoreTargetFailureReturnsFailedAction(t *testing.T) {
 	}
 }
 
-// TestActions_NewAPITargetRemoteActionIsUnsupported 验证 NewAPI target 维度远端动作本任务
-// 不强制实现，明确返回 unsupported，不伪造 RealConnection、不误调用 sub2api 接口。
-func TestActions_NewAPITargetRemoteActionIsUnsupported(t *testing.T) {
+// TestActions_NewAPITargetRemoteActionDisablesChannel 验证独立 New API target 降级时直接更新
+// channel weight/status，不依赖旧 RealConnection。
+func TestActions_NewAPITargetRemoteActionDisablesChannel(t *testing.T) {
 	platform := &fakePlatformActioner{}
 	dispatcher := newRemoteActionDispatcher(fakeSiteLookup{}, fakeSessionProvider{}, platform)
 
@@ -285,11 +285,11 @@ func TestActions_NewAPITargetRemoteActionIsUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if action != RemoteActionUnsupported {
-		t.Fatalf("expected unsupported for newapi target, got %s", action)
+	if action != "newapi_channel_disabled" {
+		t.Fatalf("expected newapi channel disable action, got %s", action)
 	}
-	if len(platform.sub2APICalls) != 0 || len(platform.calls) != 0 {
-		t.Fatalf("expected no upstream calls for unsupported newapi target action, sub2api=%+v newapi=%+v", platform.sub2APICalls, platform.calls)
+	if len(platform.sub2APICalls) != 0 || len(platform.calls) != 1 || platform.calls[0].weight != 0 || platform.calls[0].status != 2 {
+		t.Fatalf("expected one newapi disable call, sub2api=%+v newapi=%+v", platform.sub2APICalls, platform.calls)
 	}
 }
 

@@ -65,7 +65,10 @@ export interface AdminGroupHealthSummary {
   probeableAccounts: number
   unprobeableAccounts: number
   healthyModels: number
+  // degradedModels 为兼容旧版，仍包含 degraded + observing + recovering。
   degradedModels: number
+  observingModels?: number
+  recoveringModels?: number
   suspendedModels: number
   disabledModels: number
   unconfiguredModels: number
@@ -77,12 +80,19 @@ export interface TargetPolicyAssignmentSummary {
   policyId: string
   policyName: string
   enabled: boolean
+  priorityMode?: ConnectionHealthPriorityMode
+  autoRemoteActionEnabled?: boolean
 }
 
 // TargetPolicyAssignments 是策略分配管理接口 GET/PUT 的响应体。
 export interface TargetPolicyAssignments {
   policyIds: string[]
   policies: TargetPolicyAssignmentSummary[]
+}
+
+export interface AdminGroupUnprobedModel {
+  modelName: string
+  providerFamily: string
 }
 
 export interface AdminGroupAccount {
@@ -104,11 +114,19 @@ export interface AdminGroupAccount {
   probeAvailable: boolean
   probeUnavailableReason?: AdminProbeUnavailableReason | string
   modelHealth: ModelHealth[]
+  // 新后端单独返回尚无状态的配置模型；旧后端缺失该字段时按空数组兼容。
+  unprobedModels?: AdminGroupUnprobedModel[]
   // 策略分配字段：与 probeAvailable 完全解耦——未分配策略仍可手动一次性探活，只是不会被
   // 调度器自动探活。旧后端响应不带这些字段时前端按「未分配」兜底展示，不强制要求存在。
   assignedPolicyIds?: string[]
   assignedPolicies?: TargetPolicyAssignmentSummary[]
   hasAssignedPolicy?: boolean
+  hasEnabledPolicy?: boolean
+  policyAssignmentSource?: 'none' | 'target' | 'group' | 'mixed' | string
+  excludedFromGroupPolicy?: boolean
+  priorityManaged?: boolean
+  priorityConflict?: boolean
+  effectiveMultiplier?: number | null
 }
 
 export interface AdminGroupHealth {
@@ -122,6 +140,14 @@ export interface AdminGroupHealth {
   multiplier: number | null
   multiplierDisplay: string
   accountCount: number
+  monitoredAccountCount?: number
+  excludedAccountCount?: number
+  assignedPolicyIds?: string[]
+  assignedPolicies?: TargetPolicyAssignmentSummary[]
+  hasAssignedPolicy?: boolean
+  hasEnabledPolicy?: boolean
+  priorityMode?: ConnectionHealthPriorityMode
+  priorityConflictCount?: number
   healthSummary: AdminGroupHealthSummary
   // accountsError 非空（i18n key）表示该分组账号列表加载失败，其余分组不受影响。
   accountsError?: string
@@ -190,6 +216,7 @@ export interface ConnectionHealthPolicy {
   recoveryStepPercent: number
   autoDegradeEnabled: boolean
   autoRemoteActionEnabled: boolean
+  priorityMode?: ConnectionHealthPriorityMode
   dailyProbeBudget: number
   createdAt: string
   updatedAt: string
@@ -244,6 +271,25 @@ export interface PolicyInput {
   recoveryStepPercent?: number
   autoDegradeEnabled: boolean
   autoRemoteActionEnabled: boolean
+  priorityMode?: ConnectionHealthPriorityMode
   dailyProbeBudget?: number
   modelTargets: ModelTargetInput[]
+}
+
+export type ConnectionHealthPriorityMode = 'none' | 'multiplier'
+
+// AdminGroupPolicyConfiguration 对应分组级动态策略配置。排除列表只影响分组继承，不会清除
+// 旧版逐 target 显式分配，保证已上线配置继续生效。
+export interface AdminGroupPolicyConfiguration {
+  adminGroupId: string
+  adminGroupName: string
+  policyIds: string[]
+  policies: TargetPolicyAssignmentSummary[]
+  excludedTargetIds: string[]
+}
+
+export interface AdminGroupPolicyConfigurationInput {
+  policyIds: string[]
+  excludedTargetIds: string[]
+  quickPolicy?: PolicyInput
 }

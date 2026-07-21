@@ -132,7 +132,10 @@ func transitionOnSuccess(in TransitionInput, step int) TransitionOutput {
 
 	case StateObserving:
 		out.ObservingUntil = in.ObservingUntil
-		if out.ConsecutiveSuccesses >= successThreshold(in.Policy) {
+		// 观察期和连续成功阈值必须同时满足。旧数据可能没有 observing_until，
+		// 此时只按成功阈值判断，保持升级前已进入 observing 的状态可继续恢复。
+		observationFinished := in.ObservingUntil == nil || !in.Now.Before(*in.ObservingUntil)
+		if observationFinished && out.ConsecutiveSuccesses >= successThreshold(in.Policy) {
 			out.NextState = StateRecovering
 			out.Weight = minInt(100, step)
 			out.TriggerRemoteRestore = true

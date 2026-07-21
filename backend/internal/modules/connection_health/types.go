@@ -42,6 +42,14 @@ const (
 	ProviderCustom    = "custom"
 )
 
+// PriorityMode 控制策略是否同步上游账号/渠道的调度优先级。空值和 none 都保持旧行为；
+// multiplier 表示在健康状态优先的前提下，按 admin 分组原始倍率从低到高排序，并把排序结果
+// 映射为上游平台的 priority。使用字符串常量是为了兼容数据库中未来扩展其它排序模式。
+const (
+	PriorityModeNone       = "none"
+	PriorityModeMultiplier = "multiplier"
+)
+
 const (
 	ErrorRequest          = "admin.connectionHealth.errors.request"
 	ErrorUnknown          = "admin.connectionHealth.errors.unknown"
@@ -77,6 +85,66 @@ type PolicyAssignment struct {
 	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
+// GroupPolicyAssignment 表示「admin 上游分组 -> 健康策略」的动态分配关系。与旧的 target
+// 分配并存：调度器每轮从上游重新读取分组账号/渠道，因此分组后续新增的目标会自动继承策略。
+type GroupPolicyAssignment struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"-"`
+	AdminAccountID string    `json:"-"`
+	AdminGroupID   string    `json:"adminGroupId"`
+	AdminGroupName string    `json:"adminGroupName"`
+	PolicyID       string    `json:"policyId"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// GroupTargetExclusion 是分组策略的目标级例外。排除只阻止目标继承该分组的策略，不会覆盖
+// 目标原有的显式 PolicyAssignment，保证旧版逐目标配置继续生效。
+type GroupTargetExclusion struct {
+	ID             string    `json:"id"`
+	UserID         string    `json:"-"`
+	AdminAccountID string    `json:"-"`
+	AdminGroupID   string    `json:"adminGroupId"`
+	TargetID       string    `json:"targetId"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// PrioritySyncState 记录倍率策略接管目标前的优先级和最后一次系统写入值。同步前若发现上游
+// 当前值不等于 LastAppliedPriority，说明管理员在上游做过人工修改；系统标记 Conflict 并停止
+// 覆盖。策略停止管理后，仅在上游值仍等于最后写入值时恢复 OriginalPriority。
+type PrioritySyncState struct {
+	UserID              string `json:"-"`
+	AdminAccountID      string `json:"-"`
+	TargetID            string `json:"targetId"`
+	OriginalPriority    int    `json:"originalPriority"`
+	LastAppliedPriority int    `json:"lastAppliedPriority"`
+	// PendingPriority is persisted before an upstream write. If the process dies or the
+	// database write after the upstream call fails, the next tick can confirm the value
+	// instead of treating a successful system write as a manual conflict.
+	PendingPriority      *int      `json:"-"`
+	EffectiveMultiplier  float64   `json:"effectiveMultiplier"`
+	Conflict             bool      `json:"conflict"`
+	LastConflictPriority *int      `json:"lastConflictPriority,omitempty"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+}
+
+// TargetActionState 记录分组健康首次接管账号/渠道启停或权重前的上游状态。
+// 健康恢复后只能恢复到这里保存的原值，不能假设账号原本一定启用或权重一定为 100。
+type TargetActionState struct {
+	UserID            string
+	AdminAccountID    string
+	TargetID          string
+	OriginalStatus    string
+	OriginalWeight    *int
+	LastAppliedStatus string
+	LastAppliedWeight *int
+	PendingStatus     string
+	PendingWeight     *int
+	Conflict          bool
+	UpdatedAt         time.Time
+}
+
 // Policy 对应 connection_health_policies 表：一条健康探活/降级策略，
 // 按 own_group_id 匹配对接链路（own_group_id 为空表示匹配该 workspace 下全部已对接分组）。
 type Policy struct {
@@ -97,6 +165,7 @@ type Policy struct {
 	RecoveryStepPercent     int       `json:"recoveryStepPercent"`
 	AutoDegradeEnabled      bool      `json:"autoDegradeEnabled"`
 	AutoRemoteActionEnabled bool      `json:"autoRemoteActionEnabled"`
+	PriorityMode            string    `json:"priorityMode"`
 	DailyProbeBudget        int       `json:"dailyProbeBudget"`
 	CreatedAt               time.Time `json:"createdAt"`
 	UpdatedAt               time.Time `json:"updatedAt"`
@@ -154,6 +223,8 @@ type ConnectionHealthEvent struct {
 	ModelName         string
 	UserID            string
 	AdminAccountID    string
+	PolicyID          string
+	AdminGroupID      string
 	OwnGroupName      string
 	UpstreamSiteID    string
 	UpstreamGroupName string

@@ -3,6 +3,7 @@ package connection_health
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,14 +18,25 @@ import (
 
 // fakeRepository 是 healthRepository 的内存实现，供 service 单测使用，不连接真实数据库。
 type fakeRepository struct {
-	policies    []Policy
-	states      map[string]map[string]ConnectionHealthState // connectionID -> modelName -> state
-	events      []ConnectionHealthEvent
-	assignments []PolicyAssignment
+	policies           []Policy
+	states             map[string]map[string]ConnectionHealthState // connectionID -> modelName -> state
+	events             []ConnectionHealthEvent
+	assignments        []PolicyAssignment
+	groupAssignments   []GroupPolicyAssignment
+	groupExclusions    []GroupTargetExclusion
+	priorityStates     map[string]PrioritySyncState
+	targetActionStates map[string]TargetActionState
+	budgetClaims       map[string]int
+	savePolicyErr      error
 }
 
 func newFakeRepository() *fakeRepository {
-	return &fakeRepository{states: map[string]map[string]ConnectionHealthState{}}
+	return &fakeRepository{
+		states:             map[string]map[string]ConnectionHealthState{},
+		priorityStates:     map[string]PrioritySyncState{},
+		targetActionStates: map[string]TargetActionState{},
+		budgetClaims:       map[string]int{},
+	}
 }
 
 func (f *fakeRepository) EnsureSchema(ctx context.Context) error { return nil }
@@ -79,6 +91,57 @@ func (f *fakeRepository) ReplaceModelTargets(ctx context.Context, policyID strin
 		}
 	}
 	return nil
+}
+
+func (f *fakeRepository) SavePolicyWithTargets(ctx context.Context, policy Policy, targets []ModelTarget) error {
+	if f.savePolicyErr != nil {
+		return f.savePolicyErr
+	}
+	policy.ModelTargets = append([]ModelTarget(nil), targets...)
+	for i, existing := range f.policies {
+		if existing.ID == policy.ID {
+			f.policies[i] = policy
+			return nil
+		}
+	}
+	f.policies = append(f.policies, policy)
+	return nil
+}
+
+func TestSavePolicy_RepositoryFailureLeavesExistingPolicyUntouched(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Name: "before", Enabled: true,
+		ModelTargets: []ModelTarget{{ID: "old-target", PolicyID: "p1", ModelName: "old-model", Enabled: true}},
+	}}
+	repo.savePolicyErr = errors.New("transaction failed")
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	_, err := service.SavePolicy(context.Background(), "user1", PolicyInput{
+		ID: "p1", Name: "after", Enabled: false,
+		ModelTargets: []ModelTargetInput{{ModelName: "new-model", Enabled: true}},
+	})
+	if err == nil {
+		t.Fatal("expected repository transaction failure")
+	}
+	if len(repo.policies) != 1 || repo.policies[0].Name != "before" || !repo.policies[0].Enabled {
+		t.Fatalf("failed atomic save must not mutate the policy: %+v", repo.policies)
+	}
+	if len(repo.policies[0].ModelTargets) != 1 || repo.policies[0].ModelTargets[0].ModelName != "old-model" {
+		t.Fatalf("failed atomic save must retain old model targets: %+v", repo.policies[0].ModelTargets)
+	}
+}
+
+func TestBuildPolicyAndTargets_DisablesRemoteActionWithoutAutoDegrade(t *testing.T) {
+	policy, _, err := buildPolicyAndTargets("user1", "ws1", "p1", PolicyInput{
+		Name: "monitor only", AutoDegradeEnabled: false, AutoRemoteActionEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if policy.AutoRemoteActionEnabled {
+		t.Fatal("remote action must be normalized off when automatic degradation is disabled")
+	}
 }
 
 func (f *fakeRepository) ListStatesByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthState, error) {
@@ -144,14 +207,44 @@ func (f *fakeRepository) ListRecentEventsByWorkspace(ctx context.Context, userID
 	return out, nil
 }
 
-func (f *fakeRepository) CountProbesToday(ctx context.Context, userID string, adminAccountID string, dayStart time.Time) (int, error) {
+func (f *fakeRepository) CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error) {
 	count := 0
 	for _, e := range f.events {
-		if e.UserID == userID && e.AdminAccountID == adminAccountID && isProbeResultString(e.Result) {
+		if e.UserID == userID && e.AdminAccountID == adminAccountID && e.PolicyID == policyID && isProbeResultString(e.Result) {
 			count++
 		}
 	}
+	key := userID + "|" + adminAccountID + "|" + policyID + "|" + dayStart.Format(time.RFC3339)
+	if claimed := f.budgetClaims[key]; claimed > count {
+		return claimed, nil
+	}
 	return count, nil
+}
+
+func (f *fakeRepository) TryConsumeProbeBudget(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time, limit int) (bool, error) {
+	key := userID + "|" + adminAccountID + "|" + policyID + "|" + dayStart.Format(time.RFC3339)
+	if _, initialized := f.budgetClaims[key]; !initialized {
+		count := 0
+		for _, event := range f.events {
+			if event.UserID == userID && event.AdminAccountID == adminAccountID && event.PolicyID == policyID && isProbeResultString(event.Result) {
+				count++
+			}
+		}
+		f.budgetClaims[key] = count
+	}
+	if f.budgetClaims[key] >= limit {
+		return false, nil
+	}
+	f.budgetClaims[key]++
+	return true, nil
+}
+
+func (f *fakeRepository) TryAcquireSchedulerLease(ctx context.Context) (func(), bool, error) {
+	return func() {}, true, nil
+}
+
+func (f *fakeRepository) AcquireTargetLease(ctx context.Context, targetID string) (func(), error) {
+	return func() {}, nil
 }
 
 func isProbeResultString(result string) bool {
@@ -202,6 +295,143 @@ func (f *fakeRepository) ListAllPolicyAssignments(ctx context.Context) ([]Policy
 	out := make([]PolicyAssignment, len(f.assignments))
 	copy(out, f.assignments)
 	return out, nil
+}
+
+func (f *fakeRepository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+	assignments := make([]GroupPolicyAssignment, 0, len(f.groupAssignments)+len(policyIDs))
+	for _, assignment := range f.groupAssignments {
+		if assignment.UserID == userID && assignment.AdminAccountID == adminAccountID && assignment.AdminGroupID == adminGroupID {
+			continue
+		}
+		assignments = append(assignments, assignment)
+	}
+	for i, policyID := range policyIDs {
+		assignments = append(assignments, GroupPolicyAssignment{
+			ID: fmt.Sprintf("%s::%s::%d", adminGroupID, policyID, i), UserID: userID,
+			AdminAccountID: adminAccountID, AdminGroupID: adminGroupID, AdminGroupName: adminGroupName, PolicyID: policyID,
+		})
+	}
+	f.groupAssignments = assignments
+
+	exclusions := make([]GroupTargetExclusion, 0, len(f.groupExclusions)+len(excludedTargetIDs))
+	for _, exclusion := range f.groupExclusions {
+		if exclusion.UserID == userID && exclusion.AdminAccountID == adminAccountID && exclusion.AdminGroupID == adminGroupID {
+			continue
+		}
+		exclusions = append(exclusions, exclusion)
+	}
+	for i, targetID := range excludedTargetIDs {
+		exclusions = append(exclusions, GroupTargetExclusion{
+			ID: fmt.Sprintf("%s::%s::%d", adminGroupID, targetID, i), UserID: userID,
+			AdminAccountID: adminAccountID, AdminGroupID: adminGroupID, TargetID: targetID,
+		})
+	}
+	f.groupExclusions = exclusions
+	for _, targetID := range groupTargetIDs {
+		key := userID + "|" + adminAccountID + "|" + targetID
+		if state, ok := f.priorityStates[key]; ok && state.Conflict {
+			delete(f.priorityStates, key)
+		}
+		if state, ok := f.targetActionStates[key]; ok && state.Conflict {
+			delete(f.targetActionStates, key)
+		}
+	}
+	return nil
+}
+
+func (f *fakeRepository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+	policy.ModelTargets = append([]ModelTarget(nil), targets...)
+	f.policies = append(f.policies, policy)
+	return f.ReplaceGroupPolicyConfiguration(ctx, policy.UserID, policy.AdminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs)
+}
+
+func (f *fakeRepository) ListGroupPolicyAssignmentsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupPolicyAssignment, error) {
+	out := make([]GroupPolicyAssignment, 0)
+	for _, assignment := range f.groupAssignments {
+		if assignment.UserID == userID && assignment.AdminAccountID == adminAccountID {
+			out = append(out, assignment)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListAllGroupPolicyAssignments(ctx context.Context) ([]GroupPolicyAssignment, error) {
+	return append([]GroupPolicyAssignment(nil), f.groupAssignments...), nil
+}
+
+func (f *fakeRepository) ListGroupTargetExclusionsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupTargetExclusion, error) {
+	out := make([]GroupTargetExclusion, 0)
+	for _, exclusion := range f.groupExclusions {
+		if exclusion.UserID == userID && exclusion.AdminAccountID == adminAccountID {
+			out = append(out, exclusion)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListAllGroupTargetExclusions(ctx context.Context) ([]GroupTargetExclusion, error) {
+	return append([]GroupTargetExclusion(nil), f.groupExclusions...), nil
+}
+
+func (f *fakeRepository) ListPrioritySyncStates(ctx context.Context, userID string, adminAccountID string) ([]PrioritySyncState, error) {
+	out := make([]PrioritySyncState, 0)
+	for _, state := range f.priorityStates {
+		if state.UserID == userID && state.AdminAccountID == adminAccountID {
+			out = append(out, state)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListAllPrioritySyncStates(ctx context.Context) ([]PrioritySyncState, error) {
+	out := make([]PrioritySyncState, 0, len(f.priorityStates))
+	for _, state := range f.priorityStates {
+		out = append(out, state)
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error {
+	if f.priorityStates == nil {
+		f.priorityStates = map[string]PrioritySyncState{}
+	}
+	f.priorityStates[state.UserID+"|"+state.AdminAccountID+"|"+state.TargetID] = state
+	return nil
+}
+
+func (f *fakeRepository) DeletePrioritySyncState(ctx context.Context, userID string, adminAccountID string, targetID string) error {
+	delete(f.priorityStates, userID+"|"+adminAccountID+"|"+targetID)
+	return nil
+}
+
+func (f *fakeRepository) GetTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) (*TargetActionState, error) {
+	state, ok := f.targetActionStates[userID+"|"+adminAccountID+"|"+targetID]
+	if !ok {
+		return nil, nil
+	}
+	copy := state
+	return &copy, nil
+}
+
+func (f *fakeRepository) ListAllTargetActionStates(ctx context.Context) ([]TargetActionState, error) {
+	states := make([]TargetActionState, 0, len(f.targetActionStates))
+	for _, state := range f.targetActionStates {
+		states = append(states, state)
+	}
+	return states, nil
+}
+
+func (f *fakeRepository) UpsertTargetActionState(ctx context.Context, state TargetActionState) error {
+	if f.targetActionStates == nil {
+		f.targetActionStates = map[string]TargetActionState{}
+	}
+	f.targetActionStates[state.UserID+"|"+state.AdminAccountID+"|"+state.TargetID] = state
+	return nil
+}
+
+func (f *fakeRepository) DeleteTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) error {
+	delete(f.targetActionStates, userID+"|"+adminAccountID+"|"+targetID)
+	return nil
 }
 
 // fakeMySitesReader 是 MySitesReader 的内存实现。
@@ -257,6 +487,10 @@ func (noopRemoteActionRunner) DegradeTarget(ctx context.Context, session upstrea
 }
 
 func (noopRemoteActionRunner) RestoreTarget(ctx context.Context, session upstream.Session, target AdminProbeTarget, state ConnectionHealthState) (string, error) {
+	return "", nil
+}
+
+func (noopRemoteActionRunner) ApplyTargetState(ctx context.Context, session upstream.Session, target AdminProbeTarget, weight *int, status string) (string, error) {
 	return "", nil
 }
 

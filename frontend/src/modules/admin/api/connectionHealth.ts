@@ -1,4 +1,6 @@
 import type {
+  AdminGroupPolicyConfiguration,
+  AdminGroupPolicyConfigurationInput,
   AdminGroupHealth,
   ConnectionHealthEvent,
   ConnectionHealthOverview,
@@ -119,6 +121,20 @@ export const setTargetPolicyAssignments = async (targetId: string, policyIds: st
     method: 'PUT',
     body: JSON.stringify({ policyIds }),
   })
+
+export const getAdminGroupPolicyConfiguration = async (adminGroupId: string): Promise<AdminGroupPolicyConfiguration> =>
+  requestJson<AdminGroupPolicyConfiguration>(
+    `/connection-health/admin-groups/${encodeURIComponent(adminGroupId)}/policy-configuration`,
+  )
+
+export const setAdminGroupPolicyConfiguration = async (
+  adminGroupId: string,
+  input: AdminGroupPolicyConfigurationInput,
+): Promise<AdminGroupPolicyConfiguration> =>
+  requestJson<AdminGroupPolicyConfiguration>(
+    `/connection-health/admin-groups/${encodeURIComponent(adminGroupId)}/policy-configuration`,
+    { method: 'PUT', body: JSON.stringify(input) },
+  )
 
 export const disableConnection = async (connectionId: string): Promise<void> => {
   await requestJson<{ ok: boolean }>(`/connection-health/connections/${encodeURIComponent(connectionId)}/disable`, {

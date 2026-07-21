@@ -24,7 +24,56 @@ type adminProbeJob struct {
 	session        upstream.Session
 	target         AdminProbeTarget
 	account        upstream.AdminGroupAccountInfo
+	models         []probeModelSpec
 	dueSpecs       []probeModelSpec
+}
+
+type probePolicyEventGroup struct {
+	resolved       bool
+	adminGroupID   string
+	adminGroupName string
+}
+
+type adminInventoryGroup struct {
+	group    upstream.AdminGroupInfo
+	accounts []upstream.AdminGroupAccountInfo
+	err      error
+}
+
+type adminWorkspaceInventory struct {
+	session upstream.Session
+	groups  []adminInventoryGroup
+}
+
+type adminInventoryCacheEntry struct {
+	inventory *adminWorkspaceInventory
+	err       error
+}
+
+type adminInventoryCache map[string]adminInventoryCacheEntry
+
+func (s *Service) loadAdminInventory(ctx context.Context, userID string, adminAccountID string, cache adminInventoryCache) (*adminWorkspaceInventory, error) {
+	key := userID + "|" + adminAccountID
+	if cached, ok := cache[key]; ok {
+		return cached.inventory, cached.err
+	}
+	session, err := s.mySites.RequireSession(ctx, userID, adminAccountID)
+	if err != nil {
+		cache[key] = adminInventoryCacheEntry{err: err}
+		return nil, err
+	}
+	groups, err := s.platformGroups.FetchAdminAllGroups(session)
+	if err != nil {
+		cache[key] = adminInventoryCacheEntry{err: err}
+		return nil, err
+	}
+	inventory := &adminWorkspaceInventory{session: session, groups: make([]adminInventoryGroup, 0, len(groups))}
+	for _, group := range groups {
+		accounts, accountsErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		inventory.groups = append(inventory.groups, adminInventoryGroup{group: group, accounts: accounts, err: accountsErr})
+	}
+	cache[key] = adminInventoryCacheEntry{inventory: inventory}
+	return inventory, nil
 }
 
 // StartScheduler 启动后台探活调度：立即跑一次，之后每 30s 一次。tick 和每个探活 goroutine
@@ -51,12 +100,20 @@ func (s *Service) runSchedulerTickSafely(ctx context.Context) {
 			log.Printf("[connection-health] scheduler tick panic recovered: %v", r)
 		}
 	}()
+	release, acquired, err := s.repo.TryAcquireSchedulerLease(ctx)
+	if err != nil {
+		log.Printf("[connection-health] acquire scheduler lease failed: %v", err)
+		return
+	}
+	if !acquired {
+		return
+	}
+	defer release()
 	s.runSchedulerTick(ctx)
 }
 
-// runSchedulerTick 扫描全部已启用策略 + 全部策略分配关系，按 workspace 生成独立 admin 探活
-// 目标，挑出到期的 (target, model) 任务并发探活。未显式分配策略的 target 直接跳过（见
-// collectAdminProbeJobs）。单轮最多处理 maxJobsPerTick 个模型任务，全局并发 5，单 workspace 并发 2。
+// runSchedulerTick 扫描全部已启用策略、旧版 target 分配和新版 admin 分组分配，按 workspace
+// 生成独立探活目标。分组新增的账号/渠道会在下一轮扫描时自动继承，无需写入额外 target 行。
 func (s *Service) runSchedulerTick(ctx context.Context) {
 	if s.platformGroups == nil {
 		return
@@ -66,20 +123,44 @@ func (s *Service) runSchedulerTick(ctx context.Context) {
 		log.Printf("[connection-health] scheduler list policies failed: %v", err)
 		return
 	}
-	if len(policies) == 0 {
-		return
-	}
 	assignments, err := s.repo.ListAllPolicyAssignments(ctx)
 	if err != nil {
 		log.Printf("[connection-health] scheduler list policy assignments failed: %v", err)
 		return
 	}
-	if len(assignments) == 0 {
-		// 没有任何账号/channel 被显式分配过策略：不自动探活任何目标。
+	groupAssignments, err := s.repo.ListAllGroupPolicyAssignments(ctx)
+	if err != nil {
+		log.Printf("[connection-health] scheduler list group policy assignments failed: %v", err)
+		return
+	}
+	exclusions, err := s.repo.ListAllGroupTargetExclusions(ctx)
+	if err != nil {
+		log.Printf("[connection-health] scheduler list group target exclusions failed: %v", err)
+		return
+	}
+	priorityStates, err := s.repo.ListAllPrioritySyncStates(ctx)
+	if err != nil {
+		log.Printf("[connection-health] scheduler list priority sync states failed: %v", err)
+		return
+	}
+	targetActionStates, err := s.repo.ListAllTargetActionStates(ctx)
+	if err != nil {
+		log.Printf("[connection-health] scheduler list target action states failed: %v", err)
+		return
+	}
+	if len(assignments) == 0 && len(groupAssignments) == 0 && len(priorityStates) == 0 && len(targetActionStates) == 0 {
+		// 没有任何显式或分组分配：不解析凭据、不探活、不修改优先级。
 		return
 	}
 
-	jobs := s.collectAdminProbeJobs(ctx, policies, assignments)
+	// 优先级同步和探活使用同一份有效策略关系。优先级写入失败只记录日志，不阻断探活。
+	inventoryCache := make(adminInventoryCache)
+	s.syncMultiplierPrioritiesWithCache(ctx, policies, assignments, groupAssignments, exclusions, priorityStates, inventoryCache)
+	s.restoreUnmanagedTargetActions(ctx, policies, assignments, groupAssignments, exclusions, targetActionStates, inventoryCache)
+	if len(policies) == 0 {
+		return
+	}
+	jobs := s.collectAdminProbeJobsWithGroupsAndCache(ctx, policies, assignments, groupAssignments, exclusions, inventoryCache)
 	if len(jobs) == 0 {
 		return
 	}
@@ -115,6 +196,12 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 			log.Printf("[connection-health] admin probe goroutine panic recovered target_id=%s: %v", j.target.TargetID, r)
 		}
 	}()
+	release, err := s.repo.AcquireTargetLease(ctx, j.target.TargetID)
+	if err != nil {
+		log.Printf("[connection-health] acquire target lease failed target_id=%s err=%v", j.target.TargetID, err)
+		return
+	}
+	defer release()
 
 	cred, err := s.platformGroups.ResolveProbeCredential(j.session, j.account)
 	if err != nil {
@@ -122,11 +209,18 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 		s.recordTargetCredentialUnavailable(ctx, j.userID, j.adminAccountID, j.target, j.dueSpecs, reason)
 		return
 	}
+	results := make([]targetProbeResult, 0, len(j.dueSpecs))
 	for _, spec := range j.dueSpecs {
-		if _, err := s.probeTargetOnce(ctx, j.userID, j.adminAccountID, j.session, j.target, cred, spec); err != nil {
+		result, err := s.probeTargetOnce(ctx, j.userID, j.adminAccountID, j.target, cred, spec)
+		if err != nil {
 			log.Printf("[connection-health] scheduled target probe failed target_id=%s model=%s err=%v", j.target.TargetID, spec.modelName, err)
+			continue
+		}
+		if result != nil {
+			results = append(results, *result)
 		}
 	}
+	s.finishTargetProbeBatch(ctx, j.userID, j.adminAccountID, j.session, j.target, j.models, results)
 }
 
 // recordTargetCredentialUnavailable 在凭据解析失败时，对每个到期模型回填 last_probe_at（按探活
@@ -149,12 +243,14 @@ func (s *Service) recordTargetCredentialUnavailable(ctx context.Context, userID 
 		next.LastProbeAt = &now
 		next.LastErrorKey = reason
 		next.LastErrorDetail = ""
-		next.LastRemoteAction = ""
+		// LastRemoteAction 也是旧版本判断「该上游状态是否由健康模块接管」的兼容证据。
+		// 凭据暂时不可用只更新探活错误，不能抹掉此前成功执行的远端动作。
 		if err := s.repo.UpsertState(ctx, next); err != nil {
 			log.Printf("[connection-health] upsert unavailable target state failed target_id=%s model=%s err=%v", target.TargetID, spec.modelName, err)
 			continue
 		}
-		s.recordTargetEvent(ctx, userID, adminAccountID, target, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "")
+		eventTarget := targetForProbeSpec(target, spec)
+		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, spec.policy.ID, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "")
 	}
 }
 
@@ -165,6 +261,14 @@ func (s *Service) recordTargetCredentialUnavailable(ctx context.Context, userID 
 // assignments 是全部 workspace 的「target 显式分配策略」关系：只有分配了至少一条已启用策略的
 // target 才会被本函数处理；未分配的 target 不解析凭据、不计入 dueSpecs、不生成任何 job。
 func (s *Service) collectAdminProbeJobs(ctx context.Context, policies []Policy, assignments []PolicyAssignment) []adminProbeJob {
+	return s.collectAdminProbeJobsWithGroups(ctx, policies, assignments, nil, nil)
+}
+
+func (s *Service) collectAdminProbeJobsWithGroups(ctx context.Context, policies []Policy, assignments []PolicyAssignment, groupAssignments []GroupPolicyAssignment, exclusions []GroupTargetExclusion) []adminProbeJob {
+	return s.collectAdminProbeJobsWithGroupsAndCache(ctx, policies, assignments, groupAssignments, exclusions, make(adminInventoryCache))
+}
+
+func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, policies []Policy, assignments []PolicyAssignment, groupAssignments []GroupPolicyAssignment, exclusions []GroupTargetExclusion, inventoryCache adminInventoryCache) []adminProbeJob {
 	// 按 workspace 归拢策略。
 	type workspace struct {
 		userID         string
@@ -188,10 +292,15 @@ func (s *Service) collectAdminProbeJobs(ctx context.Context, policies []Policy, 
 	// 分配指向的策略如果已被禁用/删除（不在 policies/policyByID 中），对应分配行会被忽略，
 	// 相当于该 target 暂时没有生效的分配。
 	assignedByWorkspace := assignedEnabledPoliciesByTarget(policies, assignments)
+	assignedGroupsByWorkspace := assignedEnabledPoliciesByGroup(policies, groupAssignments)
+	excludedByWorkspace := groupTargetExclusionIndex(exclusions)
 
 	jobs := make([]adminProbeJob, 0, maxJobsPerTick)
 	now := time.Now()
 	modelBudget := maxJobsPerTick
+	budgetUsage := make(map[string]int)
+	budgetLoaded := make(map[string]bool)
+	dayStart := probeBudgetDayStart(time.Now())
 
 	for _, key := range order {
 		if modelBudget <= 0 {
@@ -201,38 +310,42 @@ func (s *Service) collectAdminProbeJobs(ctx context.Context, policies []Policy, 
 		// 该 workspace 下没有任何 target 被分配过策略：直接跳过，不建 session、不拉分组/账号，
 		// 避免为完全没有分配关系的 workspace 发起任何上游调用。
 		assignedTargets := assignedByWorkspace[key]
-		if len(assignedTargets) == 0 {
+		assignedGroups := assignedGroupsByWorkspace[key]
+		if len(assignedTargets) == 0 && len(assignedGroups) == 0 {
 			continue
 		}
 		// 若该 workspace 的策略没有任何启用的模型目标，直接跳过，避免无谓地拉取分组/账号。
 		if !hasEnabledModelTarget(ws.policies) {
 			continue
 		}
-		session, err := s.mySites.RequireSession(ctx, ws.userID, ws.adminAccountID)
+		inventory, err := s.loadAdminInventory(ctx, ws.userID, ws.adminAccountID, inventoryCache)
 		if err != nil {
-			log.Printf("[connection-health] scheduler require session failed user_id=%s admin_account_id=%s err=%v", ws.userID, ws.adminAccountID, err)
+			log.Printf("[connection-health] scheduler load admin inventory failed user_id=%s admin_account_id=%s err=%v", ws.userID, ws.adminAccountID, err)
 			continue
 		}
+		session := inventory.session
 		platform := string(session.Platform)
-		groups, err := s.platformGroups.FetchAdminAllGroups(session)
-		if err != nil {
-			log.Printf("[connection-health] scheduler fetch admin groups failed user_id=%s admin_account_id=%s err=%v", ws.userID, ws.adminAccountID, err)
-			continue
-		}
 
-		for _, group := range groups {
+		// 账号/渠道可能同时属于多个 admin 分组。先按稳定 targetId 合并所有来源策略，再生成
+		// 一次任务，避免同一目标在一轮中被重复探活。
+		type targetCandidate struct {
+			target        AdminProbeTarget
+			account       upstream.AdminGroupAccountInfo
+			policies      []Policy
+			policySources map[string]probePolicyEventGroup
+		}
+		candidates := make(map[string]*targetCandidate)
+		targetOrder := make([]string, 0)
+		for _, groupInventory := range inventory.groups {
 			if modelBudget <= 0 {
 				break
 			}
-			accounts, accErr := s.platformGroups.ListAdminGroupAccounts(session, group)
-			if accErr != nil {
-				log.Printf("[connection-health] scheduler list accounts failed group_id=%s err=%v", group.ID, accErr)
+			group := groupInventory.group
+			if groupInventory.err != nil {
+				log.Printf("[connection-health] scheduler list accounts failed group_id=%s err=%v", group.ID, groupInventory.err)
 				continue
 			}
-			for _, acc := range accounts {
-				if modelBudget <= 0 {
-					break
-				}
+			for _, acc := range groupInventory.accounts {
 				target := AdminProbeTarget{
 					TargetID:       buildTargetID(platform, ws.adminAccountID, acc.ID),
 					Platform:       platform,
@@ -241,36 +354,90 @@ func (s *Service) collectAdminProbeJobs(ctx context.Context, policies []Policy, 
 					AccountID:      acc.ID,
 					AccountName:    acc.Name,
 					AccountStatus:  acc.Status,
+					AccountWeight:  cloneIntPointer(acc.Weight),
 					ProviderFamily: acc.Platform,
 					Models:         splitModelList(acc.Models),
 				}
-				// target 没有被分配任何已启用策略：跳过，不解析凭据、不调用 /v1/models、不探活、不写事件。
-				assignedPolicies := assignedTargets[target.TargetID]
-				if len(assignedPolicies) == 0 {
+				inheritedPolicies := assignedGroups[group.ID]
+				if excludedByWorkspace[key][group.ID][target.TargetID] {
+					inheritedPolicies = nil
+				}
+				effectivePolicies := mergePoliciesByID(assignedTargets[target.TargetID], inheritedPolicies)
+				if len(effectivePolicies) == 0 {
 					continue
 				}
-				specs := candidateModelSpecs(target.Models, assignedPolicies)
-				available, _ := targetProbeAvailability(platform, acc.BaseURL, len(specs))
-				if !available {
-					continue
-				}
-				dueSpecs := make([]probeModelSpec, 0, len(specs))
-				for _, spec := range specs {
-					if modelBudget <= 0 {
-						break
+				candidate, exists := candidates[target.TargetID]
+				if !exists {
+					candidate = &targetCandidate{
+						target: target, account: acc, policySources: make(map[string]probePolicyEventGroup),
 					}
-					if !s.isDue(ctx, target.TargetID, spec.modelName, spec.policy, now) {
+					candidates[target.TargetID] = candidate
+					targetOrder = append(targetOrder, target.TargetID)
+				}
+				for _, policy := range assignedTargets[target.TargetID] {
+					// An explicit target assignment has no single group owner, even when the
+					// target is currently being enumerated through a group membership.
+					candidate.policySources[policy.ID] = probePolicyEventGroup{resolved: true}
+				}
+				for _, policy := range inheritedPolicies {
+					if _, alreadyResolved := candidate.policySources[policy.ID]; alreadyResolved {
 						continue
 					}
-					dueSpecs = append(dueSpecs, spec)
-					modelBudget--
+					candidate.policySources[policy.ID] = probePolicyEventGroup{
+						resolved: true, adminGroupID: group.ID, adminGroupName: group.Name,
+					}
 				}
-				if len(dueSpecs) > 0 {
-					jobs = append(jobs, adminProbeJob{
-						userID: ws.userID, adminAccountID: ws.adminAccountID, session: session,
-						target: target, account: acc, dueSpecs: dueSpecs,
-					})
+				candidate.policies = mergePoliciesByID(candidate.policies, effectivePolicies)
+			}
+		}
+
+		for _, targetID := range targetOrder {
+			if modelBudget <= 0 {
+				break
+			}
+			candidate := candidates[targetID]
+			specs := candidateModelSpecs(candidate.target.Models, candidate.policies)
+			for index := range specs {
+				if source, exists := candidate.policySources[specs[index].policy.ID]; exists {
+					specs[index].eventGroupResolved = source.resolved
+					specs[index].eventAdminGroupID = source.adminGroupID
+					specs[index].eventAdminGroupName = source.adminGroupName
 				}
+			}
+			available, _ := targetProbeAvailability(platform, candidate.account.BaseURL, len(specs))
+			if !available {
+				continue
+			}
+			dueSpecs := make([]probeModelSpec, 0, len(specs))
+			for _, spec := range specs {
+				if modelBudget <= 0 {
+					break
+				}
+				if !s.isDue(ctx, candidate.target.TargetID, spec.modelName, spec.policy, now) {
+					continue
+				}
+				budgetKey := ws.userID + "|" + ws.adminAccountID + "|" + spec.policy.ID
+				if !budgetLoaded[budgetKey] {
+					count, countErr := s.repo.CountProbesToday(ctx, ws.userID, ws.adminAccountID, spec.policy.ID, dayStart)
+					if countErr != nil {
+						log.Printf("[connection-health] count policy probe budget failed policy_id=%s err=%v", spec.policy.ID, countErr)
+						continue
+					}
+					budgetUsage[budgetKey] = count
+					budgetLoaded[budgetKey] = true
+				}
+				if budgetUsage[budgetKey] >= probeBudgetLimit(spec.policy) {
+					continue
+				}
+				dueSpecs = append(dueSpecs, spec)
+				budgetUsage[budgetKey]++
+				modelBudget--
+			}
+			if len(dueSpecs) > 0 {
+				jobs = append(jobs, adminProbeJob{
+					userID: ws.userID, adminAccountID: ws.adminAccountID, session: session,
+					target: candidate.target, account: candidate.account, models: specs, dueSpecs: dueSpecs,
+				})
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import type {
   ConnectionHealthEvent,
   ConnectionHealthPolicy,
   ConnectionHealthState,
+  AdminGroupHealth,
   OwnGroupHealth,
 } from '../../types/connectionHealth'
 
@@ -15,6 +16,7 @@ const props = defineProps<{
   open: boolean
   events: ConnectionHealthEvent[]
   groups: OwnGroupHealth[]
+  adminGroups: AdminGroupHealth[]
   policies: ConnectionHealthPolicy[]
   selectedConnectionId: string
   siteName: (id: string) => string
@@ -76,6 +78,77 @@ const connectionMeta = computed(() => {
   return map
 })
 
+type AdminTargetModelMeta = {
+  providerFamily: string
+  state: ConnectionHealthState | ''
+  lastProbeAt: string | null
+  lastLatencyMs: number | null
+  lastRemoteAction: string
+}
+
+type AdminTargetMeta = {
+  groupName: string
+  accountName: string
+  platform: string
+  models: Map<string, AdminTargetModelMeta>
+  policyIds: string[]
+}
+
+// 新版 admin target 不一定存在 real_connection；从 admin 分组主列表补齐当前模型元数据。
+const adminTargetMeta = computed(() => {
+  const map = new Map<string, AdminTargetMeta>()
+  for (const group of props.adminGroups) {
+    for (const account of group.accounts) {
+      const models = new Map<string, AdminTargetModelMeta>()
+      for (const model of account.modelHealth ?? []) {
+        models.set(model.modelName, {
+          providerFamily: model.providerFamily || account.platform || 'custom',
+          state: model.state,
+          lastProbeAt: model.lastProbeAt,
+          lastLatencyMs: model.lastLatencyMs,
+          lastRemoteAction: model.lastRemoteAction ?? '',
+        })
+      }
+      for (const model of account.unprobedModels ?? []) {
+        if (models.has(model.modelName)) continue
+        models.set(model.modelName, {
+          providerFamily: model.providerFamily || account.platform || 'custom',
+          state: '',
+          lastProbeAt: null,
+          lastLatencyMs: null,
+          lastRemoteAction: '',
+        })
+      }
+      const existing = map.get(account.targetId)
+      if (existing) {
+        for (const [modelName, model] of models) existing.models.set(modelName, model)
+        existing.policyIds = Array.from(new Set([
+          ...existing.policyIds,
+          ...(account.assignedPolicyIds ?? []),
+          ...(group.assignedPolicyIds ?? []),
+        ]))
+        continue
+      }
+      map.set(account.targetId, {
+        groupName: group.name,
+        accountName: account.name || account.id,
+        platform: account.platform || group.platform || 'custom',
+        models,
+        policyIds: [...(account.assignedPolicyIds ?? []), ...(group.assignedPolicyIds ?? [])],
+      })
+    }
+  }
+  return map
+})
+
+const adminProbeInterval = (meta: AdminTargetMeta, modelName: string): number | null => {
+  const policyIds = new Set(meta.policyIds)
+  const intervals = props.policies
+    .filter((policy) => policy.enabled && policyIds.has(policy.id) && policy.modelTargets.some((target) => target.enabled && target.modelName === modelName))
+    .map((policy) => policy.probeIntervalSeconds > 0 ? policy.probeIntervalSeconds : 60)
+  return intervals.length > 0 ? Math.min(...intervals) : null
+}
+
 const findConnectionContext = (connectionId: string) => {
   for (const group of props.groups) {
     const conn = group.connections.find((c) => c.connectionId === connectionId)
@@ -123,6 +196,29 @@ const buildFocusedCards = (connectionId: string): StatusCard[] => {
         availabilityPct,
         records,
         remoteAction: eventsDesc[0]?.remoteAction ?? model.lastRemoteAction ?? '',
+      }
+    })
+  }
+
+  const adminMeta = adminTargetMeta.value.get(connectionId)
+  if (adminMeta) {
+    return Array.from(adminMeta.models.entries()).map(([modelName, modelMeta]) => {
+      const eventsDesc = eventsByModel.get(modelName) ?? []
+      const { records, availabilityPct } = buildRecords(eventsDesc)
+      return {
+        key: `${connectionId}::${modelName}`,
+        connectionId,
+        modelName,
+        upstreamSiteId: '',
+        upstreamGroupName: adminMeta.groupName,
+        provider: modelMeta.providerFamily,
+        state: modelMeta.state,
+        latestLatencyMs: eventsDesc[0]?.latencyMs ?? modelMeta.lastLatencyMs,
+        lastProbeAt: modelMeta.lastProbeAt,
+        intervalSeconds: adminProbeInterval(adminMeta, modelName),
+        availabilityPct,
+        records,
+        remoteAction: eventsDesc[0]?.remoteAction ?? modelMeta.lastRemoteAction,
       }
     })
   }
@@ -182,8 +278,10 @@ const globalGroups = computed<GroupBlock[]>(() => {
       const eventsDesc = bucket.cards.get(cardKey)!
       const latest = eventsDesc[0]
       const meta = connectionMeta.value.get(latest.connectionId)
-      const modelMeta = meta?.models.get(latest.modelName)
-      const state: ConnectionHealthState | '' = modelMeta?.state
+      const legacyModelMeta = meta?.models.get(latest.modelName)
+      const adminMeta = adminTargetMeta.value.get(latest.connectionId)
+      const adminModelMeta = adminMeta?.models.get(latest.modelName)
+      const state: ConnectionHealthState | '' = legacyModelMeta?.state ?? adminModelMeta?.state
         ?? (VALID_STATES.has(latest.toState as ConnectionHealthState) ? (latest.toState as ConnectionHealthState) : '')
       const { records, availabilityPct } = buildRecords(eventsDesc)
 
@@ -193,14 +291,16 @@ const globalGroups = computed<GroupBlock[]>(() => {
         modelName: latest.modelName,
         upstreamSiteId: latest.upstreamSiteId,
         upstreamGroupName: latest.upstreamGroupName,
-        provider: modelMeta?.providerFamily ?? 'custom',
+        provider: legacyModelMeta?.providerFamily ?? adminModelMeta?.providerFamily ?? 'custom',
         state,
-        latestLatencyMs: latest.latencyMs,
-        lastProbeAt: modelMeta?.lastProbeAt ?? latest.createdAt,
-        intervalSeconds: matchingProbeIntervalSeconds(meta?.ownGroupId ?? '', latest.modelName, props.policies),
+        latestLatencyMs: latest.latencyMs ?? adminModelMeta?.lastLatencyMs ?? null,
+        lastProbeAt: legacyModelMeta?.lastProbeAt ?? adminModelMeta?.lastProbeAt ?? latest.createdAt,
+        intervalSeconds: adminMeta
+          ? adminProbeInterval(adminMeta, latest.modelName)
+          : matchingProbeIntervalSeconds(meta?.ownGroupId ?? '', latest.modelName, props.policies),
         availabilityPct,
         records,
-        remoteAction: latest.remoteAction ?? '',
+        remoteAction: latest.remoteAction || adminModelMeta?.lastRemoteAction || '',
       }
     })
 
@@ -211,12 +311,15 @@ const globalGroups = computed<GroupBlock[]>(() => {
 const selectedConnectionMeta = computed(() => {
   if (!props.selectedConnectionId) return null
   const ctx = findConnectionContext(props.selectedConnectionId)
-  if (!ctx) return null
-  return {
-    siteLabel: props.siteName(ctx.conn.upstreamSiteId),
-    upstreamGroupName: ctx.conn.upstreamGroupName,
-    ownGroupName: ctx.group.ownGroupName || ctx.group.ownGroupId,
+  if (ctx) {
+    return {
+      siteLabel: props.siteName(ctx.conn.upstreamSiteId),
+      upstreamGroupName: ctx.conn.upstreamGroupName,
+      ownGroupName: ctx.group.ownGroupName || ctx.group.ownGroupId,
+    }
   }
+  const adminMeta = adminTargetMeta.value.get(props.selectedConnectionId)
+  return adminMeta ? { siteLabel: adminMeta.platform, upstreamGroupName: adminMeta.groupName, ownGroupName: adminMeta.accountName } : null
 })
 
 // nowMs 每秒滚动一次，仅在弹窗打开时计时，用来把「探活间隔 + 上次探活时间」换算成

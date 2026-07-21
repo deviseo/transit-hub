@@ -28,6 +28,26 @@ func TestIsDue_DisabledNeverDue(t *testing.T) {
 	}
 }
 
+func TestRecordTargetCredentialUnavailable_PreservesLegacyRemoteAction(t *testing.T) {
+	repo := newFakeRepository()
+	svc := &Service{repo: repo}
+	targetID := "sub2api:ws1:acc-1"
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"gpt-4o": {
+			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
+			State: StateSuspended, LastRemoteAction: RemoteActionSub2APIStatusInactive,
+		},
+	}
+	target := AdminProbeTarget{TargetID: targetID, Platform: string(upstream.PlatformSub2API), AccountID: "acc-1"}
+	spec := probeModelSpec{modelName: "gpt-4o", policy: Policy{ID: "p1"}}
+
+	svc.recordTargetCredentialUnavailable(context.Background(), "user1", "ws1", target, []probeModelSpec{spec}, upstream.ReasonCredentialUnavailable)
+	stored := repo.states[targetID]["gpt-4o"]
+	if stored.LastRemoteAction != RemoteActionSub2APIStatusInactive {
+		t.Fatalf("credential failure must preserve legacy ownership evidence, got %+v", stored)
+	}
+}
+
 func TestIsDue_WithinCooldownIsNotDue(t *testing.T) {
 	repo := newFakeRepository()
 	future := time.Now().Add(1 * time.Minute)

@@ -64,10 +64,15 @@ func probePolicy() Policy {
 //   - 探活字段来自独立探活状态，不依赖 real_connections（connectionId）。
 func TestAdminGroups_TargetIDProbeAvailableAndModelHealth(t *testing.T) {
 	repo := newFakeRepository()
-	repo.policies = []Policy{probePolicy()}
+	policy := probePolicy()
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "vip", PolicyID: policy.ID,
+	}}
 	// 独立探活状态：targetId = newapi:ws1:100，model gpt-4o = healthy。
 	repo.states["newapi:ws1:100"] = map[string]ConnectionHealthState{
-		"gpt-4o": {ConnectionID: "newapi:ws1:100", ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy, CurrentWeight: 100},
+		"gpt-4o":        {ConnectionID: "newapi:ws1:100", ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy, CurrentWeight: 100},
+		"removed-model": {ConnectionID: "newapi:ws1:100", ModelName: "removed-model", UserID: "user1", AdminAccountID: "ws1", State: StateSuspended, CurrentWeight: 0},
 	}
 	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}
 	reader := fakePlatformGroupReader{
@@ -110,6 +115,9 @@ func TestAdminGroups_TargetIDProbeAvailableAndModelHealth(t *testing.T) {
 	if len(ok.ModelHealth) != 1 || ok.ModelHealth[0].State != StateHealthy {
 		t.Fatalf("expected overlaid healthy model, got %+v", ok.ModelHealth)
 	}
+	if groups[0].HealthSummary.SuspendedModels != 0 {
+		t.Fatalf("removed model state must not affect summary: %+v", groups[0].HealthSummary)
+	}
 	if noBase.ProbeAvailable || noBase.ProbeUnavailableReason != upstream.ReasonBaseURLUnavailable {
 		t.Fatalf("account 200 should be base_url_unavailable, got available=%v reason=%q", noBase.ProbeAvailable, noBase.ProbeUnavailableReason)
 	}
@@ -121,9 +129,9 @@ func TestAdminGroups_TargetIDProbeAvailableAndModelHealth(t *testing.T) {
 	}
 }
 
-// TestAdminGroups_NoPolicyModelsMarksModelUnavailable 验证没有任何候选模型（策略里没有启用
-// 模型目标）时，目标标记为不可探活，原因 model_unavailable，不编造健康状态。
-func TestAdminGroups_NoPolicyModelsMarksModelUnavailable(t *testing.T) {
+// TestAdminGroups_NoPolicyStillAllowsManualProbe 验证尚未创建策略时，只要静态凭据条件满足，
+// 目标仍可进入一次性手动探活并实时发现模型；自动调度仍会因没有策略而跳过。
+func TestAdminGroups_NoPolicyStillAllowsManualProbe(t *testing.T) {
 	repo := newFakeRepository() // 无策略
 	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}
 	reader := fakePlatformGroupReader{
@@ -137,8 +145,8 @@ func TestAdminGroups_NoPolicyModelsMarksModelUnavailable(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	acc := groups[0].Accounts[0]
-	if acc.ProbeAvailable || acc.ProbeUnavailableReason != upstream.ReasonModelUnavailable {
-		t.Fatalf("expected model_unavailable, got available=%v reason=%q", acc.ProbeAvailable, acc.ProbeUnavailableReason)
+	if !acc.ProbeAvailable || acc.ProbeUnavailableReason != "" {
+		t.Fatalf("expected manual probe to remain available, got available=%v reason=%q", acc.ProbeAvailable, acc.ProbeUnavailableReason)
 	}
 }
 
@@ -210,6 +218,97 @@ func TestAdminGroups_WorkspaceIsolationAndNoSensitiveFields(t *testing.T) {
 		if strings.Contains(strings.ToLower(string(encoded)), strings.ToLower(secret)) {
 			t.Fatalf("sensitive field %q leaked into admin-groups response: %s", secret, encoded)
 		}
+	}
+}
+
+// TestAccumulateSummary_PreservesLegacyDegradedTotalAndExposesTransitionStates 验证新增的
+// observing/recovering 明细不会改变旧 degradedModels 的聚合语义，已上线旧前端仍可正常统计。
+func TestAccumulateSummary_PreservesLegacyDegradedTotalAndExposesTransitionStates(t *testing.T) {
+	summary := AdminGroupHealthSummary{}
+	accumulateSummary(&summary, []ModelHealth{
+		{State: StateDegraded},
+		{State: StateObserving},
+		{State: StateRecovering},
+		{State: StateSuspended},
+		{State: StateDisabled},
+	})
+
+	if summary.DegradedModels != 3 {
+		t.Fatalf("degradedModels = %d, want legacy aggregate 3", summary.DegradedModels)
+	}
+	if summary.ObservingModels != 1 || summary.RecoveringModels != 1 {
+		t.Fatalf("unexpected transition state counts: %+v", summary)
+	}
+	if summary.SuspendedModels != 1 || summary.DisabledModels != 1 {
+		t.Fatalf("unexpected terminal state counts: %+v", summary)
+	}
+}
+
+func TestAdminGroups_PreservesConfiguredModelsWithoutProbeState(t *testing.T) {
+	repo := newFakeRepository()
+	policy := probePolicy()
+	policy.ModelTargets = append(policy.ModelTargets, ModelTarget{
+		ID: "t2", PolicyID: policy.ID, ModelName: "gpt-4.1", ProviderFamily: ProviderOpenAI, Enabled: true,
+	})
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "vip", PolicyID: policy.ID,
+	}}
+	repo.states["newapi:ws1:100"] = map[string]ConnectionHealthState{
+		"gpt-4o": {ConnectionID: "newapi:ws1:100", ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy, CurrentWeight: 100},
+	}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", BaseURL: "https://up", Models: "gpt-4o,gpt-4.1"}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	account := groups[0].Accounts[0]
+	if len(account.ModelHealth) != 1 || account.ModelHealth[0].ModelName != "gpt-4o" {
+		t.Fatalf("expected the persisted model state, got %+v", account.ModelHealth)
+	}
+	if len(account.UnprobedModels) != 1 || account.UnprobedModels[0].ModelName != "gpt-4.1" {
+		t.Fatalf("configured model without state must remain visible: %+v", account.UnprobedModels)
+	}
+	if groups[0].HealthSummary.HealthyModels != 1 || groups[0].HealthSummary.UnconfiguredModels != 1 {
+		t.Fatalf("partially-probed models must be counted independently: %+v", groups[0].HealthSummary)
+	}
+}
+
+func TestOverview_MergesModelsForTargetSharedAcrossGroups(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{
+		{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, ModelTargets: []ModelTarget{{ModelName: "model-a", Enabled: true}}},
+		{ID: "p2", UserID: "user1", AdminAccountID: "ws1", Enabled: true, ModelTargets: []ModelTarget{{ModelName: "model-b", Enabled: true}}},
+	}
+	repo.groupAssignments = []GroupPolicyAssignment{
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: "p1"},
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g2", PolicyID: "p2"},
+	}
+	targetID := "newapi:ws1:100"
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: targetID, ModelName: "model-a", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy, CurrentWeight: 100},
+		"model-b": {ConnectionID: targetID, ModelName: "model-b", UserID: "user1", AdminAccountID: "ws1", State: StateDegraded, CurrentWeight: 75},
+	}
+	account := upstream.AdminGroupAccountInfo{ID: "100", BaseURL: "https://up", Models: "model-a,model-b"}
+	reader := fakePlatformGroupReader{
+		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "first"}, {ID: "g2", Name: "second"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {account}, "g2": {account}},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+
+	overview, err := service.Overview(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if overview.TotalConnections != 1 || overview.Healthy != 1 || overview.Degraded != 1 {
+		t.Fatalf("shared target overview must merge both groups' models: %+v", overview)
 	}
 }
 

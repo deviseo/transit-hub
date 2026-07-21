@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpenText, X, ShieldCheck, Plus, Trash2 } from 'lucide-vue-next'
+import { ArrowDownUp, BookOpenText, X, ShieldCheck, Plus, Trash2 } from 'lucide-vue-next'
 import { HelpTooltip } from '@/components/ui/tooltip'
 import PolicyRunFlowDialog from './PolicyRunFlowDialog.vue'
-import type { ConnectionHealthPolicy, ModelTargetInput, PolicyInput } from '../../types/connectionHealth'
+import type { ConnectionHealthPolicy, ConnectionHealthPriorityMode, ModelTargetInput, PolicyInput } from '../../types/connectionHealth'
 
 export interface OwnGroupOption {
   id: string
@@ -51,6 +51,7 @@ const recoveryStepPercent = ref(DEFAULTS.recoveryStepPercent)
 const dailyProbeBudget = ref(DEFAULTS.dailyProbeBudget)
 const autoDegradeEnabled = ref(true)
 const autoRemoteActionEnabled = ref(false)
+const priorityMode = ref<ConnectionHealthPriorityMode>('none')
 const modelTargets = ref<ModelTargetInput[]>([])
 const validationError = ref<string | null>(null)
 const runFlowOpen = ref(false)
@@ -76,7 +77,8 @@ const resetForm = () => {
   recoveryStepPercent.value = p?.recoveryStepPercent ?? DEFAULTS.recoveryStepPercent
   dailyProbeBudget.value = p?.dailyProbeBudget ?? DEFAULTS.dailyProbeBudget
   autoDegradeEnabled.value = p?.autoDegradeEnabled ?? true
-  autoRemoteActionEnabled.value = p?.autoRemoteActionEnabled ?? false
+  autoRemoteActionEnabled.value = autoDegradeEnabled.value && (p?.autoRemoteActionEnabled ?? false)
+  priorityMode.value = p?.priorityMode === 'multiplier' ? 'multiplier' : 'none'
 
   // 已有模型目标全部同一个 provider 时直接复用该 provider 初始化——必须从"唯一值"取，
   // 不能从 modelTargets[0] 取，否则历史数据里第一条 provider 恰好为空、后面几条其实
@@ -113,6 +115,10 @@ watch(() => props.open, (isOpen) => { if (isOpen) resetForm() })
 watch(policyProvider, (val) => {
   if (!val) return
   modelTargets.value.forEach((m) => { m.providerFamily = val })
+})
+
+watch(autoDegradeEnabled, (enabled) => {
+  if (!enabled) autoRemoteActionEnabled.value = false
 })
 
 const addModelTarget = () => {
@@ -159,6 +165,7 @@ const handleSave = () => {
     dailyProbeBudget: dailyProbeBudget.value,
     autoDegradeEnabled: autoDegradeEnabled.value,
     autoRemoteActionEnabled: autoRemoteActionEnabled.value,
+    priorityMode: priorityMode.value,
     modelTargets: targets,
   }
   emit('save', input)
@@ -371,6 +378,28 @@ const handleSave = () => {
 
               <!-- 自动化开关：默认保守，远端动作必须让用户明确可见并主动打开 -->
               <div class="space-y-3 border-t border-border/40 pt-4">
+                <div class="space-y-2 rounded-lg border border-border/40 bg-surface/30 px-4 py-3">
+                  <div class="flex items-center gap-1 text-sm text-foreground">
+                    <ArrowDownUp class="h-4 w-4 text-primary" />
+                    {{ t(`${prefix}.priorityModeLabel`) }}
+                    <HelpTooltip :text="t(`${prefix}.tooltips.priorityMode`)" />
+                  </div>
+                  <div class="grid grid-cols-2 gap-1 rounded-lg bg-surface p-1" role="radiogroup" :aria-label="t(`${prefix}.priorityModeLabel`)">
+                    <button
+                      v-for="mode in (['none', 'multiplier'] as const)"
+                      :key="mode"
+                      type="button"
+                      role="radio"
+                      :aria-checked="priorityMode === mode"
+                      class="rounded-md px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      :class="priorityMode === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                      @click="priorityMode = mode"
+                    >
+                      {{ t(`${prefix}.priorityModes.${mode}`) }}
+                    </button>
+                  </div>
+                  <p class="text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.priorityModeHelp`) }}</p>
+                </div>
                 <div class="flex items-center justify-between rounded-lg border border-border/40 bg-surface/30 px-4 py-3">
                   <div>
                     <div class="flex items-center gap-1 text-sm text-foreground">
@@ -393,8 +422,8 @@ const handleSave = () => {
                     <div class="text-xs text-amber-700 dark:text-amber-400">{{ t(`${prefix}.autoRemoteActionHelp`) }}</div>
                   </div>
                   <label class="relative inline-flex cursor-pointer items-center shrink-0">
-                    <input v-model="autoRemoteActionEnabled" type="checkbox" class="peer sr-only" />
-                    <div class="w-9 h-5 bg-surface-elevated rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                    <input v-model="autoRemoteActionEnabled" type="checkbox" class="peer sr-only" :disabled="!autoDegradeEnabled" />
+                    <div class="w-9 h-5 bg-surface-elevated rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:cursor-not-allowed peer-disabled:opacity-50 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                   </label>
                 </div>
               </div>

@@ -771,6 +771,9 @@ export default {
       title: 'Group Health',
       subtitle: 'Independent lightweight probing of accounts/channels inside the current admin workspace groups, with health monitoring and automatic degrade/restore.',
       adminSubtitle: 'Shows all groups under the current admin workspace. Click the account count to view accounts/channels and their independent probe status.',
+      simplifiedSubtitle: 'Configure probes, automatic failover, and traffic priority around admin upstream groups. New accounts and channels inherit their group policy automatically.',
+      summaryLabel: 'Group health summary',
+      groupListLabel: 'Upstream group list',
       refresh: 'Refresh',
       empty: 'No probeable accounts/channels under the current admin workspace.',
       adminEmpty: 'No groups under the current admin workspace.',
@@ -801,6 +804,129 @@ export default {
         probeable: 'Probeable {probeable}/{total}',
         noneProbeable: 'No probeable targets',
         noProbe: '{count} pending probe'
+      },
+      groupList: {
+        monitored: 'Monitored {count}/{total}'
+      },
+      groupDetail: {
+        multiplierPriority: 'Multiplier priority',
+        subtitle: '{monitored} of {total} accounts or channels monitored',
+        enableMonitoring: 'Enable Group Monitoring',
+        manageMonitoring: 'Manage Group Monitoring',
+        unmonitored: 'Not auto-monitored',
+        policyCount: '{name} and {count} more',
+        unprobeable: 'Probe unavailable',
+        upstreamStatus: 'Upstream status: {status}',
+        unknownUpstreamStatus: 'Unknown',
+        priorityConflict: '{count} upstream priorities were changed manually. Automatic priority management has stopped for those targets to preserve the manual values. Save the group policy again to take control.',
+        priorityConflictShort: 'Upstream priority changed manually; automatic updates stopped',
+        empty: 'This group has no accounts or channels.',
+        metrics: {
+          accounts: 'Accounts / Channels',
+          monitored: 'Auto-monitored',
+          probeable: 'Manual probe ready',
+          lastProbe: 'Last Probe'
+        },
+        statusBreakdown: {
+          title: 'Current Group Probe States',
+          hint: 'Health states are counted by model; pending and unavailable are counted by target. These are not upstream enable/disable states.',
+          healthy: 'Healthy Models',
+          degraded: 'Degraded Models',
+          suspended: 'Probe Paused',
+          observing: 'Recovery Watch',
+          recovering: 'Recovering',
+          disabled: 'Manually Disabled',
+          notProbed: 'Awaiting First Probe',
+          unprobeable: 'Unavailable Targets'
+        },
+        assignmentSources: {
+          none: 'No policy source',
+          target: 'Target-specific policy',
+          group: 'Inherited group policy',
+          mixed: 'Group and target policies merged'
+        },
+        columns: {
+          expand: 'Expand model results',
+          account: 'Account / Channel',
+          health: 'Health',
+          strategy: 'Effective Policy',
+          priority: 'Upstream Priority',
+          multiplier: 'Effective Multiplier',
+          actions: 'Actions'
+        },
+        models: {
+          empty: 'This target has no model probe results yet.',
+          latency: 'Latency {value} ms',
+          lastProbe: 'Last {value}',
+          weight: 'Health weight {value}%'
+        }
+      },
+      setup: {
+        title: 'Configure Group Health',
+        stepsLabel: 'Group health setup steps',
+        steps: {
+          '1': 'Monitoring Scope',
+          '2': 'Run Strategy',
+          '3': 'Review'
+        },
+		generatedPolicyName: '{group} - Group Health Policy',
+		retry: 'Reload',
+        scope: {
+          title: 'Choose targets for automatic monitoring',
+          description: 'Every account or channel in this group is selected by default. Unchecked targets are not auto-probed, failed over, or reprioritized.',
+          modelsUnknown: 'No model list returned by upstream',
+          probeable: 'Probe ready',
+          pending: 'Credentials needed',
+          futureHint: 'Targets added to this upstream group later inherit the policy automatically. Targets you uncheck remain excluded.'
+        },
+        strategy: {
+          title: 'Choose a run strategy',
+          description: 'A quick strategy creates a complete probe policy automatically, or you can bind an existing advanced policy.',
+          options: {
+            multiplier: {
+              title: 'Multiplier Priority',
+              description: 'Among healthy targets, a lower multiplier gets higher upstream priority. Failed targets still degrade first.'
+            },
+            stable: {
+              title: 'Stability First',
+              description: 'Auto-probe and disable or restore failed targets using platform capabilities without changing routine priority.'
+            },
+            monitor: {
+              title: 'Monitor Only',
+              description: 'Record health and events without upstream disable, restore, or priority changes.'
+            },
+            existing: {
+              title: 'Use Existing Policies',
+              description: 'Bind one or more advanced probe policies when you need custom thresholds and budgets.'
+            }
+          },
+          modelsLabel: 'Probe Models',
+          modelsPlaceholder: 'One model per line, for example gpt-4o-mini',
+          modelsDetected: '{count} models will be probed',
+          modelSuggestions: {
+            common: '{count} models available on every selected target were recommended from existing data; no extra upstream request was made.',
+            discovered: 'No complete intersection was found. {count} models were recommended from existing model data and can be edited.'
+          },
+          providerLabel: 'Model Provider',
+          remoteActionLabel: 'Run Upstream Actions',
+          remoteActionHelp: 'Automatically disable or restore targets on failure and recovery when the platform supports it'
+        },
+        confirm: {
+          title: 'Review Group Configuration',
+          description: 'Saving creates the group-level policy relationship immediately. The scheduler applies it on its next scan.',
+          scope: 'Monitoring Scope',
+          scopeValue: '{selected} selected, {excluded} excluded',
+          strategy: 'Run Strategy',
+          models: 'Probe Models',
+          fromPolicy: 'Defined by existing policies',
+          remoteAction: 'Upstream Automation',
+          enabled: 'Enabled',
+          disabled: 'Record only',
+          multiplierRule: 'Multiplier rule: health outranks price; a target in multiple groups uses the lowest multiplier; lower multipliers receive higher upstream priority. If a manual change is detected, automation stops and reports a conflict.'
+        },
+        back: 'Back',
+        next: 'Next',
+        save: 'Enable Group Monitoring'
       },
       probeUnavailableReasons: {
         credential_unavailable: 'Cannot securely obtain upstream credentials; probing unavailable',
@@ -837,12 +963,14 @@ export default {
       },
       summary: {
         total: 'Probe Targets',
-        unconfigured: 'Not Configured'
+        unconfigured: 'Not Configured',
+        monitoredGroups: 'Monitored Groups',
+        priorityConflicts: 'Priority Conflicts'
       },
       stateLabels: {
         healthy: 'Healthy',
         degraded: 'Degraded',
-        suspended: 'Suspended',
+        suspended: 'Probe Paused',
         observing: 'Observing',
         recovering: 'Recovering',
         disabled: 'Disabled'
@@ -885,7 +1013,14 @@ export default {
         invalid_response: 'Invalid Response',
         unsupported: 'Unsupported',
         manual_disable: 'Manually Disabled',
-        manual_restore: 'Manually Restored'
+        manual_restore: 'Manually Restored',
+        policy_unmanaged_restore: 'Policy unbound; upstream target restored to its original state',
+        credential_unavailable: 'Upstream credentials cannot be obtained securely; probing is unavailable',
+        secure_verification_required: 'Upstream Root verification is required before the channel key can be read',
+        base_url_unavailable: 'No usable Base URL is available for probing',
+        model_unavailable: 'No probe model is available; configure a model first',
+        export_unavailable: 'The upstream account export endpoint is unavailable, so probe credentials cannot be obtained',
+        credentials_redacted: 'Upstream credentials are redacted and cannot be used for probing'
       },
       topActions: {
         runFlow: 'How it works',
@@ -921,11 +1056,14 @@ export default {
       remoteActions: {
         unsupported: 'Unsupported (no upstream call made)',
         skippedIndependentProbe: 'Skipped — auto remote action is not enabled',
+        skippedTargetConflict: 'An upstream manual change was detected; automatic overwrite stopped',
+        skippedTargetInitiallyDisabled: 'The target was already paused upstream and was not automatically enabled',
         sub2apiInactive: 'Sub2API account switched to inactive',
         sub2apiActive: 'Sub2API account switched to active',
         sub2apiInactiveFailed: 'Sub2API account switch to inactive failed',
         sub2apiActiveFailed: 'Sub2API account switch to active failed',
         newapiDisabled: 'NewAPI channel disabled',
+        newapiUpdateFailed: 'Failed to update the NewAPI channel weight or status',
         newapiWeight: 'NewAPI channel weight set to {weight}',
         other: '{action}'
       },
@@ -967,7 +1105,13 @@ export default {
         autoDegradeLabel: 'Auto Degrade',
         autoDegradeHelp: 'Automatically lower local weight or suspend a link once failures reach the threshold.',
         autoRemoteActionLabel: 'Auto Remote Action',
-        autoRemoteActionHelp: 'NewAPI: auto remote action updates the channel weight/status. Sub2API: auto remote action toggles the admin account active/inactive; priority is not auto-adjusted. In the current group-health independent probing path, Sub2API already supports automatic active/inactive switching by policy; the NewAPI target dimension does not implement remote actions yet and is only recorded as unsupported — it never actually calls upstream.',
+        autoRemoteActionHelp: 'NewAPI updates channel weight/status, while Sub2API toggles the admin account active/inactive. When disabled, health results are recorded without upstream calls.',
+        priorityModeLabel: 'Upstream Traffic Priority',
+        priorityModes: {
+          none: 'Keep Upstream Values',
+          multiplier: 'Sort by Group Multiplier'
+        },
+        priorityModeHelp: 'Multiplier sorting favors lower-cost upstream targets while they are healthy. Failed targets always degrade before price ordering applies.',
         providerLabel: 'Model Provider',
         providerPlaceholder: 'Select a provider',
         providerMismatchWarning: 'This policy\'s existing model targets use different providers. Pick one provider above — saving will unify all model targets to the provider you select.',
@@ -985,7 +1129,8 @@ export default {
           observation: 'After a manual restore or an automatic recovery flow, the link enters an observation window — consecutive probe results here confirm whether it is actually stable again.',
           recoveryStep: 'During recovery, each successful probe raises local weight by this percentage step, instead of jumping straight to 100%.',
           autoDegrade: 'When enabled, probe results drive the health state machine and adjust local routing weight. When disabled, probe results are only recorded — state and weight never change automatically.',
-          autoRemoteAction: 'When enabled, supported upstream actions run when the state machine triggers degrade/recovery: Sub2API group-health targets toggle the admin account active/inactive without changing priority; NewAPI linked-channel probing can update channel weight/status. The current NewAPI target dimension is not implemented yet and is recorded as unsupported. When disabled, probes and state results are recorded without remote disable/restore actions.'
+          autoRemoteAction: 'When enabled, supported upstream actions run when the state machine triggers degrade/recovery: Sub2API toggles the admin account active/inactive, and NewAPI updates channel weight/status. When disabled, only probe and state results are recorded.',
+          priorityMode: 'Group multiplier sorting maps lower multipliers to higher upstream priority. Health tier outranks price; targets in multiple groups use the lowest multiplier; automation stops when it detects a manual priority change.'
         },
         runFlow: {
           buttonLabel: 'How it works',
@@ -1057,7 +1202,7 @@ export default {
         loadingModels: 'Fetching available models from upstream...',
         retryLoad: 'Retry',
         empty: 'No available models were found.',
-        selectHint: 'Select the models to test — multiple selection allowed.',
+        selectHint: 'The first model is selected by default. Select more models when needed.',
         startTest: 'Start Test',
         testing: 'Testing...',
         resultTitle: 'Test Results',
@@ -1075,6 +1220,7 @@ export default {
       },
       errors: {
         request: 'Operation failed. Please try again.',
+        unknown: 'Group health data is temporarily unavailable. Please try again.',
         network: 'Network error. Check your connection and try again.',
         notFound: 'Probe target not found or inaccessible.',
         noMatchingModels: 'Selected models do not match the current probe policy.',

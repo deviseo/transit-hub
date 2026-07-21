@@ -771,6 +771,9 @@ export default {
       title: '分组健康',
       subtitle: '对当前 admin workspace 下分组内的账号/渠道做独立轻量探活，监控健康状态并支持自动降级/恢复。',
       adminSubtitle: '展示当前 admin workspace 下的全量分组，点击账号数查看分组下账号/渠道及独立探活状态。',
+      simplifiedSubtitle: '以 admin 上游分组为单位配置探活、自动降级与流量优先级，新增账号或渠道会自动继承分组策略。',
+      summaryLabel: '分组健康汇总',
+      groupListLabel: '上游分组列表',
       refresh: '刷新',
       empty: '当前 admin workspace 下暂无可探活的账号/渠道。',
       adminEmpty: '当前 admin workspace 下暂无分组。',
@@ -801,6 +804,129 @@ export default {
         probeable: '可探活 {probeable}/{total}',
         noneProbeable: '无可探活目标',
         noProbe: '{count} 个待探活'
+      },
+      groupList: {
+        monitored: '已监控 {count}/{total}'
+      },
+      groupDetail: {
+        multiplierPriority: '按倍率排序',
+        subtitle: '已监控 {monitored}/{total} 个账号或渠道',
+        enableMonitoring: '启用分组监控',
+        manageMonitoring: '管理分组监控',
+        unmonitored: '未纳入自动监控',
+        policyCount: '{name} 等 {count} 个',
+        unprobeable: '暂不可探活',
+        upstreamStatus: '上游状态：{status}',
+        unknownUpstreamStatus: '未知',
+        priorityConflict: '检测到 {count} 个上游优先级被人工修改。为避免覆盖人工设置，系统已停止管理这些目标的优先级。重新保存分组策略后可重新接管。',
+        priorityConflictShort: '上游优先级已被人工修改，系统已停止自动覆盖',
+        empty: '该分组当前没有账号或渠道。',
+        metrics: {
+          accounts: '账号/渠道',
+          monitored: '自动监控',
+          probeable: '可手动探活',
+          lastProbe: '最近探活'
+        },
+        statusBreakdown: {
+          title: '当前分组探活状态',
+          hint: '健康状态按模型统计；待首次探活和不可探活按账号/渠道统计，不代表上游原始启停状态。',
+          healthy: '健康模型',
+          degraded: '降级模型',
+          suspended: '探活暂停',
+          observing: '恢复观察',
+          recovering: '逐步恢复',
+          disabled: '手动禁用',
+          notProbed: '待首次探活',
+          unprobeable: '不可探活目标'
+        },
+        assignmentSources: {
+          none: '无策略来源',
+          target: '账号单独策略',
+          group: '继承分组策略',
+          mixed: '分组与账号策略合并'
+        },
+        columns: {
+          expand: '展开模型结果',
+          account: '账号/渠道',
+          health: '健康状态',
+          strategy: '生效策略',
+          priority: '上游优先级',
+          multiplier: '有效倍率',
+          actions: '操作'
+        },
+        models: {
+          empty: '该目标还没有模型探活结果。',
+          latency: '延迟 {value} ms',
+          lastProbe: '最近 {value}',
+          weight: '健康权重 {value}%'
+        }
+      },
+      setup: {
+        title: '配置分组健康',
+        stepsLabel: '分组健康配置步骤',
+        steps: {
+          '1': '监控范围',
+          '2': '运行策略',
+          '3': '确认启用'
+        },
+		generatedPolicyName: '{group} - 分组健康策略',
+		retry: '重新加载',
+        scope: {
+          title: '选择参与自动监控的目标',
+          description: '默认选择当前分组的全部账号或渠道。取消勾选的目标不会自动探活，也不会被自动降级或调整优先级。',
+          modelsUnknown: '上游未返回模型列表',
+          probeable: '可探活',
+          pending: '凭据待完善',
+          futureHint: '以后加入该上游分组的新目标会自动继承本策略；已取消勾选的目标会继续保持排除。'
+        },
+        strategy: {
+          title: '选择运行策略',
+          description: '快速策略会自动创建完整的探活规则，也可以绑定已有高级策略。',
+          options: {
+            multiplier: {
+              title: '倍率优先',
+              description: '健康目标中，倍率越低，上游优先级越高；故障目标仍会优先降级。'
+            },
+            stable: {
+              title: '稳定优先',
+              description: '自动探活并按平台能力禁用故障目标、恢复健康目标，不修改日常优先级。'
+            },
+            monitor: {
+              title: '仅监控',
+              description: '记录健康状态和事件，不执行任何上游禁用、恢复或优先级调整。'
+            },
+            existing: {
+              title: '使用已有策略',
+              description: '绑定一个或多个高级探活策略，适合需要自定义阈值和预算的场景。'
+            }
+          },
+          modelsLabel: '探活模型',
+          modelsPlaceholder: '每行一个模型名称，例如 gpt-4o-mini',
+          modelsDetected: '当前将探活 {count} 个模型',
+          modelSuggestions: {
+            common: '已根据当前选择，默认推荐 {count} 个所有目标共同可用的模型；未额外请求上游。',
+            discovered: '未找到完整共同模型，已从现有模型信息中默认推荐 {count} 个；可继续修改。'
+          },
+          providerLabel: '模型 Provider',
+          remoteActionLabel: '执行上游动作',
+          remoteActionHelp: '故障和恢复时按平台能力自动禁用或恢复目标'
+        },
+        confirm: {
+          title: '确认分组配置',
+          description: '保存后会立即建立分组级策略关系，后台调度器将在下一轮扫描时生效。',
+          scope: '监控范围',
+          scopeValue: '选择 {selected} 个，排除 {excluded} 个',
+          strategy: '运行策略',
+          models: '探活模型数',
+          fromPolicy: '由已有策略决定',
+          remoteAction: '上游自动动作',
+          enabled: '已启用',
+          disabled: '仅记录',
+          multiplierRule: '倍率排序规则：健康状态优先于价格；同一目标属于多个分组时使用最低倍率；倍率越低，写入上游的优先级越高。若检测到人工修改，系统会停止覆盖并提示冲突。'
+        },
+        back: '上一步',
+        next: '下一步',
+        save: '启用分组监控'
       },
       probeUnavailableReasons: {
         credential_unavailable: '无法安全获取上游凭据，暂不可探活',
@@ -837,12 +963,14 @@ export default {
       },
       summary: {
         total: '探活目标数',
-        unconfigured: '未配置探活'
+        unconfigured: '未配置探活',
+        monitoredGroups: '已监控分组',
+        priorityConflicts: '优先级冲突'
       },
       stateLabels: {
         healthy: '健康',
         degraded: '降级',
-        suspended: '已暂停',
+        suspended: '探活暂停',
         observing: '观察中',
         recovering: '恢复中',
         disabled: '已禁用'
@@ -885,7 +1013,14 @@ export default {
         invalid_response: '响应无法解析',
         unsupported: '暂不支持',
         manual_disable: '人工禁用',
-        manual_restore: '人工恢复'
+        manual_restore: '人工恢复',
+        policy_unmanaged_restore: '策略已解绑，恢复上游原始状态',
+        credential_unavailable: '无法安全获取上游凭据，暂不可探活',
+        secure_verification_required: '需要完成上游 Root 安全验证后才能读取渠道密钥',
+        base_url_unavailable: '缺少可用的 Base URL，暂不可探活',
+        model_unavailable: '没有可用的探活模型，请先配置模型',
+        export_unavailable: '上游账号导出接口不可用，无法取得探活所需凭据',
+        credentials_redacted: '上游凭据已脱敏，无法用于探活'
       },
       topActions: {
         runFlow: '运行流程',
@@ -921,11 +1056,14 @@ export default {
       remoteActions: {
         unsupported: '不支持（未真正调用上游）',
         skippedIndependentProbe: '未开启自动远端动作，已跳过',
+        skippedTargetConflict: '检测到上游被人工修改，已停止自动覆盖',
+        skippedTargetInitiallyDisabled: '目标原本已在上游暂停，未执行自动启用',
         sub2apiInactive: 'Sub2API 账号已切换为 inactive',
         sub2apiActive: 'Sub2API 账号已切换为 active',
         sub2apiInactiveFailed: 'Sub2API 账号切换 inactive 失败',
         sub2apiActiveFailed: 'Sub2API 账号切换 active 失败',
         newapiDisabled: 'NewAPI channel 已禁用',
+        newapiUpdateFailed: 'NewAPI channel 权重或状态更新失败',
         newapiWeight: 'NewAPI channel 权重已调整为 {weight}',
         other: '{action}'
       },
@@ -967,7 +1105,13 @@ export default {
         autoDegradeLabel: '自动降级',
         autoDegradeHelp: '探活失败达到阈值时自动降低本地权重或暂停链路。',
         autoRemoteActionLabel: '自动远端动作',
-        autoRemoteActionHelp: 'NewAPI：自动远端动作会修改 channel 权重/状态。Sub2API：自动远端动作会切换 admin 账号 active/inactive，priority 暂不自动调整。当前分组健康的独立探活路径下，Sub2API 已支持按策略自动切换账号状态；NewAPI 独立探活维度暂未实现远端动作，只会记录为不支持，不会真正调用上游。',
+        autoRemoteActionHelp: 'NewAPI 会修改 channel 权重/状态，Sub2API 会切换 admin 账号 active/inactive。关闭后只记录健康结果，不调用上游。',
+        priorityModeLabel: '上游流量优先级',
+        priorityModes: {
+          none: '保持上游设置',
+          multiplier: '按分组倍率排序'
+        },
+        priorityModeHelp: '开启倍率排序后，系统会在健康目标中优先使用更低倍率的上游；故障状态始终优先降级。',
         providerLabel: '模型 Provider',
         providerPlaceholder: '请选择 Provider',
         providerMismatchWarning: '检测到该策略已有的模型探活目标使用了不同的 provider。请在上方选择一个 provider，保存后所有模型探活目标都会统一为你选择的这个 provider。',
@@ -985,7 +1129,8 @@ export default {
           observation: '人工恢复或自动恢复流程触发后会进入观察期，这段时间的连续探活结果用于确认链路是否真的已经稳定。',
           recoveryStep: '恢复过程中每次探活成功会按该百分比逐步提高本地权重，不是一次性恢复到 100%。',
           autoDegrade: '开启后，探活结果会推进链路的健康状态机并调整本地转发权重；关闭后只记录探活结果，不会自动改变状态或权重。',
-          autoRemoteAction: '开启后，状态机触发降级/恢复时会执行受支持的上游动作：Sub2API 当前分组健康目标会切换 admin 账号 active/inactive，priority 不会自动调整；NewAPI 旧对接链路路径可调整 channel 权重/状态。NewAPI 当前目标维度暂未实现远端动作，会记录为不支持。关闭后只记录探活和状态结果，不执行远端禁用/恢复。'
+          autoRemoteAction: '开启后，状态机触发降级/恢复时会执行受支持的上游动作：Sub2API 切换 admin 账号 active/inactive，NewAPI 调整 channel 权重/状态。关闭后只记录探活和状态结果。',
+          priorityMode: '按分组倍率排序会把较低倍率映射为较高的上游优先级。健康等级先于价格排序；同一目标属于多个分组时取最低倍率；检测到人工修改时会停止自动覆盖。'
         },
         runFlow: {
           buttonLabel: '运行流程',
@@ -1057,7 +1202,7 @@ export default {
         loadingModels: '正在从上游获取可用模型列表...',
         retryLoad: '重新加载',
         empty: '未获取到任何可用模型。',
-        selectHint: '勾选要测试的模型，可多选。',
+        selectHint: '默认选择列表中的第一个模型；需要时可继续多选。',
         startTest: '开始测试',
         testing: '测试中...',
         resultTitle: '测试结果',
@@ -1075,6 +1220,7 @@ export default {
       },
       errors: {
         request: '操作失败，请稍后重试。',
+        unknown: '暂时无法读取分组健康数据，请稍后重试。',
         network: '网络异常，请检查连接后重试。',
         notFound: '探活目标不存在或无权访问。',
         noMatchingModels: '所选模型未匹配当前探活策略。',

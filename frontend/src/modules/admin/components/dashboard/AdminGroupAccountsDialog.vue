@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, Eye, Layers, ShieldAlert, ShieldCheck, ShieldQuestion, X, Zap } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
-import { connectionHealthStateBadgeClass } from '../../composables/useConnectionHealth'
+import { connectionHealthMessageKey, connectionHealthStateBadgeClass } from '../../composables/useConnectionHealth'
 import type {
   AdminGroupAccount,
   AdminGroupHealth,
@@ -24,9 +24,10 @@ const emit = defineEmits<{
   (event: 'assign-policy', account: AdminGroupAccount): void
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const prefix = 'admin.connectionHealth'
 const dialogPrefix = `${prefix}.accountsDialog`
+const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
 // isNewAPI: new-api channel 才有 weight 概念。sub2api 账号没有 weight，展示 "-"，
 // 不能把 priority 冒充成 weight。
@@ -136,7 +137,7 @@ const assignedPolicyLabel = (account: AdminGroupAccount): string => {
           <!-- 账号/渠道列表 -->
           <div class="flex-1 overflow-y-auto px-5 py-4">
             <p v-if="group.accountsError" class="rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-400">
-              {{ t(group.accountsError) }}
+              {{ readableMessage(group.accountsError) }}
             </p>
             <div v-else-if="group.accounts.length === 0" class="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <Activity class="h-8 w-8 text-muted-foreground/40" />

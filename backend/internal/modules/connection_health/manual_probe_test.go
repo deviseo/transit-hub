@@ -157,6 +157,10 @@ func (panicIfCalledRemoteActionRunner) RestoreTarget(ctx context.Context, sessio
 	panic("RestoreTarget must never be called by manual one-time probing")
 }
 
+func (panicIfCalledRemoteActionRunner) ApplyTargetState(ctx context.Context, session upstream.Session, target AdminProbeTarget, weight *int, status string) (string, error) {
+	panic("ApplyTargetState must never be called by manual one-time probing")
+}
+
 // TestManualProbeTarget_NeverRunsRemoteAction 验证手动一次性探活即使遭遇会在策略路径触发
 // 远端动作的硬失败（如 401），也绝不调用 dispatcher（用一个"任何方法被调用就 panic"的
 // RemoteActionRunner 兜底验证），也仍然不写 state/event。

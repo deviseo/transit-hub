@@ -19,6 +19,7 @@ type RemoteActionRunner interface {
 	Restore(ctx context.Context, conn my_sites.RealConnection, state ConnectionHealthState) (remoteAction string, err error)
 	DegradeTarget(ctx context.Context, session upstream.Session, target AdminProbeTarget, state ConnectionHealthState) (remoteAction string, err error)
 	RestoreTarget(ctx context.Context, session upstream.Session, target AdminProbeTarget, state ConnectionHealthState) (remoteAction string, err error)
+	ApplyTargetState(ctx context.Context, session upstream.Session, target AdminProbeTarget, weight *int, status string) (remoteAction string, err error)
 }
 
 // PlatformActioner 是 connection_health 对 upstream.PlatformService 远端降级能力的窄依赖，
@@ -53,6 +54,7 @@ const (
 	RemoteActionSub2APIStatusActive         = "sub2api_account_status_active"
 	RemoteActionSub2APIStatusInactiveFailed = "sub2api_account_status_inactive_failed"
 	RemoteActionSub2APIStatusActiveFailed   = "sub2api_account_status_active_failed"
+	RemoteActionNewAPIUpdateFailed          = "newapi_channel_update_failed"
 )
 
 // remoteActionDispatcher 按连接所在上游站点的平台类型（new-api / sub2api）分派远端动作。
@@ -116,7 +118,6 @@ func (d *remoteActionDispatcher) Restore(ctx context.Context, conn my_sites.Real
 
 // DegradeTarget / RestoreTarget 服务当前分组健康的独立探活 targetId 路径：不依赖
 // real_connections，直接用调用方已经持有的 session + AdminProbeTarget 发起远端动作。
-// NewAPI target 维度远端动作本任务不强制实现，明确返回 unsupported，不伪造 RealConnection。
 func (d *remoteActionDispatcher) DegradeTarget(ctx context.Context, session upstream.Session, target AdminProbeTarget, state ConnectionHealthState) (remoteAction string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -124,10 +125,16 @@ func (d *remoteActionDispatcher) DegradeTarget(ctx context.Context, session upst
 			err = fmt.Errorf("remote degrade target panic recovered: %v", r)
 		}
 	}()
-	if target.Platform != string(upstream.PlatformSub2API) {
+	if target.AccountID == "" {
 		return RemoteActionUnsupported, nil
 	}
-	if target.AccountID == "" {
+	if target.Platform == string(upstream.PlatformNewAPI) {
+		if err := d.platform.UpdateNewAPIChannelWeightStatus(session, target.AccountID, 0, 2); err != nil {
+			return RemoteActionNewAPIUpdateFailed, err
+		}
+		return "newapi_channel_disabled", nil
+	}
+	if target.Platform != string(upstream.PlatformSub2API) {
 		return RemoteActionUnsupported, nil
 	}
 	if err := d.platform.UpdateSub2APIAdminAccountStatus(session, target.AccountID, "inactive"); err != nil {
@@ -145,14 +152,73 @@ func (d *remoteActionDispatcher) RestoreTarget(ctx context.Context, session upst
 			err = fmt.Errorf("remote restore target panic recovered: %v", r)
 		}
 	}()
-	if target.Platform != string(upstream.PlatformSub2API) {
+	if target.AccountID == "" {
 		return RemoteActionUnsupported, nil
 	}
-	if target.AccountID == "" {
+	if target.Platform == string(upstream.PlatformNewAPI) {
+		weight := state.CurrentWeight
+		status := 1
+		if weight <= 0 {
+			status = 2
+		}
+		if err := d.platform.UpdateNewAPIChannelWeightStatus(session, target.AccountID, weight, status); err != nil {
+			return RemoteActionNewAPIUpdateFailed, err
+		}
+		return fmt.Sprintf("newapi_channel_weight_%d", weight), nil
+	}
+	if target.Platform != string(upstream.PlatformSub2API) {
 		return RemoteActionUnsupported, nil
 	}
 	if err := d.platform.UpdateSub2APIAdminAccountStatus(session, target.AccountID, "active"); err != nil {
 		return RemoteActionSub2APIStatusActiveFailed, err
+	}
+	return RemoteActionSub2APIStatusActive, nil
+}
+
+// ApplyTargetState 写入账号级聚合决策。旧 real_connections 仍使用 Degrade/Restore；新的
+// admin 分组健康链路通过这里精确恢复接管前保存的启停状态和权重。
+func (d *remoteActionDispatcher) ApplyTargetState(ctx context.Context, session upstream.Session, target AdminProbeTarget, weight *int, status string) (remoteAction string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			remoteAction = RemoteActionUnsupported
+			err = fmt.Errorf("apply target state panic recovered: %v", r)
+		}
+	}()
+	if target.AccountID == "" {
+		return RemoteActionUnsupported, nil
+	}
+	if target.Platform == string(upstream.PlatformNewAPI) {
+		resolvedWeight := 100
+		if weight != nil {
+			resolvedWeight = *weight
+		}
+		resolvedStatus := 1
+		if status == "2" || status == "disabled" || status == "inactive" {
+			resolvedStatus = 2
+		}
+		if err := d.platform.UpdateNewAPIChannelWeightStatus(session, target.AccountID, resolvedWeight, resolvedStatus); err != nil {
+			return RemoteActionNewAPIUpdateFailed, err
+		}
+		if resolvedStatus == 2 && resolvedWeight == 0 {
+			return "newapi_channel_disabled", nil
+		}
+		return fmt.Sprintf("newapi_channel_weight_%d", resolvedWeight), nil
+	}
+	if target.Platform != string(upstream.PlatformSub2API) {
+		return RemoteActionUnsupported, nil
+	}
+	resolvedStatus := "active"
+	if status == "inactive" || status == "disabled" || status == "2" {
+		resolvedStatus = "inactive"
+	}
+	if err := d.platform.UpdateSub2APIAdminAccountStatus(session, target.AccountID, resolvedStatus); err != nil {
+		if resolvedStatus == "inactive" {
+			return RemoteActionSub2APIStatusInactiveFailed, err
+		}
+		return RemoteActionSub2APIStatusActiveFailed, err
+	}
+	if resolvedStatus == "inactive" {
+		return RemoteActionSub2APIStatusInactive, nil
 	}
 	return RemoteActionSub2APIStatusActive, nil
 }

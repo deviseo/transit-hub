@@ -18,9 +18,9 @@ import (
 // "newapi:<workspaceAdminAccountID>:<accountID>"，与 real_connections 的 UUID 不会碰撞，
 // 旧连接维度的查询/路由完全不受影响。
 
-// RemoteActionSkippedIndependentProbe 标记：策略未开启 AutoRemoteActionEnabled 时，即使状态机
-// 判定需要远端动作也只记录这个标记，不真正调用上游。开启后，sub2api target 会真实调用远端动作
-// （见 probeTargetOnce），NewAPI target 维度远端动作本任务不强制实现，dispatcher 返回 unsupported。
+// RemoteActionSkippedIndependentProbe 标记：策略未同时开启自动降级和自动远端动作时，即使
+// 状态机判定需要远端动作也只记录这个标记，不真正调用上游。开启后，sub2api target 切换
+// 账号状态，New API target 切换 channel status/weight，二者都通过 dispatcher 的平台中性接口执行。
 const RemoteActionSkippedIndependentProbe = "skipped_independent_probe"
 
 // 探活不可用原因 -> 前端可识别的 i18n 错误 key 映射。reason 取值来自 upstream.Reason* 常量。
@@ -44,6 +44,7 @@ type AdminProbeTarget struct {
 	AccountID              string   `json:"accountId"`
 	AccountName            string   `json:"accountName"`
 	AccountStatus          string   `json:"accountStatus"`
+	AccountWeight          *int     `json:"accountWeight,omitempty"`
 	ProviderFamily         string   `json:"providerFamily"`
 	Models                 []string `json:"models"`
 	ProbeAvailable         bool     `json:"probeAvailable"`
@@ -57,6 +58,22 @@ type probeModelSpec struct {
 	maxProbeTokens int
 	probePrompt    string
 	policy         Policy
+	// Event group metadata records where this policy was inherited for this target.
+	// Explicit target assignments intentionally resolve to an empty group.
+	eventGroupResolved  bool
+	eventAdminGroupID   string
+	eventAdminGroupName string
+}
+
+// targetProbeResult 暂存单模型探活结果。一个账号的全部到期模型完成后，再统一决定一次上游
+// 动作并写事件，避免多模型按执行顺序互相启停同一个账号。
+type targetProbeResult struct {
+	state           *ConnectionHealthState
+	previousState   State
+	outcome         ProbeOutcome
+	latencyMs       int
+	spec            probeModelSpec
+	triggeredRemote bool
 }
 
 // buildTargetID 生成稳定的探活目标 ID：platform:workspaceAdminAccountID:accountID。
@@ -90,7 +107,7 @@ func parseTargetID(targetID string) (parsedTargetID, bool) {
 // 与 admin 分组是不同概念），因此这里用 workspace 级策略池，保留现有策略 modelTargets 的配置语义。
 func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelSpec {
 	pool := make([]probeModelSpec, 0)
-	seen := make(map[string]struct{})
+	seen := make(map[string]int)
 	for _, p := range policies {
 		if !p.Enabled {
 			continue
@@ -103,10 +120,18 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 			if name == "" {
 				continue
 			}
-			if _, dup := seen[name]; dup {
+			if index, dup := seen[name]; dup {
+				// 同一模型被多条策略覆盖时使用稳定且偏安全的策略：关闭远端动作优先，
+				// 然后选择更低失败阈值、更长观察期和更短探活间隔，最后按 ID 决胜。
+				if preferProbePolicy(p, pool[index].policy) {
+					pool[index] = probeModelSpec{
+						modelName: name, providerFamily: t.ProviderFamily, maxProbeTokens: t.MaxProbeTokens,
+						probePrompt: t.ProbePrompt, policy: p,
+					}
+				}
 				continue
 			}
-			seen[name] = struct{}{}
+			seen[name] = len(pool)
 			pool = append(pool, probeModelSpec{
 				modelName:      name,
 				providerFamily: t.ProviderFamily,
@@ -133,6 +158,22 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 	return filtered
 }
 
+func preferProbePolicy(candidate Policy, current Policy) bool {
+	if policyRemoteActionEnabled(candidate) != policyRemoteActionEnabled(current) {
+		return !policyRemoteActionEnabled(candidate)
+	}
+	if failureThreshold(candidate) != failureThreshold(current) {
+		return failureThreshold(candidate) < failureThreshold(current)
+	}
+	if observationWindow(candidate) != observationWindow(current) {
+		return observationWindow(candidate) > observationWindow(current)
+	}
+	if candidate.ProbeIntervalSeconds != current.ProbeIntervalSeconds {
+		return defaultInt(candidate.ProbeIntervalSeconds, 60) < defaultInt(current.ProbeIntervalSeconds, 60)
+	}
+	return candidate.ID < current.ID
+}
+
 // targetProbeAvailability 在「不获取密钥」的前提下静态判断目标是否可探活，用于主列表展示：
 //   - 没有任何候选模型 -> model_unavailable。
 //   - new-api channel 缺少 base_url -> base_url_unavailable（凭据要点之一，list 阶段即可知）。
@@ -142,6 +183,16 @@ func targetProbeAvailability(platform string, baseURL string, specCount int) (bo
 	if specCount == 0 {
 		return false, upstream.ReasonModelUnavailable
 	}
+	if platform == string(upstream.PlatformNewAPI) && strings.TrimSpace(baseURL) == "" {
+		return false, upstream.ReasonBaseURLUnavailable
+	}
+	return true, ""
+}
+
+// targetManualProbeAvailability 只判断一次性手动探活是否具备静态前置条件。手动探活会在打开
+// 弹窗后实时发现模型，因此不能再依赖策略 modelTargets；否则一个尚未创建策略的新 workspace
+// 会把所有目标误标为不可探活，用户也就无法通过简化流程开始配置。
+func targetManualProbeAvailability(platform string, baseURL string) (bool, string) {
 	if platform == string(upstream.PlatformNewAPI) && strings.TrimSpace(baseURL) == "" {
 		return false, upstream.ReasonBaseURLUnavailable
 	}
@@ -163,6 +214,16 @@ func reasonToErrorKey(reason string) string {
 		return ErrorCredentialsRedacted
 	default:
 		return ErrorCredentialUnavailable
+	}
+}
+
+func isCredentialUnavailableReason(reason string) bool {
+	switch reason {
+	case upstream.ReasonCredentialUnavailable, upstream.ReasonSecureVerificationRequired,
+		upstream.ReasonBaseURLUnavailable, upstream.ReasonExportUnavailable, upstream.ReasonCredentialsRedacted:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -233,12 +294,18 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.repo.AcquireTargetLease(ctx, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	policies, err := s.repo.ListPolicies(ctx, userID, adminAccountID)
 	if err != nil {
 		return nil, err
 	}
-	specs := candidateModelSpecs(target.Models, policies)
+	allSpecs := candidateModelSpecs(target.Models, policies)
+	specs := allSpecs
 
 	// 按请求的 models 过滤（语义与 ProbeConnection 一致）：显式指定但一个都没命中 -> 明确拒绝。
 	requested := make([]string, 0, len(models))
@@ -275,13 +342,20 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	}
 
 	results := make([]ModelHealth, 0, len(specs))
+	probeResults := make([]targetProbeResult, 0, len(specs))
 	for _, spec := range specs {
-		st, probeErr := s.probeTargetOnce(ctx, userID, adminAccountID, session, target, cred, spec)
+		result, probeErr := s.probeTargetOnce(ctx, userID, adminAccountID, target, cred, spec)
 		if probeErr != nil {
 			log.Printf("[connection-health] manual target probe failed target_id=%s model=%s err=%v", target.TargetID, spec.modelName, probeErr)
 			continue
 		}
-		results = append(results, toModelHealth(spec.modelName, *st))
+		if result != nil {
+			probeResults = append(probeResults, *result)
+		}
+	}
+	s.finishTargetProbeBatch(ctx, userID, adminAccountID, session, target, allSpecs, probeResults)
+	for _, result := range probeResults {
+		results = append(results, toModelHealth(result.spec.modelName, *result.state))
 	}
 	return results, nil
 }
@@ -315,6 +389,7 @@ func (s *Service) findAdminTarget(ctx context.Context, session upstream.Session,
 				AccountID:      acc.ID,
 				AccountName:    acc.Name,
 				AccountStatus:  acc.Status,
+				AccountWeight:  cloneIntPointer(acc.Weight),
 				ProviderFamily: acc.Platform,
 				Models:         splitModelList(acc.Models),
 			}
@@ -324,19 +399,20 @@ func (s *Service) findAdminTarget(ctx context.Context, session upstream.Session,
 	return AdminProbeTarget{}, upstream.AdminGroupAccountInfo{}, false, accountsReadError, nil
 }
 
-// probeTargetOnce 对一个 (target, model) 组合执行一次独立探活并落库状态 + 事件。
+// probeTargetOnce 对一个 (target, model) 组合执行一次独立探活并落库状态。事件和账号级上游
+// 动作由 finishTargetProbeBatch 在同一账号全部模型完成后统一处理。
 // 与 probeOnce 的关键差异：状态/事件以 targetId 为键（存在 connection_id 列）。
 // 远端动作规则：
-//   - policy.AutoRemoteActionEnabled == false 时，即使状态机判定需要远端动作，也只记
+//   - 自动降级或自动远端动作任一关闭时，即使状态机判定需要远端动作，也只记
 //     RemoteActionSkippedIndependentProbe，绝不调用上游（与旧行为一致）。
-//   - policy.AutoRemoteActionEnabled == true 且 target.Platform 是 sub2api 时，真实调用
+//   - 两个开关都开启且 target.Platform 是 sub2api 时，真实调用
 //     dispatcher.DegradeTarget/RestoreTarget 切换 sub2api 账号 active/inactive。
-//   - NewAPI target 维度远端动作本任务不强制实现，dispatcher 会返回明确的 unsupported。
+//   - New API target 按 currentWeight 更新 channel weight/status，实现逐步恢复。
 //
 // session 来自调用方（ProbeTarget 的 resolveManualTarget / 调度器 job 的 RequireSession），
 // 不信任前端传入的任何 platform/account 信息。
 // 每日探活预算耗尽时跳过真实请求，只保留当前状态。
-func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccountID string, session upstream.Session, target AdminProbeTarget, cred upstream.ProbeCredential, spec probeModelSpec) (*ConnectionHealthState, error) {
+func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, cred upstream.ProbeCredential, spec probeModelSpec) (*targetProbeResult, error) {
 	current, err := s.repo.GetState(ctx, target.TargetID, spec.modelName)
 	if err != nil {
 		return nil, err
@@ -346,13 +422,13 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 		current = &defaultState
 	}
 
-	dayStart := time.Now().Truncate(24 * time.Hour)
-	probeCount, err := s.repo.CountProbesToday(ctx, userID, adminAccountID, dayStart)
+	dayStart := probeBudgetDayStart(time.Now())
+	allowed, err := s.repo.TryConsumeProbeBudget(ctx, userID, adminAccountID, spec.policy.ID, dayStart, probeBudgetLimit(spec.policy))
 	if err != nil {
 		return nil, err
 	}
-	if probeCount >= spec.policy.DailyProbeBudget {
-		return current, nil
+	if !allowed {
+		return nil, nil
 	}
 
 	providerFamily := spec.providerFamily
@@ -399,36 +475,83 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 		next.LastErrorDetail = outcome.Detail
 	}
 
-	// 远端动作：只有该 target 所属策略显式开启 AutoRemoteActionEnabled 时才真实调用上游，
-	// 否则即使状态机判定需要远端动作也只记录 skipped，绝不发起任何上游请求。
-	remoteAction := ""
-	if spec.policy.AutoRemoteActionEnabled {
-		if transitionOut.TriggerRemoteDegrade {
-			action, actionErr := s.dispatcher.DegradeTarget(ctx, session, target, next)
-			remoteAction = action
-			if actionErr != nil {
-				// remoteAction 此时应为 sub2api_account_status_inactive_failed（已支持但调用
-				// 失败）或 unsupported（平台/维度本身不支持），日志里带上它方便区分这两种情况；
-				// actionErr 只打印 Go error 文本，探活/凭据解析路径已保证其中不含明文 key/token。
-				log.Printf("[connection-health] auto degrade target failed target_id=%s model=%s remote_action=%s err=%v", target.TargetID, spec.modelName, remoteAction, actionErr)
-			}
-		} else if transitionOut.TriggerRemoteRestore {
-			action, actionErr := s.dispatcher.RestoreTarget(ctx, session, target, next)
-			remoteAction = action
-			if actionErr != nil {
-				log.Printf("[connection-health] auto restore target failed target_id=%s model=%s remote_action=%s err=%v", target.TargetID, spec.modelName, remoteAction, actionErr)
-			}
-		}
-	} else if transitionOut.TriggerRemoteDegrade || transitionOut.TriggerRemoteRestore {
-		remoteAction = RemoteActionSkippedIndependentProbe
-	}
-	next.LastRemoteAction = remoteAction
-
 	if err := s.repo.UpsertState(ctx, next); err != nil {
 		return nil, err
 	}
-	s.recordTargetEvent(ctx, userID, adminAccountID, target, spec.modelName, string(outcome.Result), string(current.State), string(next.State), &latencyMs, next.LastErrorKey, next.LastErrorDetail, remoteAction)
-	return &next, nil
+	return &targetProbeResult{
+		state: &next, previousState: current.State, outcome: outcome, latencyMs: latencyMs, spec: spec,
+		triggeredRemote: transitionOut.TriggerRemoteDegrade || transitionOut.TriggerRemoteRestore,
+	}, nil
+}
+
+func probeBudgetDayStart(now time.Time) time.Time {
+	// 产品当前按中国自然日展示“每日预算”，使用固定 UTC+8 避免容器运行在 UTC 时于早上 8 点重置。
+	location := time.FixedZone("UTC+8", 8*60*60)
+	local := now.In(location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
+}
+
+func probeBudgetLimit(policy Policy) int {
+	return defaultInt(policy.DailyProbeBudget, 1000)
+}
+
+func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adminAccountID string, session upstream.Session, target AdminProbeTarget, specs []probeModelSpec, results []targetProbeResult) {
+	if len(results) == 0 {
+		return
+	}
+	remoteAction, actionErr := s.reconcileTargetRemoteAction(ctx, userID, adminAccountID, session, target, specs)
+	if actionErr != nil {
+		log.Printf("[connection-health] reconcile target action failed target_id=%s action=%s err=%v", target.TargetID, remoteAction, actionErr)
+	}
+	if remoteAction == "" {
+		for _, result := range results {
+			if result.triggeredRemote && !policyRemoteActionEnabled(result.spec.policy) {
+				remoteAction = RemoteActionSkippedIndependentProbe
+				break
+			}
+		}
+	}
+	if remoteAction != "" {
+		actionIndex := len(results) - 1
+		for index := len(results) - 1; index >= 0; index-- {
+			if policyRemoteActionEnabled(results[index].spec.policy) {
+				actionIndex = index
+				break
+			}
+		}
+		results[actionIndex].state.LastRemoteAction = remoteAction
+		if err := s.repo.UpsertState(ctx, *results[actionIndex].state); err != nil {
+			log.Printf("[connection-health] store target remote action failed target_id=%s err=%v", target.TargetID, err)
+		}
+		for index := range results {
+			result := &results[index]
+			eventTarget := targetForProbeSpec(target, result.spec)
+			action := ""
+			if index == actionIndex {
+				action = remoteAction
+			}
+			s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.policy.ID, result.spec.modelName,
+				string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
+				result.state.LastErrorKey, result.state.LastErrorDetail, action)
+		}
+		return
+	}
+	for index := range results {
+		result := &results[index]
+		eventTarget := targetForProbeSpec(target, result.spec)
+		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.policy.ID, result.spec.modelName,
+			string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
+			result.state.LastErrorKey, result.state.LastErrorDetail, "")
+	}
+}
+
+func targetForProbeSpec(target AdminProbeTarget, spec probeModelSpec) AdminProbeTarget {
+	if !spec.eventGroupResolved {
+		return target
+	}
+	target.AdminGroupID = spec.eventAdminGroupID
+	target.AdminGroupName = spec.eventAdminGroupName
+	return target
 }
 
 // defaultTargetState 构造一个目标模型的初始健康状态。connection_id 列存 targetId，
@@ -452,7 +575,7 @@ func defaultTargetState(userID string, adminAccountID string, target AdminProbeT
 
 // recordTargetEvent 写入一条独立探活事件（connection_id 列存 targetId）。error_detail 已在
 // probe_runner 里脱敏，绝不含明文 key。
-func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string) {
+func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, policyID string, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string) {
 	id, err := newID()
 	if err != nil {
 		log.Printf("[connection-health] generate target event id failed: %v", err)
@@ -460,6 +583,7 @@ func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAcc
 	}
 	event := ConnectionHealthEvent{
 		ID: id, ConnectionID: target.TargetID, ModelName: modelName, UserID: userID, AdminAccountID: adminAccountID,
+		PolicyID: policyID, AdminGroupID: target.AdminGroupID,
 		OwnGroupName: target.AdminGroupName, UpstreamSiteID: "", UpstreamGroupName: target.AdminGroupName, Result: result,
 		FromState: fromState, ToState: toState, LatencyMs: latencyMs, ErrorKey: errorKey, ErrorDetail: errorDetail, RemoteAction: remoteAction,
 	}
