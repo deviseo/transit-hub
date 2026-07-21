@@ -19,6 +19,11 @@ func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 		"mass_email_batches",
 		"group_rate_campaign_items",
 		"group_rate_campaigns",
+		"connection_health_target_action_states",
+		"connection_health_probe_budget_usage",
+		"connection_health_priority_sync_states",
+		"connection_health_group_target_exclusions",
+		"connection_health_group_policy_assignments",
 		"connection_health_policy_assignments",
 		"connection_health_model_targets",
 		"connection_health_states",
@@ -105,6 +110,7 @@ func TestWorkspaceDeleteStatementsDeleteChildrenBeforeParents(t *testing.T) {
 	assertBefore("ticket_messages", "tickets")
 	assertBefore("mass_email_batch_items", "mass_email_batches")
 	assertBefore("group_rate_campaign_items", "group_rate_campaigns")
+	assertBefore("connection_health_group_policy_assignments", "connection_health_policies")
 	assertBefore("connection_health_policy_assignments", "connection_health_policies")
 	assertBefore("connection_health_model_targets", "connection_health_policies")
 }

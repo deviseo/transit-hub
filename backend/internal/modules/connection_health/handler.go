@@ -32,6 +32,8 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/connection-health/targets/{id}/manual-probe", handler.manualProbeTarget)
 	mux.HandleFunc("GET /api/connection-health/targets/{id}/policy-assignments", handler.getPolicyAssignments)
 	mux.HandleFunc("PUT /api/connection-health/targets/{id}/policy-assignments", handler.putPolicyAssignments)
+	mux.HandleFunc("GET /api/connection-health/admin-groups/{id}/policy-configuration", handler.getAdminGroupPolicyConfiguration)
+	mux.HandleFunc("PUT /api/connection-health/admin-groups/{id}/policy-configuration", handler.putAdminGroupPolicyConfiguration)
 }
 
 func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
@@ -330,6 +332,39 @@ func (h *Handler) putPolicyAssignments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.service.SetTargetPolicyAssignments(r.Context(), userID, targetID, input.PolicyIDs)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
+}
+
+func (h *Handler) getAdminGroupPolicyConfiguration(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	result, err := h.service.GetAdminGroupPolicyConfiguration(r.Context(), userID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
+}
+
+func (h *Handler) putAdminGroupPolicyConfiguration(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var input AdminGroupPolicyConfigurationInput
+	if err := httpjson.Decode(r, &input); err != nil && !errors.Is(err, io.EOF) {
+		httpjson.WriteError(w, http.StatusBadRequest, ErrorRequest)
+		return
+	}
+	result, err := h.service.SetAdminGroupPolicyConfiguration(r.Context(), userID, r.PathValue("id"), input)
 	if err != nil {
 		writeError(w, err)
 		return

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Loader2, ShieldCheck, ShieldQuestion, X } from 'lucide-vue-next'
-import { useConnectionHealth } from '../../composables/useConnectionHealth'
+import { connectionHealthMessageKey, useConnectionHealth } from '../../composables/useConnectionHealth'
 import type { ConnectionHealthPolicy } from '../../types/connectionHealth'
 
 const props = defineProps<{
@@ -17,7 +17,7 @@ const emit = defineEmits<{
   (event: 'saved'): void
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const prefix = 'admin.connectionHealth.policyAssignment'
 const { loadTargetPolicyAssignments, saveTargetPolicyAssignments } = useConnectionHealth()
 
@@ -27,6 +27,7 @@ const phase = ref<Phase>('loading')
 const selected = ref<Set<string>>(new Set())
 const loadErrorKey = ref('')
 const saveErrorKey = ref('')
+const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
 watch(
   () => [props.open, props.targetId],
@@ -121,7 +122,7 @@ const close = () => {
 
             <div v-else-if="loadErrorKey" class="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <ShieldQuestion class="h-8 w-8 text-red-500/70" />
-              <p class="text-sm text-red-600 dark:text-red-400">{{ t(loadErrorKey) }}</p>
+              <p class="text-sm text-red-600 dark:text-red-400">{{ readableMessage(loadErrorKey) }}</p>
             </div>
 
             <template v-else>
@@ -161,9 +162,9 @@ const close = () => {
                 </li>
               </ul>
 
-              <p v-if="saveErrorKey" class="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-                {{ t(saveErrorKey) }}
-              </p>
+            <p v-if="saveErrorKey" class="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+              {{ readableMessage(saveErrorKey) }}
+            </p>
             </template>
           </div>
 

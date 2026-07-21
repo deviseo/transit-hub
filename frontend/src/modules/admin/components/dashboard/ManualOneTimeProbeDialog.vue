@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, X, XCircle, Zap } from 'lucide-vue-next'
 import {
+  connectionHealthMessageKey,
   connectionHealthRecordColorClass,
   formatConnectionHealthTime,
   useConnectionHealth,
@@ -27,7 +28,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const prefix = 'admin.connectionHealth.manualProbeDialog'
 const { discoverModels, runManualProbeOnce } = useConnectionHealth()
 
@@ -39,12 +40,23 @@ const selected = ref<Set<string>>(new Set())
 const results = ref<ManualProbeResult[]>([])
 const loadErrorKey = ref('')
 const testErrorKey = ref('')
+let loadSequence = 0
+
+const defaultSelection = (options: ManualProbeModelOption[]): Set<string> =>
+  new Set(options.length > 0 ? [options[0].id] : [])
+
+const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
 // 弹窗每次打开都是全新的一次性会话：重置全部状态并立即拉模型列表，不复用上一次打开的结果。
 watch(
   () => [props.open, props.target?.targetId],
   async ([isOpen]) => {
-    if (!isOpen || !props.target) return
+    if (!isOpen || !props.target) {
+      loadSequence++
+      return
+    }
+    const targetId = props.target.targetId
+    const sequence = ++loadSequence
     phase.value = 'loading'
     models.value = []
     selected.value = new Set()
@@ -52,15 +64,16 @@ watch(
     loadErrorKey.value = ''
     testErrorKey.value = ''
 
-    const outcome = await discoverModels(props.target.targetId)
+    const outcome = await discoverModels(targetId)
+    if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
     if ('errorKey' in outcome) {
       loadErrorKey.value = outcome.errorKey
       phase.value = 'error'
       return
     }
     models.value = outcome.models
-    // 默认全选当前发现的全部模型，用户可取消勾选后再开始测试。
-    selected.value = new Set(outcome.models.map((m) => m.id))
+    // 手动一次性探活默认只选择首个模型，避免首次操作误触发大批量探活；用户仍可自行多选。
+    selected.value = defaultSelection(outcome.models)
     phase.value = 'ready'
   },
 )
@@ -81,16 +94,19 @@ const toggle = (modelId: string) => {
 
 const retryLoad = async () => {
   if (!props.target) return
+  const targetId = props.target.targetId
+  const sequence = ++loadSequence
   phase.value = 'loading'
   loadErrorKey.value = ''
-  const outcome = await discoverModels(props.target.targetId)
+  const outcome = await discoverModels(targetId)
+  if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
   if ('errorKey' in outcome) {
     loadErrorKey.value = outcome.errorKey
     phase.value = 'error'
     return
   }
   models.value = outcome.models
-  selected.value = new Set(outcome.models.map((m) => m.id))
+  selected.value = defaultSelection(outcome.models)
   phase.value = 'ready'
 }
 
@@ -108,7 +124,7 @@ const startTest = async () => {
   phase.value = 'ready'
 }
 
-const resultLabel = (result: string): string => t(`admin.connectionHealth.errorKeys.${result}`)
+const resultLabel = (result: string): string => readableMessage(result)
 
 const close = () => {
   if (phase.value === 'testing') return
@@ -161,7 +177,7 @@ const close = () => {
 
             <div v-else-if="phase === 'error'" class="flex flex-col items-center justify-center gap-3 py-16 text-center">
               <ShieldAlert class="h-8 w-8 text-red-500/70" />
-              <p class="text-sm text-red-600 dark:text-red-400">{{ t(loadErrorKey) }}</p>
+              <p class="text-sm text-red-600 dark:text-red-400">{{ readableMessage(loadErrorKey) }}</p>
               <button
                 type="button"
                 class="rounded-lg border border-border/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-line"
@@ -201,7 +217,7 @@ const close = () => {
                 </div>
 
                 <p v-if="testErrorKey" class="mt-4 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-                  {{ t(testErrorKey) }}
+                  {{ readableMessage(testErrorKey) }}
                 </p>
 
                 <div class="mt-5">

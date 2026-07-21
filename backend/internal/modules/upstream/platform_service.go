@@ -2185,6 +2185,88 @@ func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, chann
 	return err
 }
 
+// UpdateAdminTargetPriority 按当前 admin session 平台更新账号/渠道调度优先级。该入口供
+// connection_health 的倍率排序策略使用，平台差异和安全的 GET+PUT merge 都封装在 upstream
+// 模块内部，避免健康模块了解各上游请求体细节。
+func (s *PlatformService) UpdateAdminTargetPriority(session Session, targetID string, priority int) error {
+	switch session.Platform {
+	case PlatformNewAPI:
+		return s.updateNewAPIChannelPriority(session, targetID, priority)
+	case PlatformSub2API:
+		return s.updateSub2APIAdminAccountPriority(session, targetID, priority)
+	default:
+		return newRequestError(ErrorAuth, session.Platform)
+	}
+}
+
+func (s *PlatformService) updateNewAPIChannelPriority(session Session, channelID string, priority int) error {
+	if session.Platform != PlatformNewAPI || strings.TrimSpace(channelID) == "" {
+		return newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+url.PathEscape(channelID), newAPIAuthOptions(session))
+	if err != nil {
+		return err
+	}
+	data := dataRecord(response.Payload)
+	if len(data) == 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformNewAPI)
+	}
+	payload := map[string]any{"priority": priority}
+	for _, key := range []string{
+		"id", "type", "key", "name", "base_url", "models", "group", "status", "weight",
+		"auto_ban", "model_mapping", "tag", "setting", "param_override", "header_override",
+	} {
+		if value, ok := data[key]; ok {
+			payload[key] = value
+		}
+	}
+	if _, ok := payload["id"]; !ok {
+		if idNumber, parseErr := strconv.ParseInt(channelID, 10, 64); parseErr == nil {
+			payload["id"] = idNumber
+		} else {
+			payload["id"] = channelID
+		}
+	}
+	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/channel/", requestOptions{
+		Cookie: session.Cookie, UserID: session.UserID, AccessToken: session.AccessToken, TokenType: session.TokenType,
+		Method: http.MethodPut, Body: payload,
+	})
+	return err
+}
+
+func (s *PlatformService) updateSub2APIAdminAccountPriority(session Session, accountID string, priority int) error {
+	if session.Platform != PlatformSub2API || !session.IsAuthenticated() || strings.TrimSpace(accountID) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	accountURL := session.BaseURL + "/api/v1/admin/accounts/" + url.PathEscape(accountID)
+	response, err := s.httpClient.requestJSON(accountURL, adminAuthOptions(session))
+	if err != nil {
+		return err
+	}
+	data := dataRecord(response.Payload)
+	if len(data) == 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	payload := map[string]any{"priority": priority}
+	for _, key := range []string{
+		"name", "notes", "type", "credentials", "extra", "proxy_id", "status",
+		"concurrency", "rate_multiplier", "load_factor", "expires_at", "auto_pause_on_expired",
+		"confirm_mixed_channel_risk",
+	} {
+		if value, ok := data[key]; ok {
+			payload[key] = value
+		}
+	}
+	if groupIDs := resolveSub2APIAccountGroupIDsForPayload(data); len(groupIDs) > 0 {
+		payload["group_ids"] = groupIDs
+	}
+	options := adminAuthOptions(session)
+	options.Method = http.MethodPut
+	options.Body = payload
+	_, err = s.httpClient.requestJSON(accountURL, options)
+	return err
+}
+
 // UpdateSub2APIAdminAccountStatus 通过 GET+PUT /api/v1/admin/accounts/:id 更新 sub2api 转发账号的
 // 启用状态（"active"/"inactive"），供 connection_health 模块的自动降级/恢复动作使用。
 // 采用与 UpdateNewAPIChannelWeightStatus / updateSub2APIAdminGroupMultiplier 一致的 GET+PUT-merge

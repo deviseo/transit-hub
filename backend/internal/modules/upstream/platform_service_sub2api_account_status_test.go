@@ -87,6 +87,39 @@ func TestUpdateSub2APIAdminAccountStatus_PutBodyPreservesFieldsAndOnlyChangesSta
 	}
 }
 
+func TestUpdateAdminTargetPriority_Sub2APIPreservesSchedulingFields(t *testing.T) {
+	var putBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/acc-1":
+			writeJSON(w, map[string]any{"data": map[string]any{
+				"id": "acc-1", "name": "account", "type": "openai", "status": "active",
+				"credentials": map[string]any{"api_key": "sk-secret"}, "group_ids": []any{50},
+				"priority": 10, "concurrency": 5, "rate_multiplier": 1.4, "load_factor": 2,
+			}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/admin/accounts/acc-1":
+			putBody, _ = readJSONBody(r)
+			writeJSON(w, map[string]any{"success": true})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token", TokenType: "Bearer"}
+	if err := service.UpdateAdminTargetPriority(session, "acc-1", 40999); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if putBody["priority"] != float64(40999) || putBody["status"] != "active" || putBody["concurrency"] != float64(5) {
+		t.Fatalf("priority update must preserve status/concurrency: %+v", putBody)
+	}
+	groupIDs, ok := putBody["group_ids"].([]any)
+	if !ok || len(groupIDs) != 1 || groupIDs[0] != float64(50) {
+		t.Fatalf("numeric group id must remain numeric: %+v", putBody["group_ids"])
+	}
+}
+
 // TestUpdateSub2APIAdminAccountStatus_NumericGroupIDsStayNumeric 是本次整改的核心回归测试：
 // GET 响应的 group_ids 是数字数组（sub2api 线上真实形态，如 [50]）时，PUT body 里的
 // group_ids 元素必须仍是数字，不能被转成字符串（["50"]）——线上已确认字符串化的 group_ids

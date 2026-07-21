@@ -11,9 +11,11 @@ import (
 
 // AssignedPolicySummary 是分配弹窗/账号弹窗展示用的策略摘要，不含任何敏感字段。
 type AssignedPolicySummary struct {
-	PolicyID   string `json:"policyId"`
-	PolicyName string `json:"policyName"`
-	Enabled    bool   `json:"enabled"`
+	PolicyID                string `json:"policyId"`
+	PolicyName              string `json:"policyName"`
+	Enabled                 bool   `json:"enabled"`
+	PriorityMode            string `json:"priorityMode"`
+	AutoRemoteActionEnabled bool   `json:"autoRemoteActionEnabled"`
 }
 
 // TargetPolicyAssignments 是分配管理接口的响应体：policyIds 供前端勾选态回填，
@@ -103,7 +105,10 @@ func buildTargetPolicyAssignments(assignments []PolicyAssignment, policies []Pol
 	for _, a := range assignments {
 		ids = append(ids, a.PolicyID)
 		if p, ok := policyByID[a.PolicyID]; ok {
-			summaries = append(summaries, AssignedPolicySummary{PolicyID: p.ID, PolicyName: p.Name, Enabled: p.Enabled})
+			summaries = append(summaries, AssignedPolicySummary{
+				PolicyID: p.ID, PolicyName: p.Name, Enabled: p.Enabled,
+				PriorityMode: normalizePriorityMode(p.PriorityMode), AutoRemoteActionEnabled: policyRemoteActionEnabled(p),
+			})
 		} else {
 			// 策略行已被删除但分配未清理（理论上不应发生，ReplacePolicyAssignments 有校验）：
 			// 仍然把 id 透出，名字留空，避免因为一个脏数据行整体隐藏分配信息。
@@ -135,6 +140,63 @@ func assignedEnabledPoliciesByTarget(enabledPolicies []Policy, assignments []Pol
 			result[wsKey] = byTarget
 		}
 		byTarget[a.TargetID] = append(byTarget[a.TargetID], policy)
+	}
+	return result
+}
+
+// assignedEnabledPoliciesByGroup 建立分组动态继承索引，形态与 target 索引一致。只保留当前
+// enabledPolicies 中仍存在的策略，禁用策略的分组绑定关系保留在数据库但本轮不生效。
+func assignedEnabledPoliciesByGroup(enabledPolicies []Policy, assignments []GroupPolicyAssignment) map[string]map[string][]Policy {
+	policyByID := make(map[string]Policy, len(enabledPolicies))
+	for _, policy := range enabledPolicies {
+		policyByID[policy.ID] = policy
+	}
+	result := make(map[string]map[string][]Policy)
+	for _, assignment := range assignments {
+		policy, exists := policyByID[assignment.PolicyID]
+		if !exists {
+			continue
+		}
+		workspaceKey := assignment.UserID + "|" + assignment.AdminAccountID
+		if result[workspaceKey] == nil {
+			result[workspaceKey] = make(map[string][]Policy)
+		}
+		result[workspaceKey][assignment.AdminGroupID] = mergePoliciesByID(
+			result[workspaceKey][assignment.AdminGroupID], []Policy{policy},
+		)
+	}
+	return result
+}
+
+func groupTargetExclusionIndex(exclusions []GroupTargetExclusion) map[string]map[string]map[string]bool {
+	result := make(map[string]map[string]map[string]bool)
+	for _, exclusion := range exclusions {
+		workspaceKey := exclusion.UserID + "|" + exclusion.AdminAccountID
+		if result[workspaceKey] == nil {
+			result[workspaceKey] = make(map[string]map[string]bool)
+		}
+		if result[workspaceKey][exclusion.AdminGroupID] == nil {
+			result[workspaceKey][exclusion.AdminGroupID] = make(map[string]bool)
+		}
+		result[workspaceKey][exclusion.AdminGroupID][exclusion.TargetID] = true
+	}
+	return result
+}
+
+func mergePoliciesByID(groups ...[]Policy) []Policy {
+	seen := make(map[string]struct{})
+	result := make([]Policy, 0)
+	for _, policies := range groups {
+		for _, policy := range policies {
+			if policy.ID == "" {
+				continue
+			}
+			if _, exists := seen[policy.ID]; exists {
+				continue
+			}
+			seen[policy.ID] = struct{}{}
+			result = append(result, policy)
+		}
 	}
 	return result
 }

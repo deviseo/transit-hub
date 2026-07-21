@@ -1,5 +1,7 @@
 import { ref } from 'vue'
 import type {
+  AdminGroupPolicyConfiguration,
+  AdminGroupPolicyConfigurationInput,
   AdminGroupHealth,
   ConnectionHealthEvent,
   ConnectionHealthOverview,
@@ -22,6 +24,7 @@ import {
   getConnectionHealthEvents,
   getConnectionHealthGroups,
   getConnectionHealthOverview,
+  getAdminGroupPolicyConfiguration,
   getTargetPolicyAssignments,
   listConnectionHealthPolicies,
   manualProbeOnce,
@@ -29,6 +32,7 @@ import {
   probeTarget,
   restoreConnection,
   setTargetPolicyAssignments,
+  setAdminGroupPolicyConfiguration,
   updateConnectionHealthPolicy,
 } from '../api/connectionHealth'
 
@@ -42,6 +46,68 @@ const policies = ref<ConnectionHealthPolicy[]>([])
 const isLoading = ref(false)
 const isActionLoading = ref(false)
 const errorKey = ref('')
+let eventsRequestSequence = 0
+
+const overviewFromAdminGroups = (groupList: AdminGroupHealth[]): ConnectionHealthOverview => {
+  const result: ConnectionHealthOverview = {
+    totalConnections: 0,
+    healthy: 0,
+    degraded: 0,
+    suspended: 0,
+    observing: 0,
+    recovering: 0,
+    disabled: 0,
+    unconfigured: 0,
+    recentEvents: [],
+  }
+  type TargetOverview = {
+    probeAvailable: boolean
+    models: Map<string, ModelHealth>
+    unprobed: Set<string>
+  }
+  const targets = new Map<string, TargetOverview>()
+  for (const group of groupList) {
+    for (const account of group.accounts) {
+      const enabled = account.hasEnabledPolicy
+        ?? account.assignedPolicies?.some((policy) => policy.enabled)
+        ?? Boolean(account.hasAssignedPolicy)
+      if (!enabled) continue
+      let target = targets.get(account.targetId)
+      if (!target) {
+        target = { probeAvailable: true, models: new Map(), unprobed: new Set() }
+        targets.set(account.targetId, target)
+      }
+      target.probeAvailable = target.probeAvailable && account.probeAvailable
+      for (const model of account.modelHealth) {
+        target.models.set(model.modelName, model)
+        target.unprobed.delete(model.modelName)
+      }
+      for (const model of account.unprobedModels ?? []) {
+        if (!target.models.has(model.modelName)) target.unprobed.add(model.modelName)
+      }
+    }
+  }
+  for (const target of targets.values()) {
+    result.totalConnections++
+    if (!target.probeAvailable) {
+      result.unconfigured++
+      continue
+    }
+    if (target.models.size === 0 && target.unprobed.size === 0) {
+      result.unconfigured++
+      continue
+    }
+    result.unconfigured += target.unprobed.size
+    for (const model of target.models.values()) {
+      if (!model.configured) {
+        result.unconfigured++
+        continue
+      }
+      result[model.state]++
+    }
+  }
+  return result
+}
 
 export function useConnectionHealth() {
   const loadOverview = async () => {
@@ -71,7 +137,9 @@ export function useConnectionHealth() {
     if (!opts.silent) isLoading.value = true
     errorKey.value = ''
     try {
-      adminGroups.value = await getConnectionHealthAdminGroups()
+      const nextGroups = await getConnectionHealthAdminGroups()
+      adminGroups.value = nextGroups
+      overview.value = overviewFromAdminGroups(nextGroups)
     } catch (err) {
       errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
     } finally {
@@ -79,18 +147,23 @@ export function useConnectionHealth() {
     }
   }
 
-  // loadAll 同时刷新概览、新的 admin 分组主列表，以及旧的我的分组链路数据。
+  // adminGroups 已包含主页面概览所需的全部状态；直接在本地聚合，避免 overview 后端再次
+  // 完整扫描一遍上游分组和账号。loadOverview 保留给旧调用方作为兼容入口。
   // 旧的 groups 仍需加载：探活事件弹窗按 connectionId 关联链路上下文、手动探活候选模型按
   // 链路所属 own group 匹配策略，都依赖这份数据；主列表展示已切换到 adminGroups。
   const loadAll = async (opts: { silent?: boolean } = {}) => {
-    await Promise.all([loadOverview(), loadAdminGroups(opts), loadGroups({ silent: true })])
+    await Promise.all([loadAdminGroups(opts), loadGroups({ silent: true })])
   }
 
   const loadEvents = async (connectionId?: string) => {
+    const sequence = ++eventsRequestSequence
     try {
-      events.value = await getConnectionHealthEvents(connectionId)
+      const nextEvents = await getConnectionHealthEvents(connectionId)
+      if (sequence === eventsRequestSequence) events.value = nextEvents
     } catch (err) {
-      errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
+      if (sequence === eventsRequestSequence) {
+        errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
+      }
     }
   }
 
@@ -115,6 +188,30 @@ export function useConnectionHealth() {
     } catch (err) {
       errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
       return false
+    }
+  }
+
+  // createPolicyForSetup 服务首次启用向导：需要拿到新策略 ID 后立即绑定 admin 分组。
+  // 与 savePolicy 分开，避免改变旧调用方只依赖 boolean 的返回契约。
+  const createPolicyForSetup = async (input: PolicyInput): Promise<{ policy: ConnectionHealthPolicy } | { errorKey: string }> => {
+    try {
+      const policy = await createConnectionHealthPolicy(input)
+      await loadPolicies()
+      return { policy }
+    } catch (err) {
+      return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
+    }
+  }
+
+  // 旧后端兼容向导在“策略已创建、分组绑定失败”后会复用同一策略。用户调整配置
+  // 再重试时先更新该策略，避免每次点击都创建新的孤立策略。
+  const updatePolicyForSetup = async (policyId: string, input: PolicyInput): Promise<{ policy: ConnectionHealthPolicy } | { errorKey: string }> => {
+    try {
+      const policy = await updateConnectionHealthPolicy(policyId, { ...input, id: policyId })
+      await loadPolicies()
+      return { policy }
+    } catch (err) {
+      return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
     }
   }
 
@@ -191,6 +288,25 @@ export function useConnectionHealth() {
     }
   }
 
+  const loadAdminGroupPolicyConfiguration = async (adminGroupId: string): Promise<{ configuration: AdminGroupPolicyConfiguration } | { errorKey: string }> => {
+    try {
+      return { configuration: await getAdminGroupPolicyConfiguration(adminGroupId) }
+    } catch (err) {
+      return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
+    }
+  }
+
+  const saveAdminGroupPolicyConfiguration = async (
+    adminGroupId: string,
+    input: AdminGroupPolicyConfigurationInput,
+  ): Promise<{ configuration: AdminGroupPolicyConfiguration } | { errorKey: string }> => {
+    try {
+      return { configuration: await setAdminGroupPolicyConfiguration(adminGroupId, input) }
+    } catch (err) {
+      return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
+    }
+  }
+
   const disable = async (connectionId: string) => {
     isActionLoading.value = true
     errorKey.value = ''
@@ -237,12 +353,16 @@ export function useConnectionHealth() {
     loadEvents,
     loadPolicies,
     savePolicy,
+    createPolicyForSetup,
+    updatePolicyForSetup,
     manualProbe,
     manualProbeTarget,
     discoverModels,
     runManualProbeOnce,
     loadTargetPolicyAssignments,
     saveTargetPolicyAssignments,
+    loadAdminGroupPolicyConfiguration,
+    saveAdminGroupPolicyConfiguration,
     disable,
     restore,
   }
@@ -325,6 +445,21 @@ export function formatConnectionHealthTime(iso: string | null): string {
   return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+// connectionHealthMessageKey 将后端返回的 i18n key 或探活错误码转换为可安全展示的文案 key。
+// 未知值统一回退到通用错误，避免把 admin.connectionHealth.* 等内部标识直接暴露给用户。
+export function connectionHealthMessageKey(
+  rawKey: string | null | undefined,
+  hasTranslation: (key: string) => boolean,
+): string {
+  const normalized = rawKey?.trim() ?? ''
+  if (!normalized) return 'admin.connectionHealth.errors.unknown'
+
+  const candidate = normalized.startsWith('admin.')
+    ? normalized
+    : `admin.connectionHealth.errorKeys.${normalized}`
+  return hasTranslation(candidate) ? candidate : 'admin.connectionHealth.errors.unknown'
+}
+
 // connectionHealthStateBadgeClass 是分组健康状态徽标的颜色映射，主列表和事件弹窗状态卡片
 // 共用同一套配色，避免两处各自维护一份容易产生视觉不一致。
 export function connectionHealthStateBadgeClass(state: ConnectionHealthState | string): string {
@@ -402,6 +537,10 @@ export function remoteActionLabelKey(remoteAction: string): { key: string; param
       return { key: `${prefix}.unsupported` }
     case 'skipped_independent_probe':
       return { key: `${prefix}.skippedIndependentProbe` }
+    case 'skipped_target_conflict':
+      return { key: `${prefix}.skippedTargetConflict` }
+    case 'skipped_target_initially_disabled':
+      return { key: `${prefix}.skippedTargetInitiallyDisabled` }
     case 'sub2api_account_status_inactive':
       return { key: `${prefix}.sub2apiInactive` }
     case 'sub2api_account_status_active':
@@ -412,6 +551,8 @@ export function remoteActionLabelKey(remoteAction: string): { key: string; param
       return { key: `${prefix}.sub2apiActiveFailed` }
     case 'newapi_channel_disabled':
       return { key: `${prefix}.newapiDisabled` }
+    case 'newapi_channel_update_failed':
+      return { key: `${prefix}.newapiUpdateFailed` }
   }
   const weightMatch = /^newapi_channel_weight_(\d+)$/.exec(remoteAction)
   if (weightMatch) {

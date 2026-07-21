@@ -24,7 +24,7 @@ func TestProbeOnce_StopsRealProbingAfterDailyBudgetExhausted(t *testing.T) {
 	svc := &Service{repo: repo, sites: sites, dispatcher: noopRemoteActionRunner{}, probeRunner: NewRealProbeRunner()}
 
 	conn := my_sites.RealConnection{ID: "conn-1", UpstreamSiteID: "site-1", UpstreamKey: "key-1", UserID: "user1", WorkspaceAdminAccountID: "ws1"}
-	policy := Policy{UserID: "user1", AdminAccountID: "ws1", DailyProbeBudget: 1, RecoveryStepPercent: 25, FailureThreshold: 3, SuccessThreshold: 2, CooldownSeconds: 300, ObservationSeconds: 300, AutoDegradeEnabled: true}
+	policy := Policy{ID: "policy-1", UserID: "user1", AdminAccountID: "ws1", DailyProbeBudget: 1, RecoveryStepPercent: 25, FailureThreshold: 3, SuccessThreshold: 2, CooldownSeconds: 300, ObservationSeconds: 300, AutoDegradeEnabled: true}
 	target := ModelTarget{ModelName: "gpt-4o-mini", ProviderFamily: ProviderOpenAI, MaxProbeTokens: 1}
 
 	if _, err := svc.probeOnce(context.Background(), conn, policy, target); err != nil {
@@ -39,5 +39,14 @@ func TestProbeOnce_StopsRealProbingAfterDailyBudgetExhausted(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("expected daily budget to block the second real probe request, got %d hits", hits)
+	}
+
+	secondPolicy := policy
+	secondPolicy.ID = "policy-2"
+	if _, err := svc.probeOnce(context.Background(), conn, secondPolicy, target); err != nil {
+		t.Fatalf("unexpected error for independent policy budget: %v", err)
+	}
+	if hits != 2 {
+		t.Fatalf("one policy must not consume another policy's budget, got %d hits", hits)
 	}
 }

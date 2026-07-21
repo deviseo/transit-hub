@@ -90,18 +90,19 @@ func TestProbeTargetOnce_Sub2APIAutoRemoteRestoreUpdatesActive(t *testing.T) {
 	repo := newFakeRepository()
 	repo.policies = []Policy{sub2APIProbePolicy(true)}
 	targetID := "sub2api:ws1:acc-1"
-	observingUntil := time.Now().Add(1 * time.Minute)
+	observingUntil := time.Now().Add(-1 * time.Minute)
 	repo.states[targetID] = map[string]ConnectionHealthState{
 		"gpt-4o": {
 			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
 			State: StateObserving, ConsecutiveSuccesses: 1, ObservingUntil: &observingUntil, CurrentWeight: 0,
+			LastRemoteAction: RemoteActionSub2APIStatusInactive,
 		},
 	}
 	platform := &fakePlatformActioner{}
 	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}
 	reader := fakePlatformGroupReader{
 		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
-		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Status: "inactive", Models: "gpt-4o"}}},
 		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
 	}
 	svc := newAdminTargetsRemoteActionService(reader, mySites, repo, platform)
@@ -173,18 +174,19 @@ func TestProbeTargetOnce_Sub2APIAutoRemoteRestoreFailureRecordsFailedAction(t *t
 	repo := newFakeRepository()
 	repo.policies = []Policy{sub2APIProbePolicy(true)}
 	targetID := "sub2api:ws1:acc-1"
-	observingUntil := time.Now().Add(1 * time.Minute)
+	observingUntil := time.Now().Add(-1 * time.Minute)
 	repo.states[targetID] = map[string]ConnectionHealthState{
 		"gpt-4o": {
 			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
 			State: StateObserving, ConsecutiveSuccesses: 1, ObservingUntil: &observingUntil, CurrentWeight: 0,
+			LastRemoteAction: RemoteActionSub2APIStatusInactive,
 		},
 	}
 	platform := &fakePlatformActioner{sub2APIErr: errors.New("upstream 500")}
 	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}
 	reader := fakePlatformGroupReader{
 		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
-		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Status: "inactive", Models: "gpt-4o"}}},
 		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
 	}
 	svc := newAdminTargetsRemoteActionService(reader, mySites, repo, platform)

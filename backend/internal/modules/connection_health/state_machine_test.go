@@ -142,7 +142,7 @@ func TestTransition_ObservingThenRecoveringThenHealthy(t *testing.T) {
 		CurrentWeight:        0,
 		ConsecutiveSuccesses: out1.ConsecutiveSuccesses,
 		ObservingUntil:       &observingUntil,
-		Now:                  now,
+		Now:                  observingUntil,
 		Result:               ResultOK,
 		Policy:               policy,
 	})
@@ -172,6 +172,19 @@ func TestTransition_ObservingThenRecoveringThenHealthy(t *testing.T) {
 	}
 	if state != StateHealthy || weight != 100 {
 		t.Fatalf("expected full recovery to healthy/100, got state=%s weight=%d", state, weight)
+	}
+}
+
+func TestTransition_ObservingDoesNotRecoverBeforeDeadline(t *testing.T) {
+	now := time.Now()
+	observingUntil := now.Add(5 * time.Minute)
+	out := Transition(TransitionInput{
+		Current: StateObserving, CurrentWeight: 0, ConsecutiveSuccesses: 10,
+		ObservingUntil: &observingUntil, Now: now, Result: ResultOK,
+		Policy: Policy{SuccessThreshold: 2, RecoveryStepPercent: 25},
+	})
+	if out.NextState != StateObserving || out.TriggerRemoteRestore {
+		t.Fatalf("observation deadline must be enforced, got %+v", out)
 	}
 }
 

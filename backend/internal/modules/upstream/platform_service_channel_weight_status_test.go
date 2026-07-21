@@ -90,6 +90,34 @@ func TestUpdateNewAPIChannelWeightStatus_GetFailurePropagates(t *testing.T) {
 	}
 }
 
+func TestUpdateAdminTargetPriority_NewAPIPreservesWeightAndStatus(t *testing.T) {
+	var putBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/42":
+			writeJSON(w, map[string]any{"data": map[string]any{
+				"id": 42, "name": "channel", "type": 1, "key": "sk-secret", "base_url": "https://up",
+				"models": "gpt-4o", "group": "vip", "priority": 10, "weight": 80, "status": 1,
+			}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/channel/":
+			putBody, _ = readJSONBody(r)
+			writeJSON(w, map[string]any{"success": true})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformNewAPI, BaseURL: server.URL, Cookie: "session=abc", UserID: "1"}
+	if err := service.UpdateAdminTargetPriority(session, "42", 40999); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if putBody["priority"] != float64(40999) || putBody["weight"] != float64(80) || putBody["status"] != float64(1) {
+		t.Fatalf("priority update must preserve weight/status: %+v", putBody)
+	}
+}
+
 func readJSONBody(r *http.Request) (map[string]any, error) {
 	var body map[string]any
 	err := json.NewDecoder(r.Body).Decode(&body)

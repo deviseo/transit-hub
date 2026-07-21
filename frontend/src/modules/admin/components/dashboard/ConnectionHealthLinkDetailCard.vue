@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Zap } from 'lucide-vue-next'
 import {
+  connectionHealthMessageKey,
   connectionHealthRecordColorClass,
   connectionHealthStateBadgeClass,
   formatConnectionHealthTime,
@@ -27,9 +28,10 @@ const props = defineProps<{
   remoteAction: string
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const prefix = 'admin.connectionHealth'
 const cardPrefix = `${prefix}.eventsDialog.card`
+const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
 // remoteActionText 为空字符串时模板不渲染这一行；失败/unsupported 也照常展示，不隐藏。
 const remoteActionText = computed(() => {
@@ -96,7 +98,7 @@ const remoteActionText = computed(() => {
             :key="record.id"
             class="min-w-[2px] flex-1 rounded-[1px]"
             :class="connectionHealthRecordColorClass(record.result)"
-            :title="`${formatConnectionHealthTime(record.createdAt)} · ${t(`${prefix}.errorKeys.${record.result}`)}`"
+            :title="`${formatConnectionHealthTime(record.createdAt)} · ${readableMessage(record.result)}`"
           />
         </div>
         <span class="text-[10px] text-muted-foreground">{{ t(`${cardPrefix}.now`) }}</span>
