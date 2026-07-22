@@ -74,9 +74,11 @@ type GroupUsageTodayItem struct {
 // UpstreamKeyUsageTodayResponse 是 GET /api/dashboard/upstream-key-usage-today 返回的
 // 「今日成本」下钻明细：当前工作区所有上游站点中，今天有消费的 key 列表。
 type UpstreamKeyUsageTodayResponse struct {
-	Date  string                      `json:"date"`
-	Total float64                     `json:"total"`
-	Keys  []UpstreamKeyUsageTodayItem `json:"keys"`
+	Date        string                      `json:"date"`
+	Total       float64                     `json:"total"`
+	Keys        []UpstreamKeyUsageTodayItem `json:"keys"`
+	FailedSites int                         `json:"failedSites,omitempty"`
+	TotalSites  int                         `json:"totalSites,omitempty"`
 }
 
 // UpstreamKeyUsageTodayItem 是单个 key 的今日消费明细。

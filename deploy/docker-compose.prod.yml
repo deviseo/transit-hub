@@ -4,7 +4,7 @@ services:
   # TransitHub 应用服务：包含 Go 后端和已构建的前端静态文件。
   app:
     # 发布部署必须使用与代码内置版本号一致的固定镜像 tag。
-    image: deviseo/transithub:v0.1.11
+    image: deviseo/transithub:v0.1.12
     restart: unless-stopped
     depends_on:
       postgres:

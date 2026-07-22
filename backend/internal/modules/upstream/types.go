@@ -360,6 +360,29 @@ type KeyUsageTodayItem struct {
 	RechargeRate float64
 }
 
+// KeyUsageCollectionError 表示跨多个上游站点采集 Key 用量时有站点失败。
+// Items 仍由调用方通过正常返回值获得；FailedSites < TotalSites 时属于部分成功，
+// 调用方可以展示已成功数据并明确标注缺失范围，而不必把失败站点静默当成零消费。
+type KeyUsageCollectionError struct {
+	FailedSites int
+	TotalSites  int
+	Cause       error
+}
+
+func (e *KeyUsageCollectionError) Error() string {
+	if e == nil || e.Cause == nil {
+		return ErrorRequest
+	}
+	return e.Cause.Error()
+}
+
+func (e *KeyUsageCollectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // BalanceBreakdownItem 是仪表盘「上游总余额」下钻明细中单个站点的余额展示数据。
 // Balance/RawBalance 为 nil 表示该站点余额未知（未配置 rechargeRate 或尚未同步成功）。
 type BalanceBreakdownItem struct {

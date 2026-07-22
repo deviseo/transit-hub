@@ -406,6 +406,7 @@ export default {
         todayPurchase: "Today's Cost",
         netProfit: "Today's Net Profit",
         upstreamBalance: 'Upstream Total Balance',
+        profitMargin: "Today's Margin",
         groupCount: 'My Groups',
         groupCountCaption: 'Click to view group details'
       },
@@ -420,11 +421,69 @@ export default {
         month: 'Month'
       },
       delta: {
-        vsPrev: 'vs prev day'
+        vsPrev: 'vs prev day',
+        percentagePoints: '{value} pts'
+      },
+      common: {
+        unavailable: 'N/A'
+      },
+      performance: {
+        title: 'Business Performance',
+        subtitle: 'Revenue, cost, and net profit over the same period',
+        periodRevenue: 'Period Revenue',
+        periodCost: 'Period Cost',
+        periodProfit: 'Period Net Profit',
+        chartAria: 'Combined revenue, cost, and net profit trend chart'
+      },
+      capital: {
+        title: 'Capital Safety',
+        subtitle: 'Balance coverage and cost runway',
+        siteBalance: 'Site User Balance',
+        upstreamBalance: 'Upstream Balance',
+        coverage: 'Balance Coverage',
+        coverageHint: 'Upstream balance relative to total site user balance',
+        runway: 'Estimated Runway',
+        runwayHint: 'Based on average daily cost for this period',
+        runwayValue: '{value} days'
+      },
+      groups: {
+        title: 'Group Contribution',
+        subtitle: 'Top groups by revenue today',
+        total: '{count} groups',
+        amount: "Today's Revenue",
+        topThreeShare: 'Top 3 revenue share',
+        empty: 'No group revenue data available.',
+        loadError: 'Group contribution data is temporarily unavailable.',
+        chartAria: 'Today group revenue contribution ranking chart'
+      },
+      attention: {
+        title: 'Needs Attention',
+        subtitle: 'Health status and upstream balance issues',
+        healthTitle: 'Target Health Issues',
+        healthDescription: '{attention} need attention, {suspended} suspended or disabled',
+        failuresTitle: 'Probe Failures in 24 Hours',
+        failuresDescription: 'Review failure categories and recent state changes',
+        upstreamTitle: 'Upstream Balance Issues',
+        upstreamDescription: 'Some upstream sites have unknown balances or connection errors',
+        allClearTitle: 'No Clear Issues',
+        allClearDescription: 'No health target or upstream balance issue currently requires attention.',
+        unavailableTitle: 'Operational Status Unavailable',
+        unavailableDescription: 'Core business metrics are unaffected. Retry health and upstream status shortly.',
+        lastProbe: 'Last probe: {time}',
+        neverProbed: 'No records',
+        refresh: 'Refresh operational status',
+        partialLoadError: 'Some operational data failed to load'
       },
       loading: 'Loading metrics...',
       loadError: 'Failed to load dashboard metrics.',
       retry: 'Retry',
+      dataStatus: {
+        refreshing: 'Refreshing latest data',
+        updatedAt: 'Updated at {time}',
+        waiting: 'Waiting for first update',
+        failed: 'Refresh failed; showing previous data',
+        refresh: 'Refresh dashboard data'
+      },
       loadingModal: {
         title: 'Loading Dashboard Data',
         progress: '{progress}% complete',
@@ -455,8 +514,12 @@ export default {
         subtitle: '{count} keys, {total} total',
         close: 'Close',
         empty: 'No keys with usage today.',
-        loadError: 'Failed to load today\'s cost breakdown.',
+        loadError: 'Failed to load today\'s cost breakdown. Check upstream site connections and retry.',
+        partialWarning: '{failed} of {total} upstream sites are unavailable. Totals include successful sites only.',
         retry: 'Retry',
+        errors: {
+          unavailable: 'Key usage is unavailable for every upstream site. Check site connections or credentials.'
+        },
         columns: {
           siteName: 'Upstream Site',
           keyName: 'Key Name',

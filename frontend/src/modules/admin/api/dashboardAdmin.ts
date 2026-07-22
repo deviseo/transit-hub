@@ -180,6 +180,8 @@ export interface UpstreamKeyUsageTodayResponse {
   date: string
   total: number
   keys: UpstreamKeyUsageTodayItem[]
+  failedSites?: number
+  totalSites?: number
 }
 
 /** 获取当前工作区所有上游站点中，今天有消费的 key 明细。仅在弹窗打开时按需调用。 */

@@ -207,6 +207,16 @@ func (f *fakeRepository) ListRecentEventsByWorkspace(ctx context.Context, userID
 	return out, nil
 }
 
+func (f *fakeRepository) CountFailureEventsSince(ctx context.Context, userID string, adminAccountID string, since time.Time) (int, error) {
+	count := 0
+	for _, event := range f.events {
+		if event.UserID == userID && event.AdminAccountID == adminAccountID && !event.CreatedAt.Before(since) && slices.Contains(probeFailureResultKeys(), event.Result) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (f *fakeRepository) CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error) {
 	count := 0
 	for _, e := range f.events {
@@ -421,6 +431,16 @@ func (f *fakeRepository) ListAllTargetActionStates(ctx context.Context) ([]Targe
 	return states, nil
 }
 
+func (f *fakeRepository) ListTargetActionStates(ctx context.Context, userID string, adminAccountID string) ([]TargetActionState, error) {
+	states := make([]TargetActionState, 0)
+	for _, state := range f.targetActionStates {
+		if state.UserID == userID && state.AdminAccountID == adminAccountID {
+			states = append(states, state)
+		}
+	}
+	return states, nil
+}
+
 func (f *fakeRepository) UpsertTargetActionState(ctx context.Context, state TargetActionState) error {
 	if f.targetActionStates == nil {
 		f.targetActionStates = map[string]TargetActionState{}
@@ -601,6 +621,50 @@ func TestOverview_CountsByState(t *testing.T) {
 	}
 	if overview.TotalConnections != 1 || overview.Healthy != 1 || overview.Degraded != 1 {
 		t.Fatalf("unexpected overview counts: %+v", overview)
+	}
+}
+
+func TestStoredSummary_DeduplicatesTargetsAndKeepsWorkspaceIsolated(t *testing.T) {
+	now := time.Now()
+	olderProbe := now.Add(-2 * time.Hour)
+	latestProbe := now.Add(-30 * time.Minute)
+	repo := newFakeRepository()
+	repo.states["target-healthy"] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: "target-healthy", ModelName: "model-a", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy, LastProbeAt: &olderProbe},
+		"model-b": {ConnectionID: "target-healthy", ModelName: "model-b", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy},
+	}
+	repo.states["target-attention"] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: "target-attention", ModelName: "model-a", UserID: "user1", AdminAccountID: "ws1", State: StateHealthy},
+		"model-b": {ConnectionID: "target-attention", ModelName: "model-b", UserID: "user1", AdminAccountID: "ws1", State: StateRecovering, LastProbeAt: &latestProbe},
+	}
+	repo.states["target-suspended"] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: "target-suspended", ModelName: "model-a", UserID: "user1", AdminAccountID: "ws1", State: StateDisabled},
+	}
+	repo.states["other-workspace"] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: "other-workspace", ModelName: "model-a", UserID: "user1", AdminAccountID: "ws2", State: StateSuspended},
+	}
+	repo.targetActionStates["user1|ws1|target-suspended"] = TargetActionState{UserID: "user1", AdminAccountID: "ws1", TargetID: "target-suspended"}
+	repo.targetActionStates["user1|ws2|other-workspace"] = TargetActionState{UserID: "user1", AdminAccountID: "ws2", TargetID: "other-workspace"}
+	repo.events = []ConnectionHealthEvent{
+		{ID: "failure-recent", UserID: "user1", AdminAccountID: "ws1", Result: string(ResultServerError), CreatedAt: now.Add(-time.Hour)},
+		{ID: "success-recent", UserID: "user1", AdminAccountID: "ws1", Result: string(ResultOK), CreatedAt: now.Add(-time.Hour)},
+		{ID: "failure-old", UserID: "user1", AdminAccountID: "ws1", Result: string(ResultAuth), CreatedAt: now.Add(-25 * time.Hour)},
+		{ID: "failure-other", UserID: "user1", AdminAccountID: "ws2", Result: string(ResultAuth), CreatedAt: now.Add(-time.Hour)},
+	}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	summary, err := service.StoredSummary(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.TotalTargets != 3 || summary.HealthyTargets != 1 || summary.AttentionTargets != 1 || summary.SuspendedTargets != 1 {
+		t.Fatalf("unexpected target counts: %+v", summary)
+	}
+	if summary.ManagedTargets != 1 || summary.RecentFailureEvents != 1 {
+		t.Fatalf("unexpected managed/failure counts: %+v", summary)
+	}
+	if summary.LastProbeAt == nil || !summary.LastProbeAt.Equal(latestProbe) {
+		t.Fatalf("expected latest probe %v, got %v", latestProbe, summary.LastProbeAt)
 	}
 }
 

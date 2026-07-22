@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -209,6 +210,36 @@ func TestServiceKeyUsageToday_ExternalErrorFailsClosed(t *testing.T) {
 	_, err := svc.KeyUsageToday(context.Background(), "user-1")
 	if err == nil {
 		t.Fatal("expected error when upstream platform request fails, got nil (silently treated as 0)")
+	}
+}
+
+// TestServiceKeyUsageToday_PartialFailureKeepsSuccessfulItems 验证多站点采集时，
+// 单个站点失败不会丢弃其他站点已经取得的数据，同时返回可识别的失败站点计数。
+func TestServiceKeyUsageToday_PartialFailureKeepsSuccessfulItems(t *testing.T) {
+	successServer := sub2APIKeyServer(t, "1", "working-key", "vip", 10)
+	defer successServer.Close()
+	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failingServer.Close()
+
+	cache := newFakeSiteCache()
+	cache.add(newTestSite("site-success", "user-1", "acc-1", 2, &Session{Platform: PlatformSub2API, BaseURL: successServer.URL, AccessToken: "token"}))
+	cache.add(newTestSite("site-failure", "user-1", "acc-1", 2, &Session{Platform: PlatformSub2API, BaseURL: failingServer.URL, AccessToken: "token"}))
+
+	svc := NewService(NewPlatformService(NewHTTPClient(http.DefaultClient)), nil, nil, cache)
+	svc.SetAdminAccountResolver(&fakeAccountResolver{current: map[string]string{"user-1": "acc-1"}})
+
+	items, err := svc.KeyUsageToday(context.Background(), "user-1")
+	var collectionErr *KeyUsageCollectionError
+	if !errors.As(err, &collectionErr) {
+		t.Fatalf("expected KeyUsageCollectionError, got %v", err)
+	}
+	if collectionErr.FailedSites != 1 || collectionErr.TotalSites != 2 {
+		t.Fatalf("unexpected failure counts: %+v", collectionErr)
+	}
+	if len(items) != 1 || items[0].SiteID != "site-success" || items[0].TodayAmount != 20 {
+		t.Fatalf("successful site data should be preserved, got %+v", items)
 	}
 }
 

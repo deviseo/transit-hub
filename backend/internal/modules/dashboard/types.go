@@ -20,13 +20,14 @@ const (
 
 // 前端用于国际化的错误 key，统一挂在 admin.dashboard.adminAuth.errors 命名空间下。
 const (
-	ErrorRequest             = "admin.dashboard.adminAuth.errors.request"
-	ErrorMissingCredentials  = "admin.dashboard.adminAuth.errors.missingCredentials"
-	ErrorInvalidURL          = "admin.dashboard.adminAuth.errors.invalidUrl"
-	ErrorAdminOnly           = "admin.dashboard.adminAuth.errors.adminOnly"
-	ErrorNetwork             = "admin.dashboard.adminAuth.errors.network"
-	ErrorPlatformUnsupported = "admin.dashboard.adminAuth.errors.platformUnsupported"
-	ErrorUnknown             = "admin.dashboard.adminAuth.errors.unknown"
+	ErrorRequest                     = "admin.dashboard.adminAuth.errors.request"
+	ErrorMissingCredentials          = "admin.dashboard.adminAuth.errors.missingCredentials"
+	ErrorInvalidURL                  = "admin.dashboard.adminAuth.errors.invalidUrl"
+	ErrorAdminOnly                   = "admin.dashboard.adminAuth.errors.adminOnly"
+	ErrorNetwork                     = "admin.dashboard.adminAuth.errors.network"
+	ErrorPlatformUnsupported         = "admin.dashboard.adminAuth.errors.platformUnsupported"
+	ErrorUnknown                     = "admin.dashboard.adminAuth.errors.unknown"
+	ErrorUpstreamKeyUsageUnavailable = "admin.dashboard.upstreamKeyUsage.errors.unavailable"
 )
 
 // AdminSession 是持久化到 Redis 的仪表盘 admin 会话。

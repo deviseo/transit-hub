@@ -182,6 +182,17 @@ export interface ConnectionHealthOverview {
   recentEvents: ConnectionHealthEvent[]
 }
 
+// 工作台轻量摘要只来自本地健康状态与事件表，不会在页面加载时触发上游探活。
+export interface ConnectionHealthStoredSummary {
+  totalTargets: number
+  healthyTargets: number
+  attentionTargets: number
+  suspendedTargets: number
+  managedTargets: number
+  recentFailureEvents: number
+  lastProbeAt?: string | null
+}
+
 export interface ModelTargetInput {
   id?: string
   modelName: string

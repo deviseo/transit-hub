@@ -23,6 +23,7 @@ type healthRepository interface {
 	InsertEvent(ctx context.Context, e ConnectionHealthEvent) error
 	ListEventsByConnection(ctx context.Context, connectionID string, userID string, adminAccountID string, limit int) ([]ConnectionHealthEvent, error)
 	ListRecentEventsByWorkspace(ctx context.Context, userID string, adminAccountID string, limit int) ([]ConnectionHealthEvent, error)
+	CountFailureEventsSince(ctx context.Context, userID string, adminAccountID string, since time.Time) (int, error)
 	CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error)
 	TryConsumeProbeBudget(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time, limit int) (bool, error)
 	TryAcquireSchedulerLease(ctx context.Context) (release func(), acquired bool, err error)
@@ -43,6 +44,7 @@ type healthRepository interface {
 	UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error
 	DeletePrioritySyncState(ctx context.Context, userID string, adminAccountID string, targetID string) error
 	GetTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) (*TargetActionState, error)
+	ListTargetActionStates(ctx context.Context, userID string, adminAccountID string) ([]TargetActionState, error)
 	ListAllTargetActionStates(ctx context.Context) ([]TargetActionState, error)
 	UpsertTargetActionState(ctx context.Context, state TargetActionState) error
 	DeleteTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) error
@@ -163,6 +165,82 @@ type OverviewResponse struct {
 	Disabled         int         `json:"disabled"`
 	Unconfigured     int         `json:"unconfigured"`
 	RecentEvents     []EventView `json:"recentEvents"`
+}
+
+// StoredSummaryResponse 是工作台使用的轻量健康摘要。它只聚合本地状态、事件和动作接管表，
+// 不读取上游分组，也不会触发模型发现或真实探活，因此可以安全地随工作台刷新。
+type StoredSummaryResponse struct {
+	TotalTargets        int        `json:"totalTargets"`
+	HealthyTargets      int        `json:"healthyTargets"`
+	AttentionTargets    int        `json:"attentionTargets"`
+	SuspendedTargets    int        `json:"suspendedTargets"`
+	ManagedTargets      int        `json:"managedTargets"`
+	RecentFailureEvents int        `json:"recentFailureEvents"`
+	LastProbeAt         *time.Time `json:"lastProbeAt,omitempty"`
+}
+
+// StoredSummary 读取当前 workspace 已落库的健康状态。一个目标可能包含多个模型状态，
+// 这里只按目标去重并采用最高风险状态，避免多模型配置让工作台数字失真。
+func (s *Service) StoredSummary(ctx context.Context, userID string) (StoredSummaryResponse, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return StoredSummaryResponse{}, err
+	}
+
+	states, err := s.repo.ListStatesByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return StoredSummaryResponse{}, err
+	}
+	actionStates, err := s.repo.ListTargetActionStates(ctx, userID, adminAccountID)
+	if err != nil {
+		return StoredSummaryResponse{}, err
+	}
+	recentFailures, err := s.repo.CountFailureEventsSince(ctx, userID, adminAccountID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		return StoredSummaryResponse{}, err
+	}
+
+	const (
+		targetHealthy = iota + 1
+		targetAttention
+		targetSuspended
+	)
+	targetRisk := make(map[string]int)
+	var lastProbeAt *time.Time
+	for _, state := range states {
+		risk := targetHealthy
+		switch state.State {
+		case StateSuspended, StateDisabled:
+			risk = targetSuspended
+		case StateDegraded, StateObserving, StateRecovering:
+			risk = targetAttention
+		}
+		if risk > targetRisk[state.ConnectionID] {
+			targetRisk[state.ConnectionID] = risk
+		}
+		if state.LastProbeAt != nil && (lastProbeAt == nil || state.LastProbeAt.After(*lastProbeAt)) {
+			probeAt := *state.LastProbeAt
+			lastProbeAt = &probeAt
+		}
+	}
+
+	response := StoredSummaryResponse{
+		TotalTargets:        len(targetRisk),
+		ManagedTargets:      len(actionStates),
+		RecentFailureEvents: recentFailures,
+		LastProbeAt:         lastProbeAt,
+	}
+	for _, risk := range targetRisk {
+		switch risk {
+		case targetSuspended:
+			response.SuspendedTargets++
+		case targetAttention:
+			response.AttentionTargets++
+		default:
+			response.HealthyTargets++
+		}
+	}
+	return response, nil
 }
 
 // Groups 按「我的分组 -> 对接链路 -> 模型」聚合当前 workspace 的健康状态。

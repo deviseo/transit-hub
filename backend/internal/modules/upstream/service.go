@@ -259,6 +259,15 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 	var mu sync.Mutex
 	items := make([]KeyUsageTodayItem, 0)
 	var firstErr error
+	failedSites := 0
+	recordFailure := func(failure error) {
+		mu.Lock()
+		defer mu.Unlock()
+		failedSites++
+		if firstErr == nil {
+			firstErr = failure
+		}
+	}
 
 	for _, site := range targets {
 		wg.Add(1)
@@ -272,21 +281,13 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 
 			refreshedSession, refreshErr := s.platformService.RefreshSession(session)
 			if refreshErr != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = refreshErr
-				}
-				mu.Unlock()
+				recordFailure(refreshErr)
 				return
 			}
 
 			stats, fetchErr := s.platformService.FetchKeyUsageToday(refreshedSession, groups)
 			if fetchErr != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fetchErr
-				}
-				mu.Unlock()
+				recordFailure(fetchErr)
 				return
 			}
 
@@ -324,7 +325,11 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 	wg.Wait()
 
 	if firstErr != nil {
-		return nil, firstErr
+		return items, &KeyUsageCollectionError{
+			FailedSites: failedSites,
+			TotalSites:  len(targets),
+			Cause:       firstErr,
+		}
 	}
 	return items, nil
 }
