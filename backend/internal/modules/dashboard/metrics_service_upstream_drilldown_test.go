@@ -72,6 +72,29 @@ func TestUpstreamKeyUsageToday_PropagatesUpstreamError(t *testing.T) {
 	}
 }
 
+func TestUpstreamKeyUsageToday_ReturnsPartialSuccessMetadata(t *testing.T) {
+	upstreams := &fakeUpstreamLister{
+		keyUsageItems: []upstream.KeyUsageTodayItem{{SiteID: "site-a", KeyID: "1", KeyName: "working", TodayAmount: 12}},
+		keyUsageErr: &upstream.KeyUsageCollectionError{
+			FailedSites: 1,
+			TotalSites:  2,
+			Cause:       errors.New("one upstream failed"),
+		},
+	}
+	service := NewMetricsService(nil, nil, upstreams, nil, nil)
+
+	response, err := service.UpstreamKeyUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("partial success should remain readable, got %v", err)
+	}
+	if len(response.Keys) != 1 || response.Total != 12 {
+		t.Fatalf("successful key usage was lost: %+v", response)
+	}
+	if response.FailedSites != 1 || response.TotalSites != 2 {
+		t.Fatalf("unexpected partial metadata: %+v", response)
+	}
+}
+
 // TestUpstreamBalanceBreakdown_SortsWithUnknownBalanceLastAndSumsKnownOnly 覆盖测试要求 7、8：
 // 按 balance 降序排序，未知余额站点排在最后；total 只对已知余额求和。
 func TestUpstreamBalanceBreakdown_SortsWithUnknownBalanceLastAndSumsKnownOnly(t *testing.T) {

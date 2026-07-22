@@ -628,6 +628,22 @@ func (r *Repository) ListRecentEventsByWorkspace(ctx context.Context, userID str
 	return scanEvents(rows)
 }
 
+// CountFailureEventsSince 统计 workspace 在给定时间后的真实探活失败事件。该查询只返回
+// 聚合数字，避免工作台为了一个计数拉取并截断大量事件记录。
+func (r *Repository) CountFailureEventsSince(ctx context.Context, userID string, adminAccountID string, since time.Time) (int, error) {
+	row := r.db.QueryRow(ctx, `
+		SELECT count(*)
+		FROM connection_health_events
+		WHERE user_id = $1 AND admin_account_id = $2 AND created_at >= $3
+			AND result = ANY($4)
+	`, userID, adminAccountID, since, probeFailureResultKeys())
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // CountProbesToday 按策略统计当天真实探活次数。旧事件没有 policy_id，不再与新策略共享预算；
 // 这样升级后每条策略都严格消费自己的 DailyProbeBudget。
 func (r *Repository) CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error) {
@@ -788,9 +804,13 @@ func (r *Repository) acquireRuntimeLease(ctx context.Context, key string, wait b
 }
 
 func probeResultKeys() []string {
+	return append([]string{string(ResultOK)}, probeFailureResultKeys()...)
+}
+
+func probeFailureResultKeys() []string {
 	return []string{
-		string(ResultOK), string(ResultNetworkFluctuation), string(ResultRateLimited),
-		string(ResultServerError), string(ResultAuth), string(ResultModelNotFound), string(ResultInvalidResponse),
+		string(ResultNetworkFluctuation), string(ResultRateLimited), string(ResultServerError),
+		string(ResultAuth), string(ResultModelNotFound), string(ResultInvalidResponse),
 	}
 }
 
@@ -1166,6 +1186,20 @@ func (r *Repository) GetTargetActionState(ctx context.Context, userID string, ad
 	return &state, nil
 }
 
+func (r *Repository) ListTargetActionStates(ctx context.Context, userID string, adminAccountID string) ([]TargetActionState, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, admin_account_id, target_id, original_status, original_weight,
+			last_applied_status, last_applied_weight, pending_status, pending_weight, conflict, updated_at
+		FROM connection_health_target_action_states
+		WHERE user_id = $1 AND admin_account_id = $2
+	`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTargetActionStates(rows)
+}
+
 func (r *Repository) ListAllTargetActionStates(ctx context.Context) ([]TargetActionState, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT user_id, admin_account_id, target_id, original_status, original_weight,
@@ -1176,6 +1210,10 @@ func (r *Repository) ListAllTargetActionStates(ctx context.Context) ([]TargetAct
 		return nil, err
 	}
 	defer rows.Close()
+	return scanTargetActionStates(rows)
+}
+
+func scanTargetActionStates(rows pgx.Rows) ([]TargetActionState, error) {
 	states := make([]TargetActionState, 0)
 	for rows.Next() {
 		var state TargetActionState

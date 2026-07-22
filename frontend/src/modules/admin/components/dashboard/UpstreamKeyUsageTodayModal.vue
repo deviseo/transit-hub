@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowDownWideNarrow, ArrowUpWideNarrow, Loader2, RefreshCw, ShoppingCart, X } from 'lucide-vue-next'
+import { AlertTriangle, ArrowDownWideNarrow, ArrowUpWideNarrow, Loader2, RefreshCw, ShoppingCart, X } from 'lucide-vue-next'
 import { getUpstreamKeyUsageToday, type UpstreamKeyUsageTodayItem } from '../../api/dashboardAdmin'
 import { formatCny } from '../../utils/dashboard'
 
@@ -19,6 +19,8 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const keys = ref<UpstreamKeyUsageTodayItem[]>([])
 const total = ref(0)
+const failedSites = ref(0)
+const totalSites = ref(0)
 // 默认按金额从高到低排序；toggle 后按金额从低到高，金额相同时用 key 名排序，均不触发新的请求。
 const sortAsc = ref(false)
 
@@ -36,16 +38,26 @@ const toggleSort = () => {
 
 const platformLabel = (platform: string): string => t(`admin.upstream.modal.form.platforms.${platform}`)
 
+const loadErrorKey = (err: unknown): string => {
+  if (!(err instanceof Error)) return 'admin.dashboard.upstreamKeyUsage.loadError'
+  if (err.message.startsWith('admin.dashboard.upstreamKeyUsage.')) return err.message
+  return 'admin.dashboard.upstreamKeyUsage.loadError'
+}
+
 // 仅展示掩码后的 key 名称（后端已保证不会返回真实密钥/token），前端不做额外处理。
 const loadData = async () => {
   loading.value = true
   error.value = null
+  failedSites.value = 0
+  totalSites.value = 0
   try {
     const response = await getUpstreamKeyUsageToday()
     keys.value = response.keys ?? []
     total.value = response.total ?? 0
+    failedSites.value = response.failedSites ?? 0
+    totalSites.value = response.totalSites ?? 0
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'admin.dashboard.upstreamKeyUsage.loadError'
+    error.value = loadErrorKey(err)
   } finally {
     loading.value = false
   }
@@ -125,14 +137,22 @@ watch(() => props.open, (isOpen) => {
           </div>
 
           <div
-            v-else-if="sortedKeys.length === 0"
+            v-else-if="failedSites > 0"
+            class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 text-sm text-muted-foreground"
+          >
+            <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+            <span>{{ t('admin.dashboard.upstreamKeyUsage.partialWarning', { failed: failedSites, total: totalSites }) }}</span>
+          </div>
+
+          <div
+            v-if="!loading && !error && sortedKeys.length === 0"
             class="flex flex-col items-center justify-center gap-2 py-12 text-center"
           >
             <ShoppingCart class="h-8 w-8 text-muted-foreground/40" />
             <p class="text-sm text-muted-foreground">{{ t('admin.dashboard.upstreamKeyUsage.empty') }}</p>
           </div>
 
-          <div v-else class="max-h-[60vh] overflow-y-auto rounded-xl border border-border/60">
+          <div v-else-if="!loading && !error" class="max-h-[60vh] overflow-y-auto rounded-xl border border-border/60">
             <table class="w-full text-sm">
               <thead class="sticky top-0 z-10 bg-surface/90 backdrop-blur">
                 <tr class="border-b border-border/60 text-left text-xs font-medium text-muted-foreground">

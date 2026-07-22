@@ -4,6 +4,7 @@ import type {
   AdminGroupHealth,
   ConnectionHealthEvent,
   ConnectionHealthOverview,
+  ConnectionHealthStoredSummary,
   ConnectionHealthPolicy,
   ManualProbeModelOption,
   ManualProbeResult,
@@ -65,6 +66,9 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
 
 export const getConnectionHealthOverview = async (): Promise<ConnectionHealthOverview> =>
   requestJson<ConnectionHealthOverview>('/connection-health/overview')
+
+export const getConnectionHealthStoredSummary = async (): Promise<ConnectionHealthStoredSummary> =>
+  requestJson<ConnectionHealthStoredSummary>('/connection-health/stored-summary')
 
 export const getConnectionHealthGroups = async (): Promise<OwnGroupHealth[]> =>
   requestJson<OwnGroupHealth[]>('/connection-health/groups')

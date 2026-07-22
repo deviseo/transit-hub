@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log"
 	"sort"
 	"strings"
@@ -502,8 +503,16 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 // 这里只负责排序展示和响应封装。
 func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID string) (UpstreamKeyUsageTodayResponse, error) {
 	items, err := s.upstreams.KeyUsageToday(ctx, userID)
+	failedSites := 0
+	totalSites := 0
 	if err != nil {
-		return UpstreamKeyUsageTodayResponse{}, err
+		var collectionErr *upstream.KeyUsageCollectionError
+		if !errors.As(err, &collectionErr) || collectionErr.TotalSites <= 0 || collectionErr.FailedSites >= collectionErr.TotalSites {
+			return UpstreamKeyUsageTodayResponse{}, requestError(ErrorUpstreamKeyUsageUnavailable)
+		}
+		failedSites = collectionErr.FailedSites
+		totalSites = collectionErr.TotalSites
+		log.Printf("dashboard key usage: partial upstream failure user_id=%s failed_sites=%d total_sites=%d", userID, failedSites, totalSites)
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -528,9 +537,11 @@ func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID strin
 	}
 
 	return UpstreamKeyUsageTodayResponse{
-		Date:  time.Now().Format("2006-01-02"),
-		Total: total,
-		Keys:  responseItems,
+		Date:        time.Now().Format("2006-01-02"),
+		Total:       total,
+		Keys:        responseItems,
+		FailedSites: failedSites,
+		TotalSites:  totalSites,
 	}, nil
 }
 

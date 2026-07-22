@@ -24,7 +24,7 @@ export function useDashboardAdmin() {
   const handleUnauthorized = (message: string): boolean => message === authUnauthorizedErrorKey
 
   // 进入仪表盘后检查 admin 登录状态：已登录则不弹窗，未登录则弹窗让登录。
-  const checkStatus = async () => {
+  const checkStatus = async (options: { preserveAuthenticatedOnError?: boolean } = {}) => {
     if (isChecking.value) return
     isChecking.value = true
     errorKey.value = null
@@ -35,6 +35,13 @@ export function useDashboardAdmin() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'admin.dashboard.adminAuth.errors.unknown'
       if (handleUnauthorized(message)) return
+      // 仪表盘已有内存快照时，临时网络故障不应立刻清空页面并误导用户重新登录。
+      // 后续实时指标请求仍会执行完整 admin 校验；若后端明确返回未登录，上面的正常
+      // 响应分支仍会把 authenticated 更新为 false，不会绕过权限门禁。
+      if (options.preserveAuthenticatedOnError && status.value.authenticated) {
+        errorKey.value = message
+        return
+      }
       // 状态接口失败时也打开弹窗，让用户可以尝试登录。
       status.value = { authenticated: false }
       isModalOpen.value = true

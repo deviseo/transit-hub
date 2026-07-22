@@ -235,6 +235,8 @@ func writeError(w http.ResponseWriter, err error) {
 			status = http.StatusForbidden
 		case requestError(ErrorPlatformUnsupported):
 			status = http.StatusNotImplemented
+		case requestError(ErrorUpstreamKeyUsageUnavailable):
+			status = http.StatusBadGateway
 		}
 		httpjson.WriteError(w, status, requestErr.Error())
 		return

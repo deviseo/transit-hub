@@ -406,6 +406,7 @@ export default {
         todayPurchase: '今日成本',
         netProfit: '今日净利润',
         upstreamBalance: '上游总余额',
+        profitMargin: '今日利润率',
         groupCount: '我的分组总数',
         groupCountCaption: '点击查看分组详情'
       },
@@ -420,11 +421,69 @@ export default {
         month: '月'
       },
       delta: {
-        vsPrev: '较前一日'
+        vsPrev: '较前一日',
+        percentagePoints: '{value} 个百分点'
+      },
+      common: {
+        unavailable: '暂无'
+      },
+      performance: {
+        title: '经营表现',
+        subtitle: '营收、成本与净利润的同期变化',
+        periodRevenue: '周期营收',
+        periodCost: '周期成本',
+        periodProfit: '周期净利润',
+        chartAria: '营收、成本与净利润组合趋势图'
+      },
+      capital: {
+        title: '资金安全',
+        subtitle: '余额覆盖与成本续航',
+        siteBalance: '站点用户余额',
+        upstreamBalance: '上游可用余额',
+        coverage: '余额覆盖率',
+        coverageHint: '上游余额相对于站点用户余额的覆盖比例',
+        runway: '预计续航',
+        runwayHint: '按当前周期日均成本估算',
+        runwayValue: '{value} 天'
+      },
+      groups: {
+        title: '分组贡献',
+        subtitle: '今日营收最高的分组',
+        total: '{count} 个分组',
+        amount: '今日营收',
+        topThreeShare: '前三分组营收占比',
+        empty: '暂无分组营收数据。',
+        loadError: '分组贡献数据暂时无法加载。',
+        chartAria: '今日分组营收贡献排名图'
+      },
+      attention: {
+        title: '需要关注',
+        subtitle: '健康状态与上游余额异常',
+        healthTitle: '目标健康状态异常',
+        healthDescription: '{attention} 个需观察，{suspended} 个已暂停或禁用',
+        failuresTitle: '近 24 小时探活失败',
+        failuresDescription: '查看失败分类与最近状态变化',
+        upstreamTitle: '上游余额待处理',
+        upstreamDescription: '存在余额未知或连接异常的上游站点',
+        allClearTitle: '当前没有明确异常',
+        allClearDescription: '健康目标和上游余额暂未发现需要处理的问题。',
+        unavailableTitle: '运行状态暂时不可用',
+        unavailableDescription: '核心经营数据不受影响，请稍后重试健康与上游状态。',
+        lastProbe: '最近探活：{time}',
+        neverProbed: '尚无记录',
+        refresh: '刷新运行状态',
+        partialLoadError: '部分运行数据加载失败'
       },
       loading: '正在加载指标数据...',
       loadError: '加载仪表盘指标失败。',
       retry: '重试',
+      dataStatus: {
+        refreshing: '正在刷新最新数据',
+        updatedAt: '更新于 {time}',
+        waiting: '等待首次更新',
+        failed: '刷新失败，当前显示上次数据',
+        refresh: '刷新仪表盘数据'
+      },
       loadingModal: {
         title: '正在加载仪表盘数据',
         progress: '加载进度 {progress}%',
@@ -455,8 +514,12 @@ export default {
         subtitle: '共 {count} 个 key，合计 {total}',
         close: '关闭',
         empty: '暂无今日消费的 key。',
-        loadError: '加载今日成本明细失败。',
+        loadError: '加载今日成本明细失败，请检查上游站点连接后重试。',
+        partialWarning: '{failed}/{total} 个上游站点暂时无法读取，当前合计仅包含成功站点。',
         retry: '重试',
+        errors: {
+          unavailable: '所有上游站点的 Key 用量暂时都无法读取，请检查站点连接或登录凭证。'
+        },
         columns: {
           siteName: '上游站点',
           keyName: 'Key 名称',
