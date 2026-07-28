@@ -2070,6 +2070,27 @@ export default {
       balanceWarningAmount: 'Trigger Amount (CNY)',
       notifyBots: 'Send Notifications To',
       customTemplate: 'Custom Template',
+      templateEditor: {
+        formatLabel: 'Template format',
+        formatHelp: 'The live preview uses sample values. Delivery is adapted to each notification channel\'s supported rich-text format.',
+        editor: 'Template content',
+        preview: 'Live preview',
+        previewTitle: 'Live notification template preview',
+        formats: {
+          text: 'Plain text',
+          markdown: 'Markdown',
+          html: 'HTML'
+        },
+        samples: {
+          siteName: 'Example upstream',
+          balance: '8.50',
+          threshold: '10.00',
+          groupName: 'Default group',
+          oldRate: '1.0000',
+          newRate: '1.1200',
+          changeDirection: 'increased'
+        }
+      },
       balanceTemplateVars: '(Variables: {siteName}, {balance}, {threshold})',
       multiplierTemplateVars: '(Variables: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection})',
       unnamedBot: 'Unnamed Bot',
@@ -2085,12 +2106,18 @@ export default {
       pricingAmount: 'Adjustment Amount',
       botNameLabel: 'Bot Name',
       botNameDingtalkPlaceholder: 'e.g., DingTalk Main',
+      botNameWecomPlaceholder: 'e.g., WeCom Main',
+      botNameQQPlaceholder: 'e.g., QQ Direct Alerts',
       botNameFeishuPlaceholder: 'e.g., Feishu Main',
       botNameTelegramPlaceholder: 'e.g., TG Main',
       addDingtalkBot: 'Add DingTalk Bot',
+      addWecomBot: 'Add WeCom Bot',
+      addQQBot: 'Add QQ Bot',
       addFeishuBot: 'Add Feishu Bot',
       addTelegramBot: 'Add TG Bot',
       emptyDingtalk: 'No DingTalk bots configured',
+      emptyWecom: 'No WeCom bots configured',
+      emptyQQ: 'No QQ bots configured',
       emptyFeishu: 'No Feishu bots configured',
       emptyTelegram: 'No Telegram bots configured',
       tabs: {
@@ -2128,15 +2155,26 @@ export default {
         },
         channels: {
           title: 'Notification Channels',
-          description: 'Configure third-party channels for receiving system alerts (e.g., DingTalk, Telegram, Feishu).',
+          description: 'Configure third-party channels for receiving system alerts (e.g., DingTalk, WeCom, QQ, Telegram, Feishu).',
           dingtalk: 'DingTalk Bot',
           dingtalkHelp: 'Configure Webhook and Secret for DingTalk group bot.',
+          wecom: 'WeCom Bot',
+          wecomHelp: 'Configure the Webhook for a WeCom group bot. No signing secret is required.',
+          qq: 'QQ Bot',
+          qqHelp: 'Configure the app credentials and recipient user OpenID for an official QQ bot.',
           feishu: 'Feishu Bot',
           feishuHelp: 'Configure Webhook and Secret for Feishu group bot.',
           telegram: 'Telegram Bot',
           telegramHelp: 'Configure Bot Token and Chat ID for Telegram.',
           webhookUrl: 'Webhook URL',
           secret: 'Secret',
+          appId: 'AppID',
+          appIdPlaceholder: 'Enter the bot AppID',
+          appSecret: 'AppSecret',
+          appSecretPlaceholder: 'Enter the bot AppSecret',
+          userOpenId: 'User OpenID',
+          userOpenIdPlaceholder: 'Enter the recipient user openid',
+          userOpenIdHelp: 'Add the user to the message-list sandbox, have them scan and message the bot, then read it from the C2C_MESSAGE_CREATE event.',
           botToken: 'Bot Token',
           chatId: 'Chat ID',
           proxyUrl: 'Proxy URL (Optional)',
@@ -2147,8 +2185,10 @@ export default {
           testConnectionSuccess: 'Sent Successfully'
         },
         templates: {
-          balanceTemplatePlaceholder: 'e.g., [Warning] {siteName} balance (CNY) is below {threshold}, current is {balance}.',
-          multiplierTemplatePlaceholder: 'e.g., [Rate Change] {siteName} {groupName} changed from {oldRate}x to {newRate}x.'
+          balanceDefaultTemplate: '🔴 **Balance warning**\n\n🏷️ **Site:** {siteName}\n💰 **Current balance:** CNY {balance}\n⚠️ **Warning threshold:** CNY {threshold}\n\nPlease review and recharge the upstream account to avoid service interruption.',
+          multiplierDefaultTemplate: '🟠 **Multiplier change warning**\n\n🏷️ **Site:** {siteName}\n📦 **Group:** {groupName}\n📊 **Rate:** {oldRate}x → **{newRate}x** ({changeDirection})\n\n🔎 Review the cost change and confirm whether downstream pricing needs adjustment.',
+          balanceTemplatePlaceholder: 'e.g., 🔴 {siteName} has CNY {balance} remaining, below CNY {threshold}.',
+          multiplierTemplatePlaceholder: 'e.g., 🟠 {siteName} / {groupName}: {oldRate}x → {newRate}x.'
         }
       },
       errors: {
@@ -2157,6 +2197,7 @@ export default {
         unknown: 'An unknown error occurred while testing the notification channel.',
         invalidChannel: 'The notification channel type is invalid.',
         missingWebhook: 'Enter the robot webhook URL first.',
+        missingQQConfig: 'Enter the QQ bot AppID, AppSecret, and User OpenID first.',
         missingTelegramConfig: 'Enter the Telegram Bot Token and Chat ID first.',
         sendFailed: 'Failed to send the test message. Check the robot configuration and network connectivity.'
       },

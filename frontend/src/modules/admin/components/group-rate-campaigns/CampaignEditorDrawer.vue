@@ -153,13 +153,19 @@ const loadOptions = async () => {
   try {
     const [mappingOptions, channelSettings] = await Promise.all([
       getMySiteMappingOptions().catch(() => ({ ownGroups: [], mappings: [] })),
-      getNotificationChannelSettings().catch(() => ({ dingtalk: [], feishu: [], telegram: [] })),
+      getNotificationChannelSettings().catch(() => ({ dingtalk: [], wecom: [], qq: [], feishu: [], telegram: [] })),
     ])
     availableGroups.value = mappingOptions.ownGroups
 
     const bots: BotOption[] = []
     for (const bot of channelSettings.dingtalk ?? []) {
       if (bot.enabled) bots.push({ id: bot.id, name: bot.name, channel: 'DingTalk' })
+    }
+    for (const bot of channelSettings.wecom ?? []) {
+      if (bot.enabled) bots.push({ id: bot.id, name: bot.name, channel: 'WeCom' })
+    }
+    for (const bot of channelSettings.qq ?? []) {
+      if (bot.enabled) bots.push({ id: bot.id, name: bot.name, channel: 'QQ' })
     }
     for (const bot of channelSettings.feishu ?? []) {
       if (bot.enabled) bots.push({ id: bot.id, name: bot.name, channel: 'Feishu' })

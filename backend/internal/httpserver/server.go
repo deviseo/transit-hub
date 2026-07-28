@@ -601,7 +601,7 @@ func checkBalanceWarning(ctx context.Context, svc *settings.Service, uSvc *upstr
 
 	msg := formatBalanceWarning(siteName, newBalCNY, threshold, strategy.BalanceTemplate)
 	log.Printf("[alert] 余额预警触发 site=%s balanceCNY=%.2f threshold=%.2f rechargeRate=%.2f", siteName, newBalCNY, threshold, rechargeRate)
-	svc.SendToBots(ctx, userID, strategy.BalanceNotifyBotIDs, msg)
+	svc.SendFormattedToBots(ctx, userID, strategy.BalanceNotifyBotIDs, msg, strategy.BalanceTemplateFormat)
 }
 
 // checkMultiplierChanges 对比同步前后的分组倍率，任何变化都发送通知。
@@ -631,12 +631,12 @@ func checkMultiplierChanges(ctx context.Context, svc *settings.Service, strategy
 		}
 		msg := formatMultiplierChange(siteName, g.Name, oldVal, *g.Multiplier, strategy.MultiplierTemplate)
 		log.Printf("[alert] 倍率变更触发 site=%s group=%s old=%.4f new=%.4f", siteName, g.Name, oldVal, *g.Multiplier)
-		svc.SendToBots(ctx, userID, strategy.MultiplierNotifyBotIDs, msg)
+		svc.SendFormattedToBots(ctx, userID, strategy.MultiplierNotifyBotIDs, msg, strategy.MultiplierTemplateFormat)
 	}
 }
 
-const defaultBalanceTemplate = "【余额预警】{siteName} 站点余额（CNY）已不足 {threshold} 元，当前余额为 {balance} 元。"
-const defaultMultiplierTemplate = "【倍率变更】{siteName} 的 {groupName} 分组倍率已{changeDirection}：{oldRate}x -> {newRate}x。"
+const defaultBalanceTemplate = "🔴 余额预警\n🏷️ 站点：{siteName}\n💰 当前余额：¥{balance}\n⚠️ 预警阈值：¥{threshold}\n请及时检查并充值，避免服务中断。"
+const defaultMultiplierTemplate = "🟠 倍率变更预警\n🏷️ 站点：{siteName}\n📦 分组：{groupName}\n📊 变更：{oldRate}x → {newRate}x（{changeDirection}）\n请及时确认定价与路由策略。"
 
 func formatBalanceWarning(siteName string, balance, threshold float64, customTemplate string) string {
 	tpl := customTemplate

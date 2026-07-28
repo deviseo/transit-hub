@@ -2070,6 +2070,27 @@ export default {
       balanceWarningAmount: '触发金额（CNY）',
       notifyBots: '发送通知到机器人',
       customTemplate: '自定义通知文案',
+      templateEditor: {
+        formatLabel: '模板格式',
+        formatHelp: '实时预览会代入示例数据；发送时系统会按各通知渠道支持的富文本格式自动适配。',
+        editor: '模板内容',
+        preview: '实时预览',
+        previewTitle: '通知模板实时预览',
+        formats: {
+          text: '纯文本',
+          markdown: 'Markdown',
+          html: 'HTML'
+        },
+        samples: {
+          siteName: '示例上游站点',
+          balance: '8.50',
+          threshold: '10.00',
+          groupName: '默认分组',
+          oldRate: '1.0000',
+          newRate: '1.1200',
+          changeDirection: '上升'
+        }
+      },
       balanceTemplateVars: '(支持变量: {siteName}, {balance}, {threshold})',
       multiplierTemplateVars: '(支持变量: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection})',
       unnamedBot: '未命名机器人',
@@ -2085,12 +2106,18 @@ export default {
       pricingAmount: '调价幅度',
       botNameLabel: '机器人名称标识',
       botNameDingtalkPlaceholder: '例如：钉钉主群',
+      botNameWecomPlaceholder: '例如：企业微信主群',
+      botNameQQPlaceholder: '例如：QQ 单聊通知',
       botNameFeishuPlaceholder: '例如：飞书主群',
       botNameTelegramPlaceholder: '例如：TG主群',
       addDingtalkBot: '添加钉钉机器人',
+      addWecomBot: '添加企业微信机器人',
+      addQQBot: '添加 QQ 机器人',
       addFeishuBot: '添加飞书机器人',
       addTelegramBot: '添加 TG 机器人',
       emptyDingtalk: '暂无钉钉机器人配置',
+      emptyWecom: '暂无企业微信机器人配置',
+      emptyQQ: '暂无 QQ 机器人配置',
       emptyFeishu: '暂无飞书机器人配置',
       emptyTelegram: '暂无 Telegram 机器人配置',
       tabs: {
@@ -2128,15 +2155,26 @@ export default {
         },
         channels: {
           title: '通知渠道配置',
-          description: '配置接收系统报警的第三方渠道参数（如钉钉、TG、飞书）。',
+          description: '配置接收系统报警的第三方渠道参数（如钉钉、企业微信、QQ、TG、飞书）。',
           dingtalk: '钉钉机器人',
           dingtalkHelp: '配置钉钉群机器人的 Webhook 和加签密钥。',
+          wecom: '企业微信机器人',
+          wecomHelp: '配置企业微信群机器人的 Webhook，无需加签密钥。',
+          qq: 'QQ 机器人',
+          qqHelp: '配置 QQ 官方机器人的应用凭据和接收通知的用户 OpenID。',
           feishu: '飞书机器人',
           feishuHelp: '配置飞书群机器人的 Webhook 和加签密钥。',
           telegram: 'Telegram 机器人',
           telegramHelp: '配置 Telegram Bot Token 和接收消息的 Chat ID。',
           webhookUrl: 'Webhook 地址',
           secret: '加签密钥 (Secret)',
+          appId: 'AppID',
+          appIdPlaceholder: '请输入机器人 AppID',
+          appSecret: 'AppSecret',
+          appSecretPlaceholder: '请输入机器人 AppSecret',
+          userOpenId: '用户 OpenID',
+          userOpenIdPlaceholder: '请输入接收通知用户的 openid',
+          userOpenIdHelp: '在消息列表沙箱中添加该用户，用户扫码并向机器人发送消息后，从 C2C_MESSAGE_CREATE 事件中获取。',
           botToken: 'Bot Token',
           chatId: 'Chat ID',
           proxyUrl: '代理地址（可选）',
@@ -2147,8 +2185,10 @@ export default {
           testConnectionSuccess: '发送成功'
         },
         templates: {
-          balanceTemplatePlaceholder: '例如：【余额预警】{siteName} 站点余额（CNY）已不足 {threshold} 元，当前余额为 {balance} 元。',
-          multiplierTemplatePlaceholder: '例如：【倍率变更】{siteName} 的 {groupName} 分组倍率已从 {oldRate}x 变为 {newRate}x。'
+          balanceDefaultTemplate: '🔴 **余额预警**\n\n🏷️ **站点：** {siteName}\n💰 **当前余额：** ¥{balance}\n⚠️ **预警阈值：** ¥{threshold}\n\n请及时检查并充值，避免服务中断。',
+          multiplierDefaultTemplate: '🟠 **倍率变更预警**\n\n🏷️ **站点：** {siteName}\n📦 **分组：** {groupName}\n📊 **倍率：** {oldRate}x → **{newRate}x**（{changeDirection}）\n\n🔎 请确认成本变化，并检查下游定价策略。',
+          balanceTemplatePlaceholder: '例如：🔴 {siteName} 当前余额 ¥{balance}，已低于 ¥{threshold}。',
+          multiplierTemplatePlaceholder: '例如：🟠 {siteName} / {groupName}：{oldRate}x → {newRate}x。'
         }
       },
       errors: {
@@ -2157,6 +2197,7 @@ export default {
         unknown: '测试通知渠道时发生未知错误。',
         invalidChannel: '通知渠道类型无效。',
         missingWebhook: '请先填写机器人 Webhook 地址。',
+        missingQQConfig: '请先填写 QQ 机器人的 AppID、AppSecret 和用户 OpenID。',
         missingTelegramConfig: '请先填写 Telegram Bot Token 和 Chat ID。',
         sendFailed: '测试消息发送失败，请检查机器人配置和网络连通性。'
       },

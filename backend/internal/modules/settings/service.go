@@ -29,6 +29,7 @@ var (
 	ErrInvalidNotificationChannel = errors.New("admin.settings.errors.invalidChannel")
 	ErrMissingWebhook             = errors.New("admin.settings.errors.missingWebhook")
 	ErrMissingTelegramConfig      = errors.New("admin.settings.errors.missingTelegramConfig")
+	ErrMissingQQConfig            = errors.New("admin.settings.errors.missingQQConfig")
 	ErrSendNotificationFailed     = errors.New("admin.settings.errors.sendFailed")
 )
 
@@ -58,6 +59,11 @@ type Service struct {
 	smtpSender smtpSender
 	// emailTemplateRepo 是邮件模板存储层窄接口，测试通过内存 fake 覆盖 workspace 隔离和限制规则。
 	emailTemplateRepo emailTemplateRepository
+
+	// QQ Access Token 仅在进程内缓存，避免每条通知都向 QQ 开放平台换取凭证。
+	qqTokens     *qqTokenCache
+	qqAPIBaseURL string
+	qqTokenURL   string
 }
 
 type AdminAccountResolver interface {
@@ -68,7 +74,13 @@ func NewService(client *http.Client, repository *Repository) *Service {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Service{client: client, repository: repository, smtpRepo: repository, emailTemplateRepo: repository}
+	return &Service{
+		client:            client,
+		repository:        repository,
+		smtpRepo:          repository,
+		emailTemplateRepo: repository,
+		qqTokens:          newQQTokenCache(),
+	}
 }
 
 func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
@@ -78,13 +90,19 @@ func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
 func DefaultNotificationChannelSettings() NotificationChannelSettings {
 	return NotificationChannelSettings{
 		Dingtalk: []DingtalkChannelSettings{},
+		Wecom:    []WebhookChannelSettings{},
+		QQ:       []QQChannelSettings{},
 		Feishu:   []WebhookChannelSettings{},
 		Telegram: []TelegramChannelSettings{},
 	}
 }
 
 func DefaultStrategySettings() StrategySettings {
-	return StrategySettings{RefreshInterval: minRefreshIntervalSeconds}
+	return StrategySettings{
+		RefreshInterval:          minRefreshIntervalSeconds,
+		BalanceTemplateFormat:    NotificationTemplateFormatText,
+		MultiplierTemplateFormat: NotificationTemplateFormatText,
+	}
 }
 
 func (s *Service) EnsureSchema(ctx context.Context) error {
@@ -166,6 +184,16 @@ func needsPersist(before, after NotificationChannelSettings) bool {
 			return true
 		}
 	}
+	for i := range before.Wecom {
+		if i < len(after.Wecom) && before.Wecom[i].ID != after.Wecom[i].ID {
+			return true
+		}
+	}
+	for i := range before.QQ {
+		if i < len(after.QQ) && before.QQ[i].ID != after.QQ[i].ID {
+			return true
+		}
+	}
 	for i := range before.Telegram {
 		if i < len(after.Telegram) && before.Telegram[i].ID != after.Telegram[i].ID {
 			return true
@@ -187,6 +215,12 @@ func normalizeNotificationChannelSettings(settings NotificationChannelSettings) 
 	}
 	if settings.Feishu == nil {
 		settings.Feishu = []WebhookChannelSettings{}
+	}
+	if settings.Wecom == nil {
+		settings.Wecom = []WebhookChannelSettings{}
+	}
+	if settings.QQ == nil {
+		settings.QQ = []QQChannelSettings{}
 	}
 	if settings.Telegram == nil {
 		settings.Telegram = []TelegramChannelSettings{}
@@ -221,6 +255,36 @@ func normalizeNotificationChannelSettings(settings NotificationChannelSettings) 
 		settings.Feishu[index].Webhook = strings.TrimSpace(settings.Feishu[index].Webhook)
 		settings.Feishu[index].Secret = strings.TrimSpace(settings.Feishu[index].Secret)
 	}
+	for index := range settings.Wecom {
+		settings.Wecom[index].ID = strings.TrimSpace(settings.Wecom[index].ID)
+		if settings.Wecom[index].ID == "" {
+			settings.Wecom[index].ID = generateBotID()
+		}
+		if _, dup := seen[settings.Wecom[index].ID]; dup {
+			settings.Wecom[index].ID = generateBotID()
+		}
+		seen[settings.Wecom[index].ID] = struct{}{}
+		settings.Wecom[index].Name = strings.TrimSpace(settings.Wecom[index].Name)
+		settings.Wecom[index].Webhook = strings.TrimSpace(settings.Wecom[index].Webhook)
+		// 企业微信群机器人不使用钉钉加签密钥，保存时始终清空该兼容字段。
+		settings.Wecom[index].Secret = ""
+	}
+	for index := range settings.QQ {
+		settings.QQ[index].ID = strings.TrimSpace(settings.QQ[index].ID)
+		if settings.QQ[index].ID == "" {
+			settings.QQ[index].ID = generateBotID()
+		}
+		if _, dup := seen[settings.QQ[index].ID]; dup {
+			settings.QQ[index].ID = generateBotID()
+		}
+		seen[settings.QQ[index].ID] = struct{}{}
+		settings.QQ[index].Name = strings.TrimSpace(settings.QQ[index].Name)
+		settings.QQ[index].AppID = strings.TrimSpace(settings.QQ[index].AppID)
+		settings.QQ[index].ClientSecret = strings.TrimSpace(settings.QQ[index].ClientSecret)
+		settings.QQ[index].UserOpenID = strings.TrimSpace(settings.QQ[index].UserOpenID)
+		// 旧群通知字段只做无损兼容，不可作为用户 OpenID 使用。
+		settings.QQ[index].GroupOpenID = strings.TrimSpace(settings.QQ[index].GroupOpenID)
+	}
 	for index := range settings.Telegram {
 		settings.Telegram[index].ID = strings.TrimSpace(settings.Telegram[index].ID)
 		if settings.Telegram[index].ID == "" {
@@ -242,6 +306,8 @@ func normalizeStrategySettings(settings StrategySettings) StrategySettings {
 	if settings.RefreshInterval < minRefreshIntervalSeconds {
 		settings.RefreshInterval = minRefreshIntervalSeconds
 	}
+	settings.BalanceTemplateFormat = normalizeNotificationTemplateFormat(settings.BalanceTemplateFormat)
+	settings.MultiplierTemplateFormat = normalizeNotificationTemplateFormat(settings.MultiplierTemplateFormat)
 	return settings
 }
 
@@ -249,6 +315,10 @@ func (s *Service) TestNotification(ctx context.Context, dto TestNotificationRequ
 	switch dto.Channel {
 	case NotificationChannelDingtalk:
 		return s.sendDingtalk(ctx, strings.TrimSpace(dto.Webhook), strings.TrimSpace(dto.Secret), testMessage)
+	case NotificationChannelWecom:
+		return s.sendWecom(ctx, strings.TrimSpace(dto.Webhook), testMessage)
+	case NotificationChannelQQ:
+		return s.sendQQ(ctx, strings.TrimSpace(dto.QQAppID), strings.TrimSpace(dto.QQClientSecret), strings.TrimSpace(dto.QQUserOpenID), testMessage)
 	case NotificationChannelFeishu:
 		return s.sendFeishu(ctx, strings.TrimSpace(dto.Webhook), strings.TrimSpace(dto.Secret), testMessage)
 	case NotificationChannelTelegram:
@@ -258,11 +328,27 @@ func (s *Service) TestNotification(ctx context.Context, dto TestNotificationRequ
 	}
 }
 
-// SendToBots 根据机器人 ID 列表向已配置的通知渠道发送消息。
-// 从数据库加载用户的通知渠道配置，匹配 ID 后逐个发送。
-// 发送失败仅记录日志，不中断流程（fire-and-forget）。
+// SendToBots 保留历史纯文本入口，活动通知、自动调价等现有调用方无需感知新增格式字段。
 func (s *Service) SendToBots(ctx context.Context, userID string, botIDs []string, message string) {
-	if len(botIDs) == 0 || message == "" {
+	s.sendNotificationToBots(ctx, userID, botIDs, notificationMessage{
+		Content: message,
+		Format:  NotificationTemplateFormatText,
+	})
+}
+
+// SendFormattedToBots 仅供显式选择了模板格式的通知使用。格式会按各平台的原生能力
+// 转换：HTML 在不支持原生 HTML 的渠道转成 Markdown，旧纯文本发送路径保持不变。
+func (s *Service) SendFormattedToBots(ctx context.Context, userID string, botIDs []string, message string, format NotificationTemplateFormat) {
+	s.sendNotificationToBots(ctx, userID, botIDs, notificationMessage{
+		Content: message,
+		Format:  normalizeNotificationTemplateFormat(format),
+	})
+}
+
+// sendNotificationToBots 从数据库加载用户的渠道配置，匹配 ID 后逐个发送。
+// 单个渠道失败只记录日志，不中断其他机器人发送（fire-and-forget）。
+func (s *Service) sendNotificationToBots(ctx context.Context, userID string, botIDs []string, message notificationMessage) {
+	if len(botIDs) == 0 || message.Content == "" {
 		return
 	}
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
@@ -283,21 +369,35 @@ func (s *Service) SendToBots(ctx context.Context, userID string, botIDs []string
 
 	for _, bot := range channels.Dingtalk {
 		if _, ok := idSet[bot.ID]; ok {
-			if err := s.sendDingtalk(ctx, bot.Webhook, bot.Secret, message); err != nil {
+			if err := s.sendDingtalkMessage(ctx, bot.Webhook, bot.Secret, message); err != nil {
 				log.Printf("[settings] 钉钉通知发送失败 bot=%s err=%v", bot.Name, err)
 			}
 		}
 	}
 	for _, bot := range channels.Feishu {
 		if _, ok := idSet[bot.ID]; ok {
-			if err := s.sendFeishu(ctx, bot.Webhook, bot.Secret, message); err != nil {
+			if err := s.sendFeishuMessage(ctx, bot.Webhook, bot.Secret, message); err != nil {
 				log.Printf("[settings] 飞书通知发送失败 bot=%s err=%v", bot.Name, err)
+			}
+		}
+	}
+	for _, bot := range channels.Wecom {
+		if _, ok := idSet[bot.ID]; ok {
+			if err := s.sendWecomMessage(ctx, bot.Webhook, message); err != nil {
+				log.Printf("[settings] 企业微信通知发送失败 bot=%s err=%v", bot.Name, err)
+			}
+		}
+	}
+	for _, bot := range channels.QQ {
+		if _, ok := idSet[bot.ID]; ok {
+			if err := s.sendQQMessage(ctx, bot.AppID, bot.ClientSecret, bot.UserOpenID, message); err != nil {
+				log.Printf("[settings] QQ 通知发送失败 bot=%s err=%v", bot.Name, err)
 			}
 		}
 	}
 	for _, bot := range channels.Telegram {
 		if _, ok := idSet[bot.ID]; ok {
-			if err := s.sendTelegram(ctx, bot.BotToken, bot.ChatID, bot.ProxyURL, message); err != nil {
+			if err := s.sendTelegramMessage(ctx, bot.BotToken, bot.ChatID, bot.ProxyURL, message); err != nil {
 				log.Printf("[settings] Telegram 通知发送失败 bot=%s err=%v", bot.Name, err)
 			}
 		}
@@ -305,6 +405,10 @@ func (s *Service) SendToBots(ctx context.Context, userID string, botIDs []string
 }
 
 func (s *Service) sendDingtalk(ctx context.Context, webhook string, secret string, message string) error {
+	return s.sendDingtalkMessage(ctx, webhook, secret, notificationMessage{Content: message, Format: NotificationTemplateFormatText})
+}
+
+func (s *Service) sendDingtalkMessage(ctx context.Context, webhook string, secret string, message notificationMessage) error {
 	if webhook == "" {
 		return ErrMissingWebhook
 	}
@@ -312,16 +416,44 @@ func (s *Service) sendDingtalk(ctx context.Context, webhook string, secret strin
 	if err != nil {
 		return err
 	}
-	body := map[string]any{
-		"msgtype": "text",
-		"text": map[string]string{
-			"content": message,
-		},
+	body := map[string]any{"msgtype": "text", "text": map[string]string{"content": message.Content}}
+	if normalizeNotificationTemplateFormat(message.Format) != NotificationTemplateFormatText {
+		body = map[string]any{
+			"msgtype": "markdown",
+			"markdown": map[string]string{
+				"title": "Transit Hub",
+				"text":  markdownForChannel(message),
+			},
+		}
 	}
 	return s.postJSON(ctx, signedWebhook, body)
 }
 
+func (s *Service) sendWecom(ctx context.Context, webhook string, message string) error {
+	return s.sendWecomMessage(ctx, webhook, notificationMessage{Content: message, Format: NotificationTemplateFormatText})
+}
+
+// sendWecomMessage 使用企业微信群机器人的 text/markdown 请求体。企业微信不使用钉钉
+// 的 timestamp/sign 查询参数，因此不会对 webhook 追加任何签名参数。
+func (s *Service) sendWecomMessage(ctx context.Context, webhook string, message notificationMessage) error {
+	if webhook == "" {
+		return ErrMissingWebhook
+	}
+	body := map[string]any{"msgtype": "text", "text": map[string]string{"content": message.Content}}
+	if normalizeNotificationTemplateFormat(message.Format) != NotificationTemplateFormatText {
+		body = map[string]any{
+			"msgtype":  "markdown",
+			"markdown": map[string]string{"content": markdownForChannel(message)},
+		}
+	}
+	return s.postJSON(ctx, webhook, body)
+}
+
 func (s *Service) sendFeishu(ctx context.Context, webhook string, secret string, message string) error {
+	return s.sendFeishuMessage(ctx, webhook, secret, notificationMessage{Content: message, Format: NotificationTemplateFormatText})
+}
+
+func (s *Service) sendFeishuMessage(ctx context.Context, webhook string, secret string, message notificationMessage) error {
 	if webhook == "" {
 		return ErrMissingWebhook
 	}
@@ -329,8 +461,23 @@ func (s *Service) sendFeishu(ctx context.Context, webhook string, secret string,
 	body := map[string]any{
 		"msg_type": "text",
 		"content": map[string]string{
-			"text": message,
+			"text": message.Content,
 		},
+	}
+	if normalizeNotificationTemplateFormat(message.Format) != NotificationTemplateFormatText {
+		body = map[string]any{
+			"msg_type": "interactive",
+			"card": map[string]any{
+				"schema": "2.0",
+				"body": map[string]any{
+					"elements": []map[string]string{{
+						"tag":        "markdown",
+						"content":    markdownForChannel(message),
+						"text_align": "left",
+					}},
+				},
+			},
+		}
 	}
 	if secret != "" {
 		body["timestamp"] = strconv.FormatInt(timestamp, 10)
@@ -340,13 +487,26 @@ func (s *Service) sendFeishu(ctx context.Context, webhook string, secret string,
 }
 
 func (s *Service) sendTelegram(ctx context.Context, botToken string, chatID string, proxyURL string, message string) error {
+	return s.sendTelegramMessage(ctx, botToken, chatID, proxyURL, notificationMessage{Content: message, Format: NotificationTemplateFormatText})
+}
+
+func (s *Service) sendTelegramMessage(ctx context.Context, botToken string, chatID string, proxyURL string, message notificationMessage) error {
 	if botToken == "" || chatID == "" {
 		return ErrMissingTelegramConfig
 	}
 	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", url.PathEscape(botToken))
 	body := map[string]string{
 		"chat_id": chatID,
-		"text":    message,
+		"text":    message.Content,
+	}
+	switch normalizeNotificationTemplateFormat(message.Format) {
+	case NotificationTemplateFormatMarkdown:
+		// Telegram 的 legacy Markdown 与普通 Markdown 模板最接近，且不会要求用户手动
+		// 转义 MarkdownV2 中大量普通标点。
+		body["parse_mode"] = "Markdown"
+	case NotificationTemplateFormatHTML:
+		body["text"] = telegramHTMLForChannel(message.Content)
+		body["parse_mode"] = "HTML"
 	}
 	return s.postJSONWithClient(ctx, s.telegramClient(proxyURL), endpoint, body)
 }
