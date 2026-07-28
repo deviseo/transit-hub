@@ -125,6 +125,11 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 	if err != nil {
 		return AdminGroupPolicyConfiguration{}, err
 	}
+	if groupContext.group.Multiplier == nil && groupConfigurationUsesMultiplier(policyIDs, input.QuickPolicy, responsePolicies) {
+		// 倍率为空时拒绝启用倍率策略，避免旧客户端绕过前端提示后创建一个看似生效、实际
+		// 无法安全计算的配置。解除倍率策略绑定仍然允许，便于用户从错误配置中退出。
+		return AdminGroupPolicyConfiguration{}, requestError(ErrorMultiplierRequired)
+	}
 	activeTargetIDs := make(map[string]struct{}, len(groupContext.targetIDs))
 	excludedSet := make(map[string]struct{}, len(excludedTargetIDs))
 	for _, targetID := range excludedTargetIDs {
@@ -163,6 +168,24 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 		return AdminGroupPolicyConfiguration{}, err
 	}
 	return savedAdminGroupPolicyConfiguration(groupContext.group, policyIDs, excludedTargetIDs, responsePolicies), nil
+}
+
+// groupConfigurationUsesMultiplier 判断本次将要保存的分组绑定是否包含启用中的倍率策略。
+// QuickPolicy 尚未落库，需要直接检查输入；已有策略则只信任当前 workspace 查询结果。
+func groupConfigurationUsesMultiplier(policyIDs []string, quickPolicy *PolicyInput, policies []Policy) bool {
+	if quickPolicy != nil && (normalizePriorityMode(quickPolicy.PriorityMode) == PriorityModeMultiplier || normalizeStrategyMode(quickPolicy.StrategyMode) == StrategyModeMultiplierOnly) {
+		return true
+	}
+	selected := make(map[string]struct{}, len(policyIDs))
+	for _, policyID := range policyIDs {
+		selected[policyID] = struct{}{}
+	}
+	for _, policy := range policies {
+		if _, ok := selected[policy.ID]; ok && policy.Enabled && normalizePriorityMode(policy.PriorityMode) == PriorityModeMultiplier {
+			return true
+		}
+	}
+	return false
 }
 
 // Build the mutation response from values already validated before the transaction. Querying

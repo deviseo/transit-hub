@@ -207,23 +207,19 @@ func TestProbeTargetOnce_Sub2APIAutoRemoteRestoreFailureRecordsFailedAction(t *t
 // TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds 是覆盖「PlatformService
 // 单测通过、dispatcher fake 单测通过，但真实组合路径失败」这类盲区的端到端测试：
 // 用同一个 httptest.Server 同时模拟探活端点（返回 500 触发 healthy -> suspended）和 sub2api
-// admin accounts 的 GET/PUT，dispatcher 的 PlatformActioner 用真实 *upstream.PlatformService
+// admin accounts 的字段级批量更新，dispatcher 的 PlatformActioner 用真实 *upstream.PlatformService
 // （不是 fake），断言最终状态/事件里的 remoteAction 是 sub2api_account_status_inactive，
-// 且 PUT 请求体确实把 status 改成了 inactive。
+// 且请求体只把指定账号的 status 改成 inactive。
 func TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds(t *testing.T) {
-	var putBody map[string]any
+	var bulkBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions":
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"boom"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/acc-1":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"data": map[string]any{"id": "acc-1", "name": "acc", "status": "active"},
-			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/admin/accounts/acc-1":
-			if err := json.NewDecoder(r.Body).Decode(&putBody); err != nil {
-				t.Fatalf("failed to decode PUT body: %v", err)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/admin/accounts/bulk-update":
+			if err := json.NewDecoder(r.Body).Decode(&bulkBody); err != nil {
+				t.Fatalf("failed to decode bulk update body: %v", err)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
 		default:
@@ -238,8 +234,8 @@ func TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds(t *testi
 	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: server.URL, AccessToken: "token-1", TokenType: "Bearer"}}
 	reader := fakePlatformGroupReader{
 		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
-		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
-		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "probe-key"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "1515", Name: "acc", Models: "gpt-4o"}}},
+		credByAccount: map[string]upstream.ProbeCredential{"1515": {BaseURL: server.URL, Key: "probe-key"}},
 	}
 	svc := &Service{
 		repo: repo, mySites: mySites, accounts: fakeAdminAccountResolver{id: "ws1"},
@@ -248,7 +244,7 @@ func TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds(t *testi
 		platformGroups: reader,
 	}
 
-	targetID := "sub2api:ws1:acc-1"
+	targetID := "sub2api:ws1:1515"
 	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -264,11 +260,15 @@ func TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds(t *testi
 	if len(repo.events) != 1 || repo.events[0].RemoteAction != RemoteActionSub2APIStatusInactive {
 		t.Fatalf("expected event.RemoteAction=%s, got %+v", RemoteActionSub2APIStatusInactive, repo.events)
 	}
-	if putBody == nil {
-		t.Fatalf("expected a real PUT request to the sub2api admin accounts API")
+	if bulkBody == nil {
+		t.Fatalf("expected a real bulk update request to the sub2api admin accounts API")
 	}
-	if putBody["status"] != "inactive" {
-		t.Fatalf("expected PUT body status=inactive, got %+v", putBody)
+	if len(bulkBody) != 2 || bulkBody["status"] != "inactive" {
+		t.Fatalf("expected field-only status update, got %+v", bulkBody)
+	}
+	accountIDs, ok := bulkBody["account_ids"].([]any)
+	if !ok || len(accountIDs) != 1 || accountIDs[0] != float64(1515) {
+		t.Fatalf("expected account_ids=[1515], got %+v", bulkBody["account_ids"])
 	}
 }
 

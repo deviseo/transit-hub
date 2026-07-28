@@ -24,7 +24,7 @@ type AdminGroupAccountInfo struct {
 	Status         string   // 状态（字符串或数值转字符串）
 	Priority       *int     // 优先级
 	Concurrency    *int     // 并发（sub2api）
-	RateMultiplier *float64 // 倍率（sub2api）
+	RateMultiplier *float64 // Sub2API admin 转发账号记录自身的 rate_multiplier，不代表上游 API Key 所属分组倍率。
 	LoadFactor     *int     // 负载因子（sub2api）
 	Weight         *int     // 权重（仅 new-api channel 有；sub2api 为 nil）
 	Models         string   // 模型列表（new-api channel.models 等）
@@ -278,88 +278,6 @@ func firstBoolValue(record map[string]any, keys []string) *bool {
 	for _, key := range keys {
 		if b, ok := record[key].(bool); ok {
 			return &b
-		}
-	}
-	return nil
-}
-
-// resolveSub2APIAccountGroupIDsForPayload 解析账号所属分组 ID，专供 PUT payload 使用：
-// 保留 group_ids/groupIds 数组元素的原始类型（数字仍是数字、字符串仍是字符串），不能像
-// parseGroupIDList 那样统一转成字符串。
-//
-// 背景：线上验证过 sub2api 的 PUT /api/v1/admin/accounts/:id 如果 group_ids 传字符串数组
-// （如 ["50"]）会返回 400 Bad Request；GET 响应原本是数字数组（如 [50]）时，PUT 也必须传
-// 数字数组才会被接受。所以这里不能复用 parseGroupIDList/GroupIDs 展示字段的字符串化逻辑，
-// 必须按 GET 响应的原始元素类型原样透传。
-//
-// 解析顺序：优先用 group_ids/groupIds 字段；两者都缺失时回退用 groups[].id（GET 单账号详情
-// 有的版本只返回展开的 groups 数组，不返回 group_ids）。两种来源都解析不到有效 ID 时返回
-// nil，调用方不应该用空数组去 PUT 覆盖账号原有分组绑定。
-func resolveSub2APIAccountGroupIDsForPayload(record map[string]any) []any {
-	for _, key := range []string{"group_ids", "groupIds"} {
-		value, ok := record[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case []any:
-			ids := make([]any, 0, len(typed))
-			for _, item := range typed {
-				switch v := item.(type) {
-				case float64:
-					ids = append(ids, v)
-				case string:
-					if trimmed := strings.TrimSpace(v); trimmed != "" {
-						ids = append(ids, trimmed)
-					}
-				}
-			}
-			if len(ids) == 0 {
-				return nil
-			}
-			return ids
-		case string:
-			// 逗号分隔字符串本身就是字符串来源，拆分后仍是字符串，不存在"原始数值类型"这一说。
-			ids := make([]any, 0)
-			for _, part := range strings.Split(typed, ",") {
-				if trimmed := strings.TrimSpace(part); trimmed != "" {
-					ids = append(ids, trimmed)
-				}
-			}
-			if len(ids) == 0 {
-				return nil
-			}
-			return ids
-		}
-	}
-
-	groupsRaw, ok := record["groups"].([]any)
-	if !ok {
-		return nil
-	}
-	ids := make([]any, 0, len(groupsRaw))
-	for _, item := range groupsRaw {
-		if id := rawGroupIDValue(item); id != nil {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	return ids
-}
-
-// rawGroupIDValue 从一个分组对象里取 id/group_id/groupId 字段的原始值：数字优先返回
-// float64，找不到数字再退回字符串；两者都没有，或字符串为空白，返回 nil。
-// 与 groupID()（normalizers.go）的字段优先级一致，区别是这里保留原始类型而不是转成字符串，
-// 供 PUT payload 场景使用。
-func rawGroupIDValue(value any) any {
-	if number := firstNumber(value, []string{"id", "group_id", "groupId"}); number != nil {
-		return *number
-	}
-	if text := firstString(value, []string{"id", "group_id", "groupId"}); text != nil {
-		if trimmed := strings.TrimSpace(*text); trimmed != "" {
-			return trimmed
 		}
 	}
 	return nil
