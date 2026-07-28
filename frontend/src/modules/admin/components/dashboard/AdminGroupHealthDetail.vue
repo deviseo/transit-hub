@@ -68,7 +68,7 @@ const stateBreakdown = computed(() => [
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
 const monitoringEnabled = (account: AdminGroupAccount): boolean =>
-  account.hasEnabledPolicy ?? account.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(account.hasAssignedPolicy)
+  account.hasEnabledProbePolicy ?? account.hasEnabledPolicy ?? account.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(account.hasAssignedPolicy)
 
 const STATE_PRIORITY: ConnectionHealthState[] = ['suspended', 'disabled', 'degraded', 'observing', 'recovering', 'healthy']
 const aggregateState = (account: AdminGroupAccount): ConnectionHealthState | '' => {

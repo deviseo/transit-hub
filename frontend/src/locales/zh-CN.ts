@@ -644,7 +644,7 @@ export default {
         unknown: '未知平台'
       },
       actions: {
-        refresh: '刷新', retry: '重试', cleanup: '清理失效配置', editTargets: '编辑数据源', manage: '管理调价映射'
+        refresh: '刷新', retry: '重试', cleanup: '清理失效配置', editTargets: '编辑数据源', manage: '管理调价映射', openProfitCalculator: '打开利润预算计算器', customProfitCalculator: '自定义利润计算器'
       },
       filters: {
         searchLabel: '搜索调价映射', searchPlaceholder: '搜索自有分组或上游数据源...',
@@ -656,7 +656,37 @@ export default {
       staleOwnGroup: '管理员站点已不再返回此分组。配置仍被保留，请确认后再清理。',
       staleTarget: '上游已失效',
       metrics: {
-        ownMultiplier: '我的分组倍率', targets: '调价数据源', autoPricing: '自动调价', effectiveUpstream: '上游生效倍率'
+        ownMultiplier: '我的分组倍率',
+        targets: '调价数据源',
+        budgetMargin: '倍率预算毛利率',
+        marginRange: '{minimum} - {maximum}',
+        autoPricing: '自动调价',
+        effectiveUpstream: '上游生效倍率',
+        effectiveCost: '换算后成本倍率'
+      },
+      profitCalculator: {
+        titleWithGroup: '{group} · 利润预算',
+        customTitle: '自定义利润计算器',
+        close: '关闭利润预算',
+        modeLabel: '利润计算方式',
+        groupMode: '当前分组',
+        customMode: '自定义计算',
+        revenueLabel: '模拟销售额（CNY）',
+        revenuePlaceholder: '请输入模拟销售额',
+        invalidRevenue: '请输入大于或等于 0 的有效金额。',
+        ownMultiplier: '我的售卖倍率',
+        upstreamCostMultiplier: '上游成本倍率（已换算）',
+        saleMultiplier: '我的售卖倍率',
+        multiplierPlaceholder: '请输入倍率',
+        invalidUpstreamMultiplier: '请输入大于或等于 0 的有效倍率。',
+        invalidSaleMultiplier: '请输入大于 0 的有效倍率。',
+        profitRange: '预计毛利区间',
+        profitMargin: '预计利润率',
+        amountRange: '{minimum} - {maximum}',
+        estimatedCost: '预计进货成本',
+        estimatedProfit: '预计毛利',
+        noTargetsTitle: '暂无可计算的上游',
+        noTargetsDescription: '请先为该分组配置有效的调价数据源。'
       },
       sections: {
         targets: '调价数据源', targetsSummary: '共 {count} 个上游数据源', autoPricing: '自动调价策略'
@@ -874,8 +904,8 @@ export default {
       groupDetail: {
         multiplierPriority: '按倍率排序',
         subtitle: '已监控 {monitored}/{total} 个账号或渠道',
-        enableMonitoring: '启用分组监控',
-        manageMonitoring: '管理分组监控',
+        enableMonitoring: '配置分组策略',
+        manageMonitoring: '管理分组策略',
         unmonitored: '未纳入自动监控',
         policyCount: '{name} 等 {count} 个',
         unprobeable: '暂不可探活',
@@ -925,18 +955,18 @@ export default {
         }
       },
       setup: {
-        title: '配置分组健康',
-        stepsLabel: '分组健康配置步骤',
+        title: '配置分组自动化',
+        stepsLabel: '分组自动化配置步骤',
         steps: {
-          '1': '监控范围',
+          '1': '生效范围',
           '2': '运行策略',
           '3': '确认启用'
         },
-		generatedPolicyName: '{group} - 分组健康策略',
+		generatedPolicyName: '{group} - 分组自动化策略',
 		retry: '重新加载',
         scope: {
-          title: '选择参与自动监控的目标',
-          description: '默认选择当前分组的全部账号或渠道。取消勾选的目标不会自动探活，也不会被自动降级或调整优先级。',
+          title: '选择策略生效目标',
+          description: '默认选择当前分组的全部账号或渠道。取消勾选的目标不会自动探活、自动降级或调整优先级。',
           modelsUnknown: '上游未返回模型列表',
           probeable: '可探活',
           pending: '凭据待完善',
@@ -944,11 +974,15 @@ export default {
         },
         strategy: {
           title: '选择运行策略',
-          description: '快速策略会自动创建完整的探活规则，也可以绑定已有高级策略。',
+          description: '可以创建探活策略、仅倍率优先级策略，也可以绑定已有高级策略。',
           options: {
             multiplier: {
               title: '倍率优先',
               description: '健康目标中，倍率越低，上游优先级越高；故障目标仍会优先降级。'
+            },
+            multiplierOnly: {
+              title: '仅倍率优先级',
+              description: '只按分组倍率调整上游优先级，不发起模型探活，也不执行降级或远端动作。'
             },
             stable: {
               title: '稳定优先',
@@ -972,24 +1006,28 @@ export default {
           },
           providerLabel: '模型 Provider',
           remoteActionLabel: '执行上游动作',
-          remoteActionHelp: '故障和恢复时按平台能力自动禁用或恢复目标'
+          remoteActionHelp: '故障和恢复时按平台能力自动禁用或恢复目标',
+          multiplierOnlyTitle: '仅同步倍率优先级',
+          multiplierOnlyHelp: '后台约每 30 秒读取一次最新分组倍率；倍率越低，优先级越高。此模式不需要模型或上游探活凭据。'
         },
         confirm: {
           title: '确认分组配置',
           description: '保存后会立即建立分组级策略关系，后台调度器将在下一轮扫描时生效。',
-          scope: '监控范围',
+          scope: '生效范围',
           scopeValue: '选择 {selected} 个，排除 {excluded} 个',
           strategy: '运行策略',
           models: '探活模型数',
           fromPolicy: '由已有策略决定',
+          notApplicable: '不需要',
           remoteAction: '上游自动动作',
           enabled: '已启用',
-          disabled: '仅记录',
-          multiplierRule: '倍率排序规则：健康状态优先于价格；同一目标属于多个分组时使用最低倍率；倍率越低，写入上游的优先级越高。若检测到人工修改，系统会停止覆盖并提示冲突。'
+          disabled: '未启用',
+          multiplierRule: '倍率排序规则：健康状态优先于价格；同一目标属于多个分组时使用最低倍率；倍率越低，写入上游的优先级越高。若检测到人工修改，系统会停止覆盖并提示冲突。',
+          multiplierOnlyRule: '仅倍率规则：不读取健康状态、不发起模型探活；同一目标属于多个分组时使用最低倍率。停用或解绑策略后会恢复接管前的优先级，人工修改仍受冲突保护。'
         },
         back: '上一步',
         next: '下一步',
-        save: '启用分组监控'
+        save: '保存分组策略'
       },
       probeUnavailableReasons: {
         credential_unavailable: '无法安全获取上游凭据，暂不可探活',
@@ -1087,7 +1125,7 @@ export default {
       },
       topActions: {
         runFlow: '运行流程',
-        policies: '探活策略',
+        policies: '自动化策略',
         events: '探活事件'
       },
       events: {
@@ -1131,25 +1169,47 @@ export default {
         other: '{action}'
       },
       policies: {
-        title: '探活策略',
-        subtitle: '配置模型探活目标、阈值和自动降级/恢复行为。',
+        title: '自动化策略',
+        subtitle: '配置模型探活、自动降级或仅倍率优先级行为。',
         create: '新建策略',
-        empty: '暂无探活策略，点击"新建策略"开始配置。',
+        empty: '暂无自动化策略，点击"新建策略"开始配置。',
         enabled: '已启用',
         disabled: '已停用',
         enable: '启用',
         disable: '停用',
         edit: '编辑',
+        delete: '删除策略',
+        deleteTitle: '删除自动化策略',
+        deleteDescription: '确定删除“{name}”吗？',
+        deleteWarning: '该策略的模型目标及账号、分组分配关系会同时删除，历史探活记录会保留。此操作无法撤销。',
+        cancelDelete: '取消',
+        confirmDelete: '确认删除',
         remoteActionOn: '远端动作已开启',
         allGroupsScope: '全部分组',
-        modelTargetCount: '{count} 个模型目标'
+        modelTargetCount: '{count} 个模型目标',
+        strategyModes: {
+          health_probe: '健康探活',
+          multiplier_only: '仅倍率优先级'
+        },
+        multiplierOnlySummary: '不执行探活，按倍率同步优先级'
       },
       policyDrawer: {
-        createTitle: '新建探活策略',
-        editTitle: '编辑探活策略',
+        createTitle: '新建自动化策略',
+        editTitle: '编辑自动化策略',
         nameLabel: '策略名称',
         namePlaceholder: '输入策略名称',
         enabledLabel: '启用该策略',
+        strategyModeLabel: '运行模式',
+        strategyModes: {
+          health_probe: {
+            title: '健康探活',
+            description: '探活、状态机与可选远端动作'
+          },
+          multiplier_only: {
+            title: '仅倍率优先级',
+            description: '只按倍率调整，不发起探活'
+          }
+        },
         ownGroupLabel: '策略范围',
         ownGroupAllOption: '当前 workspace 全部分组',
         modelTargetsLabel: '模型探活目标',
@@ -1175,6 +1235,8 @@ export default {
           multiplier: '按分组倍率排序'
         },
         priorityModeHelp: '开启倍率排序后，系统会在健康目标中优先使用更低倍率的上游；故障状态始终优先降级。',
+        multiplierOnlySummaryTitle: '倍率越低，优先级越高',
+        multiplierOnlySummary: '系统约每 30 秒读取最新分组倍率并同步上游优先级，不解析探活凭据、不请求模型、不消耗探活预算，也不执行自动降级或远端动作。检测到人工修改时会停止覆盖。',
         providerLabel: '模型 Provider',
         providerPlaceholder: '请选择 Provider',
         providerMismatchWarning: '检测到该策略已有的模型探活目标使用了不同的 provider。请在上方选择一个 provider，保存后所有模型探活目标都会统一为你选择的这个 provider。',

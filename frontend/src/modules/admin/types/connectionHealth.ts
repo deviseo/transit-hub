@@ -122,6 +122,7 @@ export interface AdminGroupAccount {
   assignedPolicies?: TargetPolicyAssignmentSummary[]
   hasAssignedPolicy?: boolean
   hasEnabledPolicy?: boolean
+  hasEnabledProbePolicy?: boolean
   policyAssignmentSource?: 'none' | 'target' | 'group' | 'mixed' | string
   excludedFromGroupPolicy?: boolean
   priorityManaged?: boolean
@@ -146,6 +147,7 @@ export interface AdminGroupHealth {
   assignedPolicies?: TargetPolicyAssignmentSummary[]
   hasAssignedPolicy?: boolean
   hasEnabledPolicy?: boolean
+  hasEnabledProbePolicy?: boolean
   priorityMode?: ConnectionHealthPriorityMode
   priorityConflictCount?: number
   healthSummary: AdminGroupHealthSummary
@@ -228,6 +230,7 @@ export interface ConnectionHealthPolicy {
   autoDegradeEnabled: boolean
   autoRemoteActionEnabled: boolean
   priorityMode?: ConnectionHealthPriorityMode
+  strategyMode?: ConnectionHealthStrategyMode
   dailyProbeBudget: number
   createdAt: string
   updatedAt: string
@@ -283,11 +286,13 @@ export interface PolicyInput {
   autoDegradeEnabled: boolean
   autoRemoteActionEnabled: boolean
   priorityMode?: ConnectionHealthPriorityMode
+  strategyMode?: ConnectionHealthStrategyMode
   dailyProbeBudget?: number
   modelTargets: ModelTargetInput[]
 }
 
 export type ConnectionHealthPriorityMode = 'none' | 'multiplier'
+export type ConnectionHealthStrategyMode = 'health_probe' | 'multiplier_only'
 
 // AdminGroupPolicyConfiguration 对应分组级动态策略配置。排除列表只影响分组继承，不会清除
 // 旧版逐 target 显式分配，保证已上线配置继续生效。

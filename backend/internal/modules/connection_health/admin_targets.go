@@ -109,7 +109,7 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 	pool := make([]probeModelSpec, 0)
 	seen := make(map[string]int)
 	for _, p := range policies {
-		if !p.Enabled {
+		if !p.Enabled || !policySupportsProbing(p) {
 			continue
 		}
 		for _, t := range p.ModelTargets {

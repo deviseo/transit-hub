@@ -23,7 +23,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 // EnsureSchema 创建健康探活模块所需的表和索引。所有新增列/表都使用 IF NOT EXISTS，
-// 已上线实例可以原地升级；旧策略的 priority_mode 默认 none，行为保持不变。
+// 已上线实例可以原地升级；旧策略的 priority_mode / strategy_mode 均使用兼容默认值。
 func (r *Repository) EnsureSchema(ctx context.Context) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS connection_health_policies (
@@ -45,11 +45,13 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			auto_degrade_enabled boolean NOT NULL DEFAULT true,
 			auto_remote_action_enabled boolean NOT NULL DEFAULT true,
 			priority_mode text NOT NULL DEFAULT 'none',
+			strategy_mode text NOT NULL DEFAULT 'health_probe',
 			daily_probe_budget integer NOT NULL DEFAULT 1000,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_mode text NOT NULL DEFAULT 'none'`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS strategy_mode text NOT NULL DEFAULT 'health_probe'`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_policies_workspace_enabled ON connection_health_policies (user_id, admin_account_id, enabled)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_policies_group_model ON connection_health_policies (user_id, admin_account_id, own_group_name, model_pattern)`,
 
@@ -227,8 +229,8 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 		INSERT INTO connection_health_policies (
 			id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, daily_probe_budget, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now(),now())
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now(),now())
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			enabled = EXCLUDED.enabled,
@@ -245,11 +247,13 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 			auto_degrade_enabled = EXCLUDED.auto_degrade_enabled,
 			auto_remote_action_enabled = EXCLUDED.auto_remote_action_enabled,
 			priority_mode = EXCLUDED.priority_mode,
+			strategy_mode = EXCLUDED.strategy_mode,
 			daily_probe_budget = EXCLUDED.daily_probe_budget,
 			updated_at = now()
 	`, p.ID, p.UserID, p.AdminAccountID, p.Name, p.Enabled, p.OwnGroupID, p.OwnGroupName, p.ModelPattern, p.ProbeMode,
 		p.ProbeIntervalSeconds, p.FailureThreshold, p.SuccessThreshold, p.CooldownSeconds, p.ObservationSeconds,
-		p.RecoveryStepPercent, p.AutoDegradeEnabled, p.AutoRemoteActionEnabled, normalizePriorityMode(p.PriorityMode), p.DailyProbeBudget)
+		p.RecoveryStepPercent, p.AutoDegradeEnabled, p.AutoRemoteActionEnabled, normalizePriorityMode(p.PriorityMode),
+		normalizeStrategyMode(p.StrategyMode), p.DailyProbeBudget)
 	return err
 }
 
@@ -304,6 +308,52 @@ func (r *Repository) SavePolicyWithTargets(ctx context.Context, policy Policy, t
 	return tx.Commit(ctx)
 }
 
+// DeletePolicy 原子删除当前 workspace 拥有的策略及其运行时关联配置。先锁定策略所有权，
+// 再清理没有外键约束的关联表，避免越权删除或留下仍会被调度器读取的孤立分配记录。
+// connection_health_events 属于历史审计数据，故意不随策略删除。
+func (r *Repository) DeletePolicy(ctx context.Context, id string, userID string, adminAccountID string) (bool, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var ownedID string
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM connection_health_policies
+		WHERE id = $1 AND user_id = $2 AND admin_account_id = $3
+		FOR UPDATE
+	`, id, userID, adminAccountID).Scan(&ownedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	cleanupStatements := []string{
+		`DELETE FROM connection_health_model_targets WHERE policy_id = $1 AND user_id = $2 AND admin_account_id = $3`,
+		`DELETE FROM connection_health_policy_assignments WHERE policy_id = $1 AND user_id = $2 AND admin_account_id = $3`,
+		`DELETE FROM connection_health_group_policy_assignments WHERE policy_id = $1 AND user_id = $2 AND admin_account_id = $3`,
+		`DELETE FROM connection_health_probe_budget_usage WHERE policy_id = $1 AND user_id = $2 AND admin_account_id = $3`,
+	}
+	for _, statement := range cleanupStatements {
+		if _, err := tx.Exec(ctx, statement, id, userID, adminAccountID); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM connection_health_policies
+		WHERE id = $1 AND user_id = $2 AND admin_account_id = $3
+	`, id, userID, adminAccountID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *Repository) ListModelTargets(ctx context.Context, policyID string) ([]ModelTarget, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, policy_id, user_id, admin_account_id, model_name, provider_family, enabled, probe_prompt, max_probe_tokens, created_at, updated_at
@@ -329,7 +379,7 @@ func (r *Repository) GetPolicy(ctx context.Context, id string, userID string, ad
 	row := r.db.QueryRow(ctx, `
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE id = $1 AND user_id = $2 AND admin_account_id = $3
 	`, id, userID, adminAccountID)
 	p, err := scanPolicy(row)
@@ -352,7 +402,7 @@ func (r *Repository) ListPolicies(ctx context.Context, userID string, adminAccou
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE user_id = $1 AND admin_account_id = $2 ORDER BY created_at ASC
 	`, userID, adminAccountID)
 	if err != nil {
@@ -387,7 +437,7 @@ func (r *Repository) ListEnabledPolicies(ctx context.Context) ([]Policy, error) 
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE enabled = true ORDER BY created_at ASC
 	`)
 	if err != nil {
@@ -427,7 +477,7 @@ func scanPolicy(row pgx.Row) (*Policy, error) {
 	var p Policy
 	if err := row.Scan(&p.ID, &p.UserID, &p.AdminAccountID, &p.Name, &p.Enabled, &p.OwnGroupID, &p.OwnGroupName, &p.ModelPattern, &p.ProbeMode,
 		&p.ProbeIntervalSeconds, &p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
-		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -444,7 +494,7 @@ func scanPolicyRow(row rowScanner) (*Policy, error) {
 	var p Policy
 	if err := row.Scan(&p.ID, &p.UserID, &p.AdminAccountID, &p.Name, &p.Enabled, &p.OwnGroupID, &p.OwnGroupName, &p.ModelPattern, &p.ProbeMode,
 		&p.ProbeIntervalSeconds, &p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
-		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -936,12 +986,13 @@ func (r *Repository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Contex
 		INSERT INTO connection_health_policies (
 			id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, daily_probe_budget, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now(),now())
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now(),now())
 	`, policy.ID, policy.UserID, policy.AdminAccountID, policy.Name, policy.Enabled, policy.OwnGroupID, policy.OwnGroupName,
 		policy.ModelPattern, policy.ProbeMode, policy.ProbeIntervalSeconds, policy.FailureThreshold, policy.SuccessThreshold,
 		policy.CooldownSeconds, policy.ObservationSeconds, policy.RecoveryStepPercent, policy.AutoDegradeEnabled,
-		policy.AutoRemoteActionEnabled, normalizePriorityMode(policy.PriorityMode), policy.DailyProbeBudget); err != nil {
+		policy.AutoRemoteActionEnabled, normalizePriorityMode(policy.PriorityMode), normalizeStrategyMode(policy.StrategyMode),
+		policy.DailyProbeBudget); err != nil {
 		return err
 	}
 	for _, target := range targets {

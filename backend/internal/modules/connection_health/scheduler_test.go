@@ -147,6 +147,27 @@ func TestCollectAdminProbeJobs_UnassignedTargetNeverScheduled(t *testing.T) {
 	}
 }
 
+// TestCollectAdminProbeJobs_MultiplierOnlyNeverScheduled guards the central safety contract:
+// even legacy or malformed rows that still contain model targets cannot enter probe scheduling.
+func TestCollectAdminProbeJobs_MultiplierOnlyNeverScheduled(t *testing.T) {
+	repo := newFakeRepository()
+	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}
+	svc := &Service{repo: repo, mySites: mySites, platformGroups: schedulerReader("100")}
+	policies := []Policy{{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeMultiplierOnly, PriorityMode: PriorityModeMultiplier,
+		ModelTargets: []ModelTarget{{ModelName: "legacy-model", Enabled: true}},
+	}}
+	assignments := []PolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100", PolicyID: "p1",
+	}}
+
+	jobs := svc.collectAdminProbeJobs(context.Background(), policies, assignments)
+	if len(jobs) != 0 {
+		t.Fatalf("multiplier-only policy must never generate probe jobs: %+v", jobs)
+	}
+}
+
 // TestCollectAdminProbeJobs_AssignmentToDisabledPolicyIgnored 验证分配指向的策略如果已被禁用，
 // 该分配不生效（因为 policies 只包含 ListEnabledPolicies 的结果，policyByID 查不到）。
 func TestCollectAdminProbeJobs_AssignmentToDisabledPolicyIgnored(t *testing.T) {

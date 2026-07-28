@@ -29,6 +29,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("GET /api/connection-health/policies", handler.listPolicies)
 	mux.HandleFunc("POST /api/connection-health/policies", handler.createPolicy)
 	mux.HandleFunc("PUT /api/connection-health/policies/{id}", handler.updatePolicy)
+	mux.HandleFunc("DELETE /api/connection-health/policies/{id}", handler.deletePolicy)
 	mux.HandleFunc("GET /api/connection-health/targets/{id}/models", handler.discoverTargetModels)
 	mux.HandleFunc("POST /api/connection-health/targets/{id}/manual-probe", handler.manualProbeTarget)
 	mux.HandleFunc("GET /api/connection-health/targets/{id}/policy-assignments", handler.getPolicyAssignments)
@@ -262,6 +263,19 @@ func (h *Handler) updatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, policy)
+}
+
+func (h *Handler) deletePolicy(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	if err := h.service.DeletePolicy(r.Context(), userID, r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // discoverTargetModels 是手动一次性探活弹窗打开时调用的 server-only 模型发现接口：

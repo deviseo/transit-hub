@@ -30,6 +30,7 @@ type AdminGroupHealth struct {
 	AssignedPolicies      []AssignedPolicySummary `json:"assignedPolicies"`
 	HasAssignedPolicy     bool                    `json:"hasAssignedPolicy"`
 	HasEnabledPolicy      bool                    `json:"hasEnabledPolicy"`
+	HasEnabledProbePolicy bool                    `json:"hasEnabledProbePolicy"`
 	PriorityMode          string                  `json:"priorityMode"`
 	PriorityConflictCount int                     `json:"priorityConflictCount"`
 	HealthSummary         AdminGroupHealthSummary `json:"healthSummary"`
@@ -87,6 +88,7 @@ type AdminGroupAccount struct {
 	AssignedPolicies        []AssignedPolicySummary `json:"assignedPolicies"`
 	HasAssignedPolicy       bool                    `json:"hasAssignedPolicy"`
 	HasEnabledPolicy        bool                    `json:"hasEnabledPolicy"`
+	HasEnabledProbePolicy   bool                    `json:"hasEnabledProbePolicy"`
 	PolicyAssignmentSource  string                  `json:"policyAssignmentSource"`
 	ExcludedFromGroupPolicy bool                    `json:"excludedFromGroupPolicy"`
 	PriorityManaged         bool                    `json:"priorityManaged"`
@@ -206,6 +208,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		health.AssignedPolicyIDs, health.AssignedPolicies = assignedPolicySummariesFromIDs(health.AssignedPolicyIDs, policyByID)
 		health.HasAssignedPolicy = len(health.AssignedPolicyIDs) > 0
 		health.HasEnabledPolicy = hasEnabledAssignedPolicy(health.AssignedPolicies)
+		health.HasEnabledProbePolicy = hasEnabledProbePolicyByIDs(health.AssignedPolicyIDs, policyByID)
 		for _, policyID := range health.AssignedPolicyIDs {
 			if policy, ok := policyByID[policyID]; ok && policy.Enabled && normalizePriorityMode(policy.PriorityMode) == PriorityModeMultiplier {
 				health.PriorityMode = PriorityModeMultiplier
@@ -243,6 +246,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				}
 			}
 			activeSpecs := candidateModelSpecs(splitModelList(acc.Models), effectivePolicies)
+			hasProbePolicy := hasEnabledProbePolicy(effectivePolicies)
 			modelHealth, unprobedModels := modelHealthForSpecs(stateIndex[targetID], activeSpecs)
 			if credentialReason := latestCredentialUnavailableReason(modelHealth); credentialReason != "" {
 				available = false
@@ -279,13 +283,14 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				AssignedPolicies:        assignedSummaries,
 				HasAssignedPolicy:       len(assignedIDs) > 0,
 				HasEnabledPolicy:        hasEnabledAssignedPolicy(assignedSummaries),
+				HasEnabledProbePolicy:   hasProbePolicy,
 				PolicyAssignmentSource:  assignmentSource,
 				ExcludedFromGroupPolicy: excluded,
 				PriorityManaged:         priorityManaged,
 				PriorityConflict:        priorityManaged && priorityState.Conflict,
 				EffectiveMultiplier:     effectiveMultiplier,
 			}
-			if item.HasEnabledPolicy {
+			if item.HasEnabledProbePolicy {
 				health.MonitoredAccountCount++
 			}
 			if excluded {
@@ -295,7 +300,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				health.PriorityConflictCount++
 			}
 
-			if available {
+			if hasProbePolicy && available {
 				summary.ProbeableAccounts++
 				if len(activeSpecs) == 0 {
 					summary.UnconfiguredModels++
@@ -303,7 +308,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 					accumulateSummary(&summary, modelHealth)
 					summary.UnconfiguredModels += len(unprobedModels)
 				}
-			} else {
+			} else if hasProbePolicy {
 				summary.UnprobeableAccounts++
 			}
 
@@ -433,6 +438,26 @@ func assignedPolicySummariesFromIDs(ids []string, policyByID map[string]Policy) 
 func hasEnabledAssignedPolicy(policies []AssignedPolicySummary) bool {
 	for _, policy := range policies {
 		if policy.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnabledProbePolicy(policies []Policy) bool {
+	// 仅倍率策略会改变排序，但不能让账号在界面上显示为“正在探活”。
+	for _, policy := range policies {
+		if policy.Enabled && policySupportsProbing(policy) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnabledProbePolicyByIDs(policyIDs []string, policyByID map[string]Policy) bool {
+	// 分组统计沿用与账号详情一致的探活口径。
+	for _, policyID := range policyIDs {
+		if policy, ok := policyByID[policyID]; ok && policy.Enabled && policySupportsProbing(policy) {
 			return true
 		}
 	}

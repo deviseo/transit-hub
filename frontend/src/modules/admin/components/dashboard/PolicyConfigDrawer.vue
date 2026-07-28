@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowDownUp, BookOpenText, X, ShieldCheck, Plus, Trash2 } from 'lucide-vue-next'
+import { ArrowDownUp, BookOpenText, Radar, X, ShieldCheck, Plus, Trash2 } from 'lucide-vue-next'
 import { HelpTooltip } from '@/components/ui/tooltip'
 import PolicyRunFlowDialog from './PolicyRunFlowDialog.vue'
-import type { ConnectionHealthPolicy, ConnectionHealthPriorityMode, ModelTargetInput, PolicyInput } from '../../types/connectionHealth'
+import type { ConnectionHealthPolicy, ConnectionHealthPriorityMode, ConnectionHealthStrategyMode, ModelTargetInput, PolicyInput } from '../../types/connectionHealth'
+import { resolveConnectionHealthStrategyMode } from '../../utils/connectionHealthPolicy'
 
 export interface OwnGroupOption {
   id: string
@@ -52,6 +53,7 @@ const dailyProbeBudget = ref(DEFAULTS.dailyProbeBudget)
 const autoDegradeEnabled = ref(true)
 const autoRemoteActionEnabled = ref(false)
 const priorityMode = ref<ConnectionHealthPriorityMode>('none')
+const strategyMode = ref<ConnectionHealthStrategyMode>('health_probe')
 const modelTargets = ref<ModelTargetInput[]>([])
 const validationError = ref<string | null>(null)
 const runFlowOpen = ref(false)
@@ -63,6 +65,7 @@ const policyProvider = ref<string>('openai')
 const providerMismatch = ref(false)
 
 const isEditing = computed(() => !!props.policy)
+const isMultiplierOnly = computed(() => strategyMode.value === 'multiplier_only')
 
 const resetForm = () => {
   const p = props.policy
@@ -79,6 +82,7 @@ const resetForm = () => {
   autoDegradeEnabled.value = p?.autoDegradeEnabled ?? true
   autoRemoteActionEnabled.value = autoDegradeEnabled.value && (p?.autoRemoteActionEnabled ?? false)
   priorityMode.value = p?.priorityMode === 'multiplier' ? 'multiplier' : 'none'
+  strategyMode.value = p ? resolveConnectionHealthStrategyMode(p) : 'health_probe'
 
   // 已有模型目标全部同一个 provider 时直接复用该 provider 初始化——必须从"唯一值"取，
   // 不能从 modelTargets[0] 取，否则历史数据里第一条 provider 恰好为空、后面几条其实
@@ -135,16 +139,18 @@ const handleSave = () => {
     validationError.value = t(`${prefix}.errors.nameRequired`)
     return
   }
-  if (!policyProvider.value) {
+  if (!isMultiplierOnly.value && !policyProvider.value) {
     validationError.value = t(`${prefix}.errors.providerRequired`)
     return
   }
-  const targets = modelTargets.value
-    .filter(m => m.modelName.trim() !== '')
-    // 保存出去的目标 provider 必须和策略级 provider 一致：不管表单内部状态如何，
-    // 落盘前统一按 policyProvider 重新盖章，从根上避免出现混用 provider 的脏数据。
-    .map(m => ({ ...m, providerFamily: policyProvider.value }))
-  if (targets.length === 0) {
+  const targets = isMultiplierOnly.value
+    ? []
+    : modelTargets.value
+        .filter(m => m.modelName.trim() !== '')
+        // 保存出去的目标 provider 必须和策略级 provider 一致：不管表单内部状态如何，
+        // 落盘前统一按 policyProvider 重新盖章，从根上避免出现混用 provider 的脏数据。
+        .map(m => ({ ...m, providerFamily: policyProvider.value }))
+  if (!isMultiplierOnly.value && targets.length === 0) {
     validationError.value = t(`${prefix}.errors.modelTargetRequired`)
     return
   }
@@ -163,9 +169,10 @@ const handleSave = () => {
     observationSeconds: observationSeconds.value,
     recoveryStepPercent: recoveryStepPercent.value,
     dailyProbeBudget: dailyProbeBudget.value,
-    autoDegradeEnabled: autoDegradeEnabled.value,
-    autoRemoteActionEnabled: autoRemoteActionEnabled.value,
-    priorityMode: priorityMode.value,
+    autoDegradeEnabled: isMultiplierOnly.value ? false : autoDegradeEnabled.value,
+    autoRemoteActionEnabled: isMultiplierOnly.value ? false : autoRemoteActionEnabled.value,
+    priorityMode: isMultiplierOnly.value ? 'multiplier' : priorityMode.value,
+    strategyMode: strategyMode.value,
     modelTargets: targets,
   }
   emit('save', input)
@@ -211,6 +218,7 @@ const handleSave = () => {
               </div>
               <div class="flex shrink-0 items-center gap-1">
                 <button
+                  v-if="!isMultiplierOnly"
                   type="button"
                   class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground"
                   @click="runFlowOpen = true"
@@ -253,6 +261,29 @@ const handleSave = () => {
                   </label>
                 </div>
 
+                <div class="space-y-2">
+                  <label class="text-xs font-medium text-muted-foreground">{{ t(`${prefix}.strategyModeLabel`) }}</label>
+                  <div class="grid grid-cols-2 gap-1 rounded-lg bg-surface p-1" role="radiogroup" :aria-label="t(`${prefix}.strategyModeLabel`)">
+                    <button
+                      v-for="mode in (['health_probe', 'multiplier_only'] as const)"
+                      :key="mode"
+                      type="button"
+                      role="radio"
+                      :aria-checked="strategyMode === mode"
+                      class="flex min-h-16 items-start gap-2 rounded-md px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      :class="strategyMode === mode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                      @click="strategyMode = mode"
+                    >
+                      <Radar v-if="mode === 'health_probe'" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                      <ArrowDownUp v-else class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                      <span>
+                        <span class="block text-xs font-medium">{{ t(`${prefix}.strategyModes.${mode}.title`) }}</span>
+                        <span class="mt-1 block text-xs leading-4 text-muted-foreground">{{ t(`${prefix}.strategyModes.${mode}.description`) }}</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
                 <div class="space-y-1.5">
                   <label class="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                     {{ t(`${prefix}.ownGroupLabel`) }}
@@ -266,7 +297,7 @@ const handleSave = () => {
               </div>
 
               <!-- 模型探活目标 -->
-              <div class="space-y-2 border-t border-border/40 pt-4">
+              <div v-if="!isMultiplierOnly" class="space-y-2 border-t border-border/40 pt-4">
                 <div class="flex items-center justify-between">
                   <label class="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                     {{ t(`${prefix}.modelTargetsLabel`) }}
@@ -324,7 +355,7 @@ const handleSave = () => {
               </div>
 
               <!-- 阈值配置 -->
-              <div class="grid grid-cols-2 gap-3 border-t border-border/40 pt-4">
+              <div v-if="!isMultiplierOnly" class="grid grid-cols-2 gap-3 border-t border-border/40 pt-4">
                 <div class="space-y-1.5">
                   <label class="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                     {{ t(`${prefix}.probeIntervalLabel`) }}
@@ -377,7 +408,7 @@ const handleSave = () => {
               </div>
 
               <!-- 自动化开关：默认保守，远端动作必须让用户明确可见并主动打开 -->
-              <div class="space-y-3 border-t border-border/40 pt-4">
+              <div v-if="!isMultiplierOnly" class="space-y-3 border-t border-border/40 pt-4">
                 <div class="space-y-2 rounded-lg border border-border/40 bg-surface/30 px-4 py-3">
                   <div class="flex items-center gap-1 text-sm text-foreground">
                     <ArrowDownUp class="h-4 w-4 text-primary" />
@@ -426,6 +457,14 @@ const handleSave = () => {
                     <div class="w-9 h-5 bg-surface-elevated rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-disabled:cursor-not-allowed peer-disabled:opacity-50 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                   </label>
                 </div>
+              </div>
+
+              <div v-else class="rounded-lg border border-primary/25 bg-primary/[0.05] px-4 py-3">
+                <div class="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <ArrowDownUp class="h-4 w-4 text-primary" />
+                  {{ t(`${prefix}.multiplierOnlySummaryTitle`) }}
+                </div>
+                <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.multiplierOnlySummary`) }}</p>
               </div>
 
               <div class="flex items-center justify-end gap-2 border-t border-border/40 pt-4">

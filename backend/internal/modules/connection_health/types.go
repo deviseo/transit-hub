@@ -50,6 +50,13 @@ const (
 	PriorityModeMultiplier = "multiplier"
 )
 
+// StrategyMode 明确区分策略是否需要真实模型探活。旧策略和旧客户端缺省为 health_probe；
+// multiplier_only 只读取 admin 分组倍率并同步优先级，绝不进入模型候选、凭据解析或探活预算链路。
+const (
+	StrategyModeHealthProbe    = "health_probe"
+	StrategyModeMultiplierOnly = "multiplier_only"
+)
+
 const (
 	ErrorRequest          = "admin.connectionHealth.errors.request"
 	ErrorUnknown          = "admin.connectionHealth.errors.unknown"
@@ -166,6 +173,7 @@ type Policy struct {
 	AutoDegradeEnabled      bool      `json:"autoDegradeEnabled"`
 	AutoRemoteActionEnabled bool      `json:"autoRemoteActionEnabled"`
 	PriorityMode            string    `json:"priorityMode"`
+	StrategyMode            string    `json:"strategyMode"`
 	DailyProbeBudget        int       `json:"dailyProbeBudget"`
 	CreatedAt               time.Time `json:"createdAt"`
 	UpdatedAt               time.Time `json:"updatedAt"`

@@ -28,6 +28,7 @@ type fakeRepository struct {
 	targetActionStates map[string]TargetActionState
 	budgetClaims       map[string]int
 	savePolicyErr      error
+	deletePolicyErr    error
 }
 
 func newFakeRepository() *fakeRepository {
@@ -108,6 +109,74 @@ func (f *fakeRepository) SavePolicyWithTargets(ctx context.Context, policy Polic
 	return nil
 }
 
+func (f *fakeRepository) DeletePolicy(ctx context.Context, id string, userID string, adminAccountID string) (bool, error) {
+	if f.deletePolicyErr != nil {
+		return false, f.deletePolicyErr
+	}
+	policyIndex := -1
+	for i, policy := range f.policies {
+		if policy.ID == id && policy.UserID == userID && policy.AdminAccountID == adminAccountID {
+			policyIndex = i
+			break
+		}
+	}
+	if policyIndex < 0 {
+		return false, nil
+	}
+	f.policies = append(f.policies[:policyIndex], f.policies[policyIndex+1:]...)
+	f.assignments = slices.DeleteFunc(f.assignments, func(assignment PolicyAssignment) bool {
+		return assignment.PolicyID == id && assignment.UserID == userID && assignment.AdminAccountID == adminAccountID
+	})
+	f.groupAssignments = slices.DeleteFunc(f.groupAssignments, func(assignment GroupPolicyAssignment) bool {
+		return assignment.PolicyID == id && assignment.UserID == userID && assignment.AdminAccountID == adminAccountID
+	})
+	return true, nil
+}
+
+func TestDeletePolicy_RemovesOwnedPolicyAndAssignments(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{
+		{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Name: "delete me"},
+		{ID: "p2", UserID: "user1", AdminAccountID: "ws1", Name: "keep me"},
+	}
+	repo.assignments = []PolicyAssignment{
+		{ID: "a1", PolicyID: "p1", UserID: "user1", AdminAccountID: "ws1"},
+		{ID: "a2", PolicyID: "p2", UserID: "user1", AdminAccountID: "ws1"},
+	}
+	repo.groupAssignments = []GroupPolicyAssignment{
+		{ID: "g1", PolicyID: "p1", UserID: "user1", AdminAccountID: "ws1"},
+		{ID: "g2", PolicyID: "p2", UserID: "user1", AdminAccountID: "ws1"},
+	}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	if err := service.DeletePolicy(context.Background(), "user1", "p1"); err != nil {
+		t.Fatalf("DeletePolicy() error = %v", err)
+	}
+	if len(repo.policies) != 1 || repo.policies[0].ID != "p2" {
+		t.Fatalf("unexpected remaining policies: %+v", repo.policies)
+	}
+	if len(repo.assignments) != 1 || repo.assignments[0].PolicyID != "p2" {
+		t.Fatalf("unexpected remaining target assignments: %+v", repo.assignments)
+	}
+	if len(repo.groupAssignments) != 1 || repo.groupAssignments[0].PolicyID != "p2" {
+		t.Fatalf("unexpected remaining group assignments: %+v", repo.groupAssignments)
+	}
+}
+
+func TestDeletePolicy_RejectsPolicyOutsideCurrentWorkspace(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{{ID: "p1", UserID: "user1", AdminAccountID: "ws2"}}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	err := service.DeletePolicy(context.Background(), "user1", "p1")
+	if err != requestError(ErrorNotFound) {
+		t.Fatalf("DeletePolicy() error = %v, want %s", err, ErrorNotFound)
+	}
+	if len(repo.policies) != 1 {
+		t.Fatalf("policy outside current workspace must remain: %+v", repo.policies)
+	}
+}
+
 func TestSavePolicy_RepositoryFailureLeavesExistingPolicyUntouched(t *testing.T) {
 	repo := newFakeRepository()
 	repo.policies = []Policy{{
@@ -141,6 +210,47 @@ func TestBuildPolicyAndTargets_DisablesRemoteActionWithoutAutoDegrade(t *testing
 	}
 	if policy.AutoRemoteActionEnabled {
 		t.Fatal("remote action must be normalized off when automatic degradation is disabled")
+	}
+}
+
+func TestBuildPolicyAndTargets_MultiplierOnlyDropsEveryProbeBehavior(t *testing.T) {
+	policy, targets, err := buildPolicyAndTargets("user1", "ws1", "p1", PolicyInput{
+		Name: "price only", StrategyMode: StrategyModeMultiplierOnly,
+		AutoDegradeEnabled: true, AutoRemoteActionEnabled: true, PriorityMode: PriorityModeNone,
+		ModelTargets: []ModelTargetInput{{ModelName: "gpt-4o", ProviderFamily: ProviderOpenAI, Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if policy.StrategyMode != StrategyModeMultiplierOnly || policy.PriorityMode != PriorityModeMultiplier {
+		t.Fatalf("multiplier-only mode must own multiplier priority: %+v", policy)
+	}
+	if policy.AutoDegradeEnabled || policy.AutoRemoteActionEnabled {
+		t.Fatalf("multiplier-only mode must disable health actions: %+v", policy)
+	}
+	if len(targets) != 0 || len(policy.ModelTargets) != 0 {
+		t.Fatalf("multiplier-only mode must discard probe targets: targets=%+v policy=%+v", targets, policy)
+	}
+}
+
+func TestSavePolicy_OmittedStrategyModePreservesExistingMultiplierOnlyMode(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Name: "price only", Enabled: true,
+		StrategyMode: StrategyModeMultiplierOnly, PriorityMode: PriorityModeMultiplier,
+	}}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	saved, err := service.SavePolicy(context.Background(), "user1", PolicyInput{
+		ID: "p1", Name: "old client update", Enabled: true,
+		AutoDegradeEnabled: true, AutoRemoteActionEnabled: true,
+		ModelTargets: []ModelTargetInput{{ModelName: "should-not-probe", Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("SavePolicy() error = %v", err)
+	}
+	if saved.StrategyMode != StrategyModeMultiplierOnly || saved.AutoDegradeEnabled || len(saved.ModelTargets) != 0 {
+		t.Fatalf("old client update must preserve multiplier-only behavior: %+v", saved)
 	}
 }
 
