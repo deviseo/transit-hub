@@ -32,6 +32,7 @@ import type {
   ConnectionHealthPolicy,
   PolicyInput,
 } from '../types/connectionHealth'
+import { resolveConnectionHealthStrategyMode } from '../utils/connectionHealthPolicy'
 
 const { t, te } = useI18n()
 const {
@@ -45,6 +46,7 @@ const {
   loadAll,
   loadEvents,
   loadPolicies,
+  removePolicy,
   savePolicy,
 } = useConnectionHealth()
 
@@ -77,7 +79,7 @@ watch(filteredGroups, (nextGroups) => {
 }, { immediate: true })
 
 const groupMonitoringEnabled = (group: AdminGroupHealth): boolean =>
-  group.hasEnabledPolicy ?? group.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(group.hasAssignedPolicy)
+  group.hasEnabledProbePolicy ?? group.hasEnabledPolicy ?? group.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(group.hasAssignedPolicy)
 
 const monitoredGroupCount = computed(() => adminGroups.value.filter(groupMonitoringEnabled).length)
 const conflictCount = computed(() => adminGroups.value.reduce((sum, group) => sum + (group.priorityConflictCount ?? 0), 0))
@@ -175,6 +177,8 @@ const showAllEvents = async () => {
 const policyListDialogOpen = ref(false)
 const policyDrawerOpen = ref(false)
 const editingPolicy = ref<ConnectionHealthPolicy | null>(null)
+const deletingPolicyId = ref('')
+const deletePolicyError = ref('')
 const ownGroupOptions = computed<OwnGroupOption[]>(() => groups.value.map((group) => ({ id: group.ownGroupId, name: group.ownGroupName || group.ownGroupId })))
 
 const openCreatePolicy = () => {
@@ -211,6 +215,7 @@ const togglePolicyEnabled = async (policy: ConnectionHealthPolicy) => {
     autoDegradeEnabled: policy.autoDegradeEnabled,
     autoRemoteActionEnabled: policy.autoRemoteActionEnabled,
     priorityMode: policy.priorityMode ?? 'none',
+    strategyMode: resolveConnectionHealthStrategyMode(policy),
     modelTargets: policy.modelTargets.map((model) => ({
       id: model.id,
       modelName: model.modelName,
@@ -221,6 +226,21 @@ const togglePolicyEnabled = async (policy: ConnectionHealthPolicy) => {
     })),
   })
   await loadAll({ silent: true })
+}
+
+const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
+  if (deletingPolicyId.value) return
+  deletingPolicyId.value = policy.id
+  deletePolicyError.value = ''
+  try {
+    if (await removePolicy(policy.id)) {
+      await loadAll({ silent: true })
+    } else {
+      deletePolicyError.value = readableMessage(errorKey.value)
+    }
+  } finally {
+    deletingPolicyId.value = ''
+  }
 }
 </script>
 
@@ -325,7 +345,10 @@ const togglePolicyEnabled = async (policy: ConnectionHealthPolicy) => {
                 :class="selectedGroup?.id === group.id ? 'bg-primary/[0.08]' : 'hover:bg-surface/60'"
                 @click="selectedGroupId = group.id"
               >
-                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full" :class="groupMonitoringEnabled(group) ? 'bg-emerald-500' : 'bg-muted-foreground/35'" />
+                <span
+                  class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                  :class="groupMonitoringEnabled(group) ? 'bg-emerald-500' : group.priorityMode === 'multiplier' ? 'bg-primary' : 'bg-muted-foreground/35'"
+                />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center justify-between gap-2">
                     <span class="truncate text-sm font-medium text-foreground">{{ group.name }}</span>
@@ -372,8 +395,11 @@ const togglePolicyEnabled = async (policy: ConnectionHealthPolicy) => {
     <ProbePolicyListDialog
       :open="policyListDialogOpen"
       :policies="policies"
+      :deleting-policy-id="deletingPolicyId"
+      :delete-error="deletePolicyError"
       @close="policyListDialogOpen = false"
       @create="openCreatePolicy"
+      @delete="handleDeletePolicy"
       @edit="openEditPolicy"
       @toggle="togglePolicyEnabled"
     />

@@ -166,3 +166,9 @@ export const updateConnectionHealthPolicy = async (id: string, input: PolicyInpu
     method: 'PUT',
     body: JSON.stringify(input),
   })
+
+export const deleteConnectionHealthPolicy = async (id: string): Promise<void> => {
+  await requestJson<{ ok: boolean }>(`/connection-health/policies/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}

@@ -307,6 +307,45 @@ func TestMultiplierPrioritySync_IgnoresFrozenHealthWhenAutoDegradeDisabled(t *te
 	}
 }
 
+func TestMultiplierPrioritySync_MultiplierOnlyOverridesOverlappingProbeHealth(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	targetID := "newapi:ws1:100"
+	currentPriority := 1
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: float64Ptr(0.4)}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Priority: &currentPriority, Models: "gpt-4o"}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
+		platformGroups: reader, priorityActions: priorityActions,
+	}
+	healthPolicy := Policy{
+		ID: "health", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeHealthProbe, AutoDegradeEnabled: true, PriorityMode: PriorityModeMultiplier,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	pricePolicy := Policy{
+		ID: "price", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeMultiplierOnly, PriorityMode: PriorityModeMultiplier,
+	}
+	assignments := []GroupPolicyAssignment{
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: healthPolicy.ID},
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: pricePolicy.ID},
+	}
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"gpt-4o": {ConnectionID: targetID, ModelName: "gpt-4o", State: StateSuspended, CurrentWeight: 0, UserID: "user1", AdminAccountID: "ws1"},
+	}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{healthPolicy, pricePolicy}, nil, assignments, nil, nil)
+	want := desiredManagedPriorityForPlatformWithExpected(upstream.PlatformNewAPI, nil, 0, 0)
+	if len(priorityActions.calls) != 1 || priorityActions.calls[0].priority != want {
+		t.Fatalf("explicit multiplier-only policy must ignore overlapping health state, want=%d calls=%+v", want, priorityActions.calls)
+	}
+}
+
 func TestMultiplierPrioritySync_ConfirmsPendingSystemWrite(t *testing.T) {
 	repo := newFakeRepository()
 	priorityActions := &fakeTargetPriorityActioner{}

@@ -510,5 +510,20 @@ func TestAdminGroups_AssignedPolicyFieldsReflectAssignments(t *testing.T) {
 	}
 }
 
+func TestHasEnabledProbePolicyExcludesMultiplierOnly(t *testing.T) {
+	policies := []Policy{
+		{ID: "multiplier-only", Enabled: true, StrategyMode: StrategyModeMultiplierOnly},
+		{ID: "disabled-probe", Enabled: false, StrategyMode: StrategyModeHealthProbe},
+	}
+	if hasEnabledProbePolicy(policies) {
+		t.Fatal("multiplier-only and disabled probe policies must not mark an account as monitored")
+	}
+
+	policies[1].Enabled = true
+	if !hasEnabledProbePolicy(policies) {
+		t.Fatal("an enabled health-probe policy must mark an account as monitored")
+	}
+}
+
 // 确保 fakeMySitesReader 仍满足 MySitesReader（含 ListRealConnectionsForWorkspace）。
 var _ MySitesReader = fakeMySitesReader{}

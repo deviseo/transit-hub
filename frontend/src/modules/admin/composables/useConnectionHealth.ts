@@ -18,6 +18,7 @@ import type {
 import type { AdminGroupAccount } from '../types/connectionHealth'
 import {
   createConnectionHealthPolicy,
+  deleteConnectionHealthPolicy,
   disableConnection,
   discoverTargetModels,
   getConnectionHealthAdminGroups,
@@ -191,6 +192,18 @@ export function useConnectionHealth() {
     }
   }
 
+  const removePolicy = async (policyId: string) => {
+    errorKey.value = ''
+    try {
+      await deleteConnectionHealthPolicy(policyId)
+      policies.value = policies.value.filter(policy => policy.id !== policyId)
+      return true
+    } catch (err) {
+      errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
+      return false
+    }
+  }
+
   // createPolicyForSetup 服务首次启用向导：需要拿到新策略 ID 后立即绑定 admin 分组。
   // 与 savePolicy 分开，避免改变旧调用方只依赖 boolean 的返回契约。
   const createPolicyForSetup = async (input: PolicyInput): Promise<{ policy: ConnectionHealthPolicy } | { errorKey: string }> => {
@@ -353,6 +366,7 @@ export function useConnectionHealth() {
     loadEvents,
     loadPolicies,
     savePolicy,
+    removePolicy,
     createPolicyForSetup,
     updatePolicyForSetup,
     manualProbe,

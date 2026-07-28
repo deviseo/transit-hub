@@ -16,6 +16,7 @@ type healthRepository interface {
 	ListPolicies(ctx context.Context, userID string, adminAccountID string) ([]Policy, error)
 	GetPolicy(ctx context.Context, id string, userID string, adminAccountID string) (*Policy, error)
 	SavePolicyWithTargets(ctx context.Context, p Policy, targets []ModelTarget) error
+	DeletePolicy(ctx context.Context, id string, userID string, adminAccountID string) (bool, error)
 	ListStatesByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthState, error)
 	ListStatesByConnection(ctx context.Context, connectionID string) ([]ConnectionHealthState, error)
 	GetState(ctx context.Context, connectionID string, modelName string) (*ConnectionHealthState, error)
@@ -647,6 +648,7 @@ type PolicyInput struct {
 	AutoDegradeEnabled      bool               `json:"autoDegradeEnabled"`
 	AutoRemoteActionEnabled bool               `json:"autoRemoteActionEnabled"`
 	PriorityMode            string             `json:"priorityMode"`
+	StrategyMode            string             `json:"strategyMode"`
 	DailyProbeBudget        int                `json:"dailyProbeBudget"`
 	ModelTargets            []ModelTargetInput `json:"modelTargets"`
 }
@@ -681,6 +683,11 @@ func (s *Service) SavePolicy(ctx context.Context, userID string, in PolicyInput)
 		if existing == nil {
 			return Policy{}, requestError(ErrorNotFound)
 		}
+		// 旧版前端不会发送 strategyMode。更新已有策略时保留原模式，避免滚动升级期间
+		// 旧客户端把 multiplier_only 静默改回探活模式。
+		if strings.TrimSpace(in.StrategyMode) == "" {
+			in.StrategyMode = existing.StrategyMode
+		}
 	}
 
 	policy, targets, err := buildPolicyAndTargets(userID, adminAccountID, id, in)
@@ -701,7 +708,25 @@ func (s *Service) SavePolicy(ctx context.Context, userID string, in PolicyInput)
 	return *saved, nil
 }
 
+// DeletePolicy 删除当前 workspace 下的一条策略。Repository 会在同一事务中清理策略的
+// 模型目标、账号/分组分配和预算计数；历史探活事件保留，便于后续审计已发生的动作。
+func (s *Service) DeletePolicy(ctx context.Context, userID string, id string) error {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	deleted, err := s.repo.DeletePolicy(ctx, strings.TrimSpace(id), userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return requestError(ErrorNotFound)
+	}
+	return nil
+}
+
 func buildPolicyAndTargets(userID string, adminAccountID string, id string, in PolicyInput) (Policy, []ModelTarget, error) {
+	strategyMode := normalizeStrategyMode(in.StrategyMode)
 	policy := Policy{
 		ID: id, UserID: userID, AdminAccountID: adminAccountID, Name: strings.TrimSpace(in.Name), Enabled: in.Enabled,
 		OwnGroupID: in.OwnGroupID, OwnGroupName: in.OwnGroupName, ModelPattern: defaultString(in.ModelPattern, "*"),
@@ -710,7 +735,17 @@ func buildPolicyAndTargets(userID string, adminAccountID string, id string, in P
 		CooldownSeconds: defaultInt(in.CooldownSeconds, 300), ObservationSeconds: defaultInt(in.ObservationSeconds, 300),
 		RecoveryStepPercent: defaultInt(in.RecoveryStepPercent, 25), AutoDegradeEnabled: in.AutoDegradeEnabled,
 		AutoRemoteActionEnabled: in.AutoDegradeEnabled && in.AutoRemoteActionEnabled, PriorityMode: normalizePriorityMode(in.PriorityMode),
+		StrategyMode:     strategyMode,
 		DailyProbeBudget: defaultInt(in.DailyProbeBudget, 1000),
+	}
+	if strategyMode == StrategyModeMultiplierOnly {
+		// 仅倍率策略不拥有任何探活行为。即使错误或旧客户端同时提交了探活字段，也在服务端
+		// 强制关闭并丢弃模型目标，保证不会解析凭据、消耗预算或触发健康状态机。
+		policy.AutoDegradeEnabled = false
+		policy.AutoRemoteActionEnabled = false
+		policy.PriorityMode = PriorityModeMultiplier
+		policy.ModelTargets = []ModelTarget{}
+		return policy, []ModelTarget{}, nil
 	}
 	targets := make([]ModelTarget, 0, len(in.ModelTargets))
 	for _, t := range in.ModelTargets {
@@ -737,6 +772,17 @@ func normalizePriorityMode(mode string) string {
 		return PriorityModeMultiplier
 	}
 	return PriorityModeNone
+}
+
+func normalizeStrategyMode(mode string) string {
+	if strings.TrimSpace(mode) == StrategyModeMultiplierOnly {
+		return StrategyModeMultiplierOnly
+	}
+	return StrategyModeHealthProbe
+}
+
+func policySupportsProbing(policy Policy) bool {
+	return normalizeStrategyMode(policy.StrategyMode) == StrategyModeHealthProbe
 }
 
 // policyRemoteActionEnabled 是自动接管上游状态的统一有效判定。自动降级关闭时状态机不会

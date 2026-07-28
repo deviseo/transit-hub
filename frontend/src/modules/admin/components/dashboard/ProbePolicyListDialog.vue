@@ -1,24 +1,62 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Ban, CheckCircle2, Plus, Settings2, ShieldCheck, X } from 'lucide-vue-next'
+import { AlertTriangle, ArrowDownUp, Ban, CheckCircle2, Loader2, Plus, Settings2, ShieldCheck, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
 import type { ConnectionHealthPolicy } from '../../types/connectionHealth'
+import { resolveConnectionHealthStrategyMode } from '../../utils/connectionHealthPolicy'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   policies: ConnectionHealthPolicy[]
+  deletingPolicyId: string
+  deleteError: string
 }>()
 
 const emit = defineEmits<{
   (event: 'close'): void
   (event: 'create'): void
+  (event: 'delete', policy: ConnectionHealthPolicy): void
   (event: 'edit', policy: ConnectionHealthPolicy): void
   (event: 'toggle', policy: ConnectionHealthPolicy): void
 }>()
 
 const { t } = useI18n()
 const prefix = 'admin.connectionHealth.policies'
+const deleteCandidate = ref<ConnectionHealthPolicy | null>(null)
+const visibleDeleteError = ref('')
+const policyStrategyMode = resolveConnectionHealthStrategyMode
+
+const requestDelete = (policy: ConnectionHealthPolicy) => {
+  if (props.deletingPolicyId) return
+  visibleDeleteError.value = ''
+  deleteCandidate.value = policy
+}
+
+const closeDeleteConfirmation = () => {
+  if (props.deletingPolicyId) return
+  deleteCandidate.value = null
+  visibleDeleteError.value = ''
+}
+
+watch(() => props.deleteError, value => {
+  visibleDeleteError.value = value
+})
+
+watch(() => props.open, open => {
+  if (!open) {
+    deleteCandidate.value = null
+    visibleDeleteError.value = ''
+  }
+})
+
+watch(() => props.policies.map(policy => policy.id).join('\u0000'), () => {
+  if (deleteCandidate.value && !props.policies.some(policy => policy.id === deleteCandidate.value?.id)) {
+    deleteCandidate.value = null
+    visibleDeleteError.value = ''
+  }
+})
 </script>
 
 <template>
@@ -77,14 +115,27 @@ const prefix = 'admin.connectionHealth.policies'
                     >
                       {{ policy.enabled ? t(`${prefix}.enabled`) : t(`${prefix}.disabled`) }}
                     </span>
+                    <span
+                      class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                      :class="policyStrategyMode(policy) === 'multiplier_only' ? 'bg-primary/10 text-primary' : 'bg-surface text-muted-foreground'"
+                    >
+                      <ArrowDownUp v-if="policyStrategyMode(policy) === 'multiplier_only'" class="h-3 w-3" />
+                      <ShieldCheck v-else class="h-3 w-3" />
+                      {{ t(`${prefix}.strategyModes.${policyStrategyMode(policy)}`) }}
+                    </span>
                     <span v-if="policy.autoRemoteActionEnabled" class="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
                       {{ t(`${prefix}.remoteActionOn`) }}
                     </span>
                   </div>
                   <p class="mt-0.5 text-xs text-muted-foreground">
                     {{ policy.ownGroupName || t(`${prefix}.allGroupsScope`) }}
-                    · {{ t(`${prefix}.modelTargetCount`, { count: policy.modelTargets.filter(m => m.enabled).length }) }}
-                    · {{ policy.probeIntervalSeconds }}s
+                    <template v-if="policyStrategyMode(policy) === 'multiplier_only'">
+                      · {{ t(`${prefix}.multiplierOnlySummary`) }}
+                    </template>
+                    <template v-else>
+                      · {{ t(`${prefix}.modelTargetCount`, { count: policy.modelTargets.filter(m => m.enabled).length }) }}
+                      · {{ policy.probeIntervalSeconds }}s
+                    </template>
                   </p>
                 </div>
                 <div class="flex shrink-0 items-center gap-1.5">
@@ -99,6 +150,18 @@ const prefix = 'admin.connectionHealth.policies'
                       <Settings2 class="h-4 w-4" />
                     </button>
                   </Tooltip>
+                  <Tooltip :text="t(`${prefix}.delete`)">
+                    <button
+                      type="button"
+                      class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+                      :disabled="Boolean(deletingPolicyId)"
+                      :aria-label="t(`${prefix}.delete`)"
+                      @click="requestDelete(policy)"
+                    >
+                      <Loader2 v-if="deletingPolicyId === policy.id" class="h-4 w-4 animate-spin" />
+                      <Trash2 v-else class="h-4 w-4" />
+                    </button>
+                  </Tooltip>
                 </div>
               </li>
             </ul>
@@ -106,5 +169,50 @@ const prefix = 'admin.connectionHealth.policies'
         </div>
       </div>
     </Transition>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="deleteCandidate" class="fixed inset-0 z-[160] flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-background/80 backdrop-blur-sm" @click="closeDeleteConfirmation" />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-probe-policy-title"
+        aria-describedby="delete-probe-policy-description"
+        class="relative w-full max-w-md rounded-lg border border-border/60 bg-card p-5 text-card-foreground shadow-2xl"
+      >
+        <div class="flex items-start gap-3">
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+            <AlertTriangle class="h-5 w-5" />
+          </div>
+          <div class="min-w-0">
+            <h2 id="delete-probe-policy-title" class="text-base font-semibold text-foreground">
+              {{ t(`${prefix}.deleteTitle`) }}
+            </h2>
+            <p id="delete-probe-policy-description" class="mt-1 text-sm leading-6 text-muted-foreground">
+              {{ t(`${prefix}.deleteDescription`, { name: deleteCandidate.name }) }}
+            </p>
+            <p class="mt-2 text-xs leading-5 text-muted-foreground">
+              {{ t(`${prefix}.deleteWarning`) }}
+            </p>
+          </div>
+        </div>
+
+        <p v-if="visibleDeleteError" class="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          {{ visibleDeleteError }}
+        </p>
+
+        <div class="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" :disabled="Boolean(deletingPolicyId)" @click="closeDeleteConfirmation">
+            {{ t(`${prefix}.cancelDelete`) }}
+          </Button>
+          <Button variant="destructive" :disabled="Boolean(deletingPolicyId)" @click="emit('delete', deleteCandidate)">
+            <Loader2 v-if="deletingPolicyId === deleteCandidate.id" class="h-4 w-4 animate-spin" />
+            <Trash2 v-else class="h-4 w-4" />
+            {{ t(`${prefix}.confirmDelete`) }}
+          </Button>
+        </div>
+      </div>
+    </div>
   </Teleport>
 </template>

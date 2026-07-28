@@ -644,7 +644,7 @@ export default {
         unknown: 'Unknown platform'
       },
       actions: {
-        refresh: 'Refresh', retry: 'Retry', cleanup: 'Clean up stale config', editTargets: 'Edit sources', manage: 'Manage pricing mapping'
+        refresh: 'Refresh', retry: 'Retry', cleanup: 'Clean up stale config', editTargets: 'Edit sources', manage: 'Manage pricing mapping', openProfitCalculator: 'Open profit budget calculator', customProfitCalculator: 'Custom Profit Calculator'
       },
       filters: {
         searchLabel: 'Search pricing mappings', searchPlaceholder: 'Search own groups or upstream sources...',
@@ -656,7 +656,37 @@ export default {
       staleOwnGroup: 'The admin site no longer returns this group. Its configuration is preserved until you confirm cleanup.',
       staleTarget: 'Upstream stale',
       metrics: {
-        ownMultiplier: 'My group multiplier', targets: 'Pricing sources', autoPricing: 'Auto-pricing', effectiveUpstream: 'Effective upstream multiplier'
+        ownMultiplier: 'My group multiplier',
+        targets: 'Pricing sources',
+        budgetMargin: 'Budget gross margin',
+        marginRange: '{minimum} - {maximum}',
+        autoPricing: 'Auto-pricing',
+        effectiveUpstream: 'Effective upstream multiplier',
+        effectiveCost: 'Converted cost multiplier'
+      },
+      profitCalculator: {
+        titleWithGroup: '{group} · Profit Budget',
+        customTitle: 'Custom Profit Calculator',
+        close: 'Close profit budget',
+        modeLabel: 'Profit calculation mode',
+        groupMode: 'Current Group',
+        customMode: 'Custom Calculation',
+        revenueLabel: 'Simulated Sales Revenue (CNY)',
+        revenuePlaceholder: 'Enter simulated sales revenue',
+        invalidRevenue: 'Enter a valid amount greater than or equal to 0.',
+        ownMultiplier: 'My Selling Multiplier',
+        upstreamCostMultiplier: 'Converted Upstream Cost Multiplier',
+        saleMultiplier: 'My Selling Multiplier',
+        multiplierPlaceholder: 'Enter multiplier',
+        invalidUpstreamMultiplier: 'Enter a valid multiplier greater than or equal to 0.',
+        invalidSaleMultiplier: 'Enter a valid multiplier greater than 0.',
+        profitRange: 'Estimated Gross Profit Range',
+        profitMargin: 'Estimated Profit Margin',
+        amountRange: '{minimum} - {maximum}',
+        estimatedCost: 'Estimated Purchase Cost',
+        estimatedProfit: 'Estimated Gross Profit',
+        noTargetsTitle: 'No Calculable Upstreams',
+        noTargetsDescription: 'Configure a valid pricing source for this group first.'
       },
       sections: {
         targets: 'Pricing sources', targetsSummary: '{count} upstream sources', autoPricing: 'Auto-pricing policy'
@@ -874,8 +904,8 @@ export default {
       groupDetail: {
         multiplierPriority: 'Multiplier priority',
         subtitle: '{monitored} of {total} accounts or channels monitored',
-        enableMonitoring: 'Enable Group Monitoring',
-        manageMonitoring: 'Manage Group Monitoring',
+        enableMonitoring: 'Configure Group Strategy',
+        manageMonitoring: 'Manage Group Strategy',
         unmonitored: 'Not auto-monitored',
         policyCount: '{name} and {count} more',
         unprobeable: 'Probe unavailable',
@@ -925,17 +955,17 @@ export default {
         }
       },
       setup: {
-        title: 'Configure Group Health',
-        stepsLabel: 'Group health setup steps',
+        title: 'Configure Group Automation',
+        stepsLabel: 'Group automation setup steps',
         steps: {
-          '1': 'Monitoring Scope',
+          '1': 'Effective Scope',
           '2': 'Run Strategy',
           '3': 'Review'
         },
-		generatedPolicyName: '{group} - Group Health Policy',
+		generatedPolicyName: '{group} - Group Automation Policy',
 		retry: 'Reload',
         scope: {
-          title: 'Choose targets for automatic monitoring',
+          title: 'Choose Strategy Targets',
           description: 'Every account or channel in this group is selected by default. Unchecked targets are not auto-probed, failed over, or reprioritized.',
           modelsUnknown: 'No model list returned by upstream',
           probeable: 'Probe ready',
@@ -944,11 +974,15 @@ export default {
         },
         strategy: {
           title: 'Choose a run strategy',
-          description: 'A quick strategy creates a complete probe policy automatically, or you can bind an existing advanced policy.',
+          description: 'Create a probe strategy, a multiplier-only priority strategy, or bind an existing advanced policy.',
           options: {
             multiplier: {
               title: 'Multiplier Priority',
               description: 'Among healthy targets, a lower multiplier gets higher upstream priority. Failed targets still degrade first.'
+            },
+            multiplierOnly: {
+              title: 'Multiplier Only',
+              description: 'Adjust upstream priority only by group multiplier, without model probes, degradation, or remote health actions.'
             },
             stable: {
               title: 'Stability First',
@@ -972,24 +1006,28 @@ export default {
           },
           providerLabel: 'Model Provider',
           remoteActionLabel: 'Run Upstream Actions',
-          remoteActionHelp: 'Automatically disable or restore targets on failure and recovery when the platform supports it'
+          remoteActionHelp: 'Automatically disable or restore targets on failure and recovery when the platform supports it',
+          multiplierOnlyTitle: 'Sync Multiplier Priority Only',
+          multiplierOnlyHelp: 'The scheduler reads current group multipliers about every 30 seconds. Lower multipliers receive higher priority. No models or probe credentials are required.'
         },
         confirm: {
           title: 'Review Group Configuration',
           description: 'Saving creates the group-level policy relationship immediately. The scheduler applies it on its next scan.',
-          scope: 'Monitoring Scope',
+          scope: 'Effective Scope',
           scopeValue: '{selected} selected, {excluded} excluded',
           strategy: 'Run Strategy',
           models: 'Probe Models',
           fromPolicy: 'Defined by existing policies',
+          notApplicable: 'Not required',
           remoteAction: 'Upstream Automation',
           enabled: 'Enabled',
-          disabled: 'Record only',
-          multiplierRule: 'Multiplier rule: health outranks price; a target in multiple groups uses the lowest multiplier; lower multipliers receive higher upstream priority. If a manual change is detected, automation stops and reports a conflict.'
+          disabled: 'Disabled',
+          multiplierRule: 'Multiplier rule: health outranks price; a target in multiple groups uses the lowest multiplier; lower multipliers receive higher upstream priority. If a manual change is detected, automation stops and reports a conflict.',
+          multiplierOnlyRule: 'Multiplier-only rule: health state is ignored and no model probes run. Targets in multiple groups use the lowest multiplier. Disabling or unbinding restores the original priority; manual edits remain protected by conflict detection.'
         },
         back: 'Back',
         next: 'Next',
-        save: 'Enable Group Monitoring'
+        save: 'Save Group Strategy'
       },
       probeUnavailableReasons: {
         credential_unavailable: 'Cannot securely obtain upstream credentials; probing unavailable',
@@ -1087,7 +1125,7 @@ export default {
       },
       topActions: {
         runFlow: 'How it works',
-        policies: 'Probe Policies',
+        policies: 'Automation Policies',
         events: 'Probe Events'
       },
       events: {
@@ -1131,25 +1169,47 @@ export default {
         other: '{action}'
       },
       policies: {
-        title: 'Probe Policies',
-        subtitle: 'Configure model probe targets, thresholds, and auto-degrade/restore behavior.',
+        title: 'Automation Policies',
+        subtitle: 'Configure model probing, auto-degradation, or multiplier-only priority behavior.',
         create: 'New Policy',
-        empty: 'No probe policies yet. Click "New Policy" to configure one.',
+        empty: 'No automation policies yet. Click "New Policy" to configure one.',
         enabled: 'Enabled',
         disabled: 'Disabled',
         enable: 'Enable',
         disable: 'Disable',
         edit: 'Edit',
+        delete: 'Delete policy',
+        deleteTitle: 'Delete Automation Policy',
+        deleteDescription: 'Delete "{name}"?',
+        deleteWarning: 'Its model targets and account/group assignments will also be removed. Historical probe records will be retained. This action cannot be undone.',
+        cancelDelete: 'Cancel',
+        confirmDelete: 'Delete Policy',
         remoteActionOn: 'Remote Action On',
         allGroupsScope: 'All groups',
-        modelTargetCount: '{count} model targets'
+        modelTargetCount: '{count} model targets',
+        strategyModes: {
+          health_probe: 'Health Probe',
+          multiplier_only: 'Multiplier Only'
+        },
+        multiplierOnlySummary: 'No probes; priority follows multiplier'
       },
       policyDrawer: {
-        createTitle: 'New Probe Policy',
-        editTitle: 'Edit Probe Policy',
+        createTitle: 'New Automation Policy',
+        editTitle: 'Edit Automation Policy',
         nameLabel: 'Policy Name',
         namePlaceholder: 'Enter policy name',
         enabledLabel: 'Enable this policy',
+        strategyModeLabel: 'Run Mode',
+        strategyModes: {
+          health_probe: {
+            title: 'Health Probe',
+            description: 'Probes, state machine, and optional actions'
+          },
+          multiplier_only: {
+            title: 'Multiplier Only',
+            description: 'Adjust priority only; never probe'
+          }
+        },
         ownGroupLabel: 'Policy Scope',
         ownGroupAllOption: 'All groups in current workspace',
         modelTargetsLabel: 'Model Probe Targets',
@@ -1175,6 +1235,8 @@ export default {
           multiplier: 'Sort by Group Multiplier'
         },
         priorityModeHelp: 'Multiplier sorting favors lower-cost upstream targets while they are healthy. Failed targets always degrade before price ordering applies.',
+        multiplierOnlySummaryTitle: 'Lower Multiplier, Higher Priority',
+        multiplierOnlySummary: 'About every 30 seconds, the scheduler reads current group multipliers and syncs upstream priority. It never resolves probe credentials, requests models, consumes probe budget, degrades health, or runs remote health actions. Manual priority edits stop automatic overwrites.',
         providerLabel: 'Model Provider',
         providerPlaceholder: 'Select a provider',
         providerMismatchWarning: 'This policy\'s existing model targets use different providers. Pick one provider above — saving will unify all model targets to the provider you select.',

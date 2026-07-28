@@ -22,7 +22,7 @@ import type {
   PolicyInput,
 } from '../../types/connectionHealth'
 
-type SetupMode = 'stable' | 'multiplier' | 'monitor' | 'existing'
+type SetupMode = 'stable' | 'multiplier' | 'multiplierOnly' | 'monitor' | 'existing'
 type Phase = 'loading' | 'ready' | 'saving' | 'error'
 type ModelSuggestionSource = 'common' | 'discovered' | 'none'
 
@@ -195,7 +195,7 @@ watch(
 )
 
 watch(mode, (nextMode) => {
-  if (nextMode === 'monitor') autoRemoteActionEnabled.value = false
+  if (nextMode === 'monitor' || nextMode === 'multiplierOnly') autoRemoteActionEnabled.value = false
   if (nextMode === 'stable' || nextMode === 'multiplier') autoRemoteActionEnabled.value = true
 })
 
@@ -203,7 +203,9 @@ const selectedCount = computed(() => selectedTargetIds.value.size)
 const excludedCount = computed(() => Math.max(0, (props.group?.accounts.length ?? 0) - selectedCount.value))
 const models = computed(() => dedupeModels(modelText.value))
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
-const effectivePriorityMode = computed<ConnectionHealthPriorityMode>(() => mode.value === 'multiplier' ? 'multiplier' : 'none')
+const effectivePriorityMode = computed<ConnectionHealthPriorityMode>(() =>
+  mode.value === 'multiplier' || mode.value === 'multiplierOnly' ? 'multiplier' : 'none',
+)
 const selectedExistingPolicies = computed(() => props.policies.filter((policy) => selectedPolicyIds.value.has(policy.id)))
 
 const toggleTarget = (targetId: string) => {
@@ -224,6 +226,7 @@ const canContinue = computed(() => {
   if (phase.value !== 'ready') return false
   if (step.value === 1) return selectedCount.value > 0
   if (step.value === 2 && mode.value === 'existing') return selectedPolicyIds.value.size > 0
+  if (step.value === 2 && mode.value === 'multiplierOnly') return true
   if (step.value === 2) return models.value.length > 0
   return true
 })
@@ -240,29 +243,35 @@ const previous = () => {
   if (step.value > 1) step.value--
 }
 
-const createQuickPolicyInput = (): PolicyInput => ({
-  name: t(`${prefix}.generatedPolicyName`, { group: props.group?.name ?? '' }),
-  enabled: true,
-  ownGroupId: '',
-  ownGroupName: '',
-  probeIntervalSeconds: 60,
-  failureThreshold: 3,
-  successThreshold: 2,
-  cooldownSeconds: 300,
-  observationSeconds: 300,
-  recoveryStepPercent: 25,
-  dailyProbeBudget: 1000,
-  autoDegradeEnabled: true,
-  autoRemoteActionEnabled: autoRemoteActionEnabled.value,
-  priorityMode: effectivePriorityMode.value,
-  modelTargets: models.value.map((modelName) => ({
-    modelName,
-    providerFamily: providerFamily.value,
+const createQuickPolicyInput = (): PolicyInput => {
+  const multiplierOnly = mode.value === 'multiplierOnly'
+  return {
+    name: t(`${prefix}.generatedPolicyName`, { group: props.group?.name ?? '' }),
     enabled: true,
-    probePrompt: '',
-    maxProbeTokens: 1,
-  })),
-})
+    ownGroupId: '',
+    ownGroupName: '',
+    probeIntervalSeconds: 60,
+    failureThreshold: 3,
+    successThreshold: 2,
+    cooldownSeconds: 300,
+    observationSeconds: 300,
+    recoveryStepPercent: 25,
+    dailyProbeBudget: 1000,
+    autoDegradeEnabled: !multiplierOnly,
+    autoRemoteActionEnabled: multiplierOnly ? false : autoRemoteActionEnabled.value,
+    priorityMode: effectivePriorityMode.value,
+    strategyMode: multiplierOnly ? 'multiplier_only' : 'health_probe',
+    modelTargets: multiplierOnly
+      ? []
+      : models.value.map((modelName) => ({
+          modelName,
+          providerFamily: providerFamily.value,
+          enabled: true,
+          probePrompt: '',
+          maxProbeTokens: 1,
+        })),
+  }
+}
 
 const bindLegacyQuickPolicy = async (
   group: AdminGroupHealth,
@@ -481,14 +490,15 @@ const close = () => {
                 </div>
                 <div class="grid gap-2 sm:grid-cols-2">
                   <button
-                    v-for="option in (['multiplier', 'stable', 'monitor'] as const)"
+                    v-for="option in (['multiplier', 'multiplierOnly', 'stable', 'monitor'] as const)"
                     :key="option"
                     type="button"
                     class="flex min-h-24 items-start gap-3 rounded-lg border px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                     :class="mode === option ? 'border-primary bg-primary/[0.06]' : 'border-border/60 hover:bg-surface/60'"
                     @click="mode = option"
                   >
-                    <ArrowDownUp v-if="option === 'multiplier'" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <Radar v-if="option === 'multiplier'" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <ArrowDownUp v-else-if="option === 'multiplierOnly'" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <ShieldCheck v-else-if="option === 'stable'" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <Gauge v-else class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <span>
@@ -517,6 +527,14 @@ const close = () => {
                     <span class="min-w-0 flex-1 truncate text-sm text-foreground">{{ policy.name }}</span>
                     <span class="text-xs text-muted-foreground">{{ t(`admin.connectionHealth.policies.${policy.enabled ? 'enabled' : 'disabled'}`) }}</span>
                   </label>
+                </div>
+
+                <div v-else-if="mode === 'multiplierOnly'" class="rounded-lg border border-primary/25 bg-primary/[0.05] px-4 py-3">
+                  <div class="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <ArrowDownUp class="h-4 w-4 text-primary" />
+                    {{ t(`${prefix}.strategy.multiplierOnlyTitle`) }}
+                  </div>
+                  <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.strategy.multiplierOnlyHelp`) }}</p>
                 </div>
 
                 <template v-else>
@@ -570,17 +588,22 @@ const close = () => {
                   </div>
                   <div class="flex items-center justify-between gap-4 px-4 py-3">
                     <dt class="text-sm text-muted-foreground">{{ t(`${prefix}.confirm.models`) }}</dt>
-                    <dd class="text-right text-sm font-medium text-foreground">{{ mode === 'existing' ? t(`${prefix}.confirm.fromPolicy`) : models.length }}</dd>
+                    <dd class="text-right text-sm font-medium text-foreground">
+                      {{ mode === 'existing' ? t(`${prefix}.confirm.fromPolicy`) : mode === 'multiplierOnly' ? t(`${prefix}.confirm.notApplicable`) : models.length }}
+                    </dd>
                   </div>
                   <div class="flex items-center justify-between gap-4 px-4 py-3">
                     <dt class="text-sm text-muted-foreground">{{ t(`${prefix}.confirm.remoteAction`) }}</dt>
-                    <dd class="text-right text-sm font-medium" :class="autoRemoteActionEnabled && mode !== 'existing' ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'">
-                      {{ mode === 'existing' ? t(`${prefix}.confirm.fromPolicy`) : t(`${prefix}.confirm.${autoRemoteActionEnabled ? 'enabled' : 'disabled'}`) }}
+                    <dd class="text-right text-sm font-medium" :class="autoRemoteActionEnabled && mode !== 'existing' && mode !== 'multiplierOnly' ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'">
+                      {{ mode === 'existing' ? t(`${prefix}.confirm.fromPolicy`) : t(`${prefix}.confirm.${autoRemoteActionEnabled && mode !== 'multiplierOnly' ? 'enabled' : 'disabled'}`) }}
                     </dd>
                   </div>
                 </dl>
                 <div v-if="mode === 'multiplier'" class="rounded-lg border border-primary/25 bg-primary/[0.05] px-4 py-3 text-xs leading-5 text-muted-foreground">
                   {{ t(`${prefix}.confirm.multiplierRule`) }}
+                </div>
+                <div v-else-if="mode === 'multiplierOnly'" class="rounded-lg border border-primary/25 bg-primary/[0.05] px-4 py-3 text-xs leading-5 text-muted-foreground">
+                  {{ t(`${prefix}.confirm.multiplierOnlyRule`) }}
                 </div>
               </section>
 

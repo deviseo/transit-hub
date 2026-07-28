@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   AlertCircle,
+  Calculator,
   Check,
   ChevronRight,
   CircleOff,
@@ -15,6 +16,7 @@ import {
   Settings2,
   Trash2,
   TriangleAlert,
+  X,
   Zap,
 } from 'lucide-vue-next'
 import { getMySiteMappingOptions, removeMySiteMapping, runAutoPricing, saveMySiteMapping } from '../../api/mySites'
@@ -32,6 +34,7 @@ import AutoPricingConfigDrawer, { type BotOption } from './AutoPricingConfigDraw
 import GroupAssociationTargetsDrawer from './GroupAssociationTargetsDrawer.vue'
 
 type AssociationFilter = 'all' | 'associated' | 'unassociated' | 'stale'
+type ProfitCalculatorMode = 'group' | 'custom'
 
 interface AssociationRow {
   ownGroup: string
@@ -59,6 +62,11 @@ const runningOwnGroup = ref<string | null>(null)
 const targetsDrawerOpen = ref(false)
 const pricingDrawerOpen = ref(false)
 const cleanupDialogOpen = ref(false)
+const profitCalculatorOpen = ref(false)
+const profitCalculatorMode = ref<ProfitCalculatorMode>('group')
+const simulatedRevenueInput = ref<string | number>('100')
+const customUpstreamMultiplierInput = ref<string | number>('')
+const customSaleMultiplierInput = ref<string | number>('')
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 
 const targetKey = (siteId: string, groupName: string): string => `${siteId}\u0000${groupName}`
@@ -177,9 +185,38 @@ const targetOptions = computed<MySiteUpstreamTargetOption[]>(() => {
 })
 
 const selectedTargets = computed(() => selectedMapping.value?.upstreamTargets ?? [])
+
+const calculateEffectiveCostMultiplier = (
+  multiplier: number | null | undefined,
+  rechargeRate: number | null | undefined,
+): number | null => {
+  if (
+    multiplier == null
+    || rechargeRate == null
+    || !Number.isFinite(multiplier)
+    || !Number.isFinite(rechargeRate)
+    || multiplier < 0
+    || rechargeRate <= 0
+  ) return null
+  return multiplier * rechargeRate
+}
+
+const calculateProfitMargin = (
+  saleMultiplier: number | null | undefined,
+  costMultiplier: number | null,
+): number | null => {
+  if (
+    saleMultiplier == null
+    || costMultiplier == null
+    || !Number.isFinite(saleMultiplier)
+    || saleMultiplier <= 0
+  ) return null
+  return (saleMultiplier - costMultiplier) / saleMultiplier
+}
+
 const selectedTargetDetails = computed(() => selectedTargets.value.map(target => {
   const option = targetOptions.value.find(item => item.siteId === target.siteId && item.groupName === target.groupName)
-  return option ?? {
+  const detail = option ?? {
     ...target,
     siteName: target.siteId,
     platform: '',
@@ -187,7 +224,89 @@ const selectedTargetDetails = computed(() => selectedTargets.value.map(target =>
     multiplierMode: undefined,
     stale: true,
   }
+  const rechargeRate = siteById.value.get(target.siteId)?.rechargeRate
+  const effectiveCostMultiplier = detail.stale
+    ? null
+    : calculateEffectiveCostMultiplier(detail.multiplier, rechargeRate)
+  return {
+    ...detail,
+    effectiveCostMultiplier,
+    profitMargin: calculateProfitMargin(selectedRow.value?.ownGroupInfo?.multiplier, effectiveCostMultiplier),
+  }
 }))
+
+const profitMarginRange = computed(() => {
+  const margins = selectedTargetDetails.value
+    .map(target => target.profitMargin)
+    .filter((margin): margin is number => margin != null && Number.isFinite(margin))
+  if (margins.length === 0) return null
+  return {
+    minimum: Math.min(...margins),
+    maximum: Math.max(...margins),
+  }
+})
+
+const parseNumericInput = (input: string | number): number | null => {
+  const normalized = String(input).trim()
+  if (!normalized) return null
+  const value = Number(normalized)
+  return Number.isFinite(value) ? value : null
+}
+
+const simulatedRevenue = computed(() => {
+  const value = parseNumericInput(simulatedRevenueInput.value)
+  return value != null && value >= 0 ? value : null
+})
+
+const customUpstreamMultiplier = computed(() => {
+  const value = parseNumericInput(customUpstreamMultiplierInput.value)
+  return value != null && value >= 0 ? value : null
+})
+
+const customSaleMultiplier = computed(() => {
+  const value = parseNumericInput(customSaleMultiplierInput.value)
+  return value != null && value > 0 ? value : null
+})
+
+const hasCustomUpstreamMultiplierInput = computed(() => String(customUpstreamMultiplierInput.value).trim().length > 0)
+const hasCustomSaleMultiplierInput = computed(() => String(customSaleMultiplierInput.value).trim().length > 0)
+
+const customProfitSimulation = computed(() => {
+  const revenue = simulatedRevenue.value
+  const margin = calculateProfitMargin(customSaleMultiplier.value, customUpstreamMultiplier.value)
+  if (revenue == null || margin == null) return null
+  const estimatedProfit = revenue * margin
+  return {
+    margin,
+    estimatedCost: revenue - estimatedProfit,
+    estimatedProfit,
+  }
+})
+
+const profitSimulationRows = computed(() => selectedTargetDetails.value.map(target => {
+  const revenue = simulatedRevenue.value
+  const margin = target.profitMargin
+  if (revenue == null || margin == null || !Number.isFinite(margin)) {
+    return { ...target, estimatedCost: null, estimatedProfit: null }
+  }
+  const estimatedProfit = revenue * margin
+  return {
+    ...target,
+    estimatedCost: revenue - estimatedProfit,
+    estimatedProfit,
+  }
+}))
+
+const simulatedProfitRange = computed(() => {
+  const profits = profitSimulationRows.value
+    .map(target => target.estimatedProfit)
+    .filter((profit): profit is number => profit != null && Number.isFinite(profit))
+  if (profits.length === 0) return null
+  return {
+    minimum: Math.min(...profits),
+    maximum: Math.max(...profits),
+  }
+})
 
 const autoPricingStatus = computed<'notConfigured' | 'enabled' | 'savedDisabled'>(() => {
   const mapping = selectedMapping.value
@@ -203,6 +322,69 @@ const formatMultiplier = (value: number | null | undefined): string => {
 const formatTargetMultiplier = (target: MySiteUpstreamTargetOption): string => {
   if (target.multiplierMode === 'auto') return t('admin.groupAssociations.targetsDrawer.autoMultiplier')
   return formatMultiplier(target.multiplier)
+}
+
+const profitMarginFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+  style: 'percent',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+}))
+
+const currencyFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+  style: 'currency',
+  currency: 'CNY',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+}))
+
+const formatProfitMargin = (value: number | null | undefined): string => {
+  if (value == null || !Number.isFinite(value)) return t('admin.groupAssociations.common.placeholder')
+  return profitMarginFormatter.value.format(value)
+}
+
+const formatProfitMarginRange = (): string => {
+  const range = profitMarginRange.value
+  if (!range) return t('admin.groupAssociations.common.placeholder')
+  if (Math.abs(range.maximum - range.minimum) < 0.00005) return formatProfitMargin(range.minimum)
+  return t('admin.groupAssociations.metrics.marginRange', {
+    minimum: formatProfitMargin(range.minimum),
+    maximum: formatProfitMargin(range.maximum),
+  })
+}
+
+const profitMarginClass = (value: number | null | undefined): string => {
+  if (value == null || !Number.isFinite(value)) return 'text-muted-foreground'
+  if (value < 0) return 'text-destructive'
+  if (value === 0) return 'text-warning'
+  return 'text-emerald-600 dark:text-emerald-400'
+}
+
+const formatCurrency = (value: number | null | undefined): string => {
+  if (value == null || !Number.isFinite(value)) return t('admin.groupAssociations.common.placeholder')
+  return currencyFormatter.value.format(value)
+}
+
+const formatSimulatedProfitRange = (): string => {
+  const range = simulatedProfitRange.value
+  if (!range) return t('admin.groupAssociations.common.placeholder')
+  if (Math.abs(range.maximum - range.minimum) < 0.005) return formatCurrency(range.minimum)
+  return t('admin.groupAssociations.profitCalculator.amountRange', {
+    minimum: formatCurrency(range.minimum),
+    maximum: formatCurrency(range.maximum),
+  })
+}
+
+const closeProfitCalculator = () => {
+  profitCalculatorOpen.value = false
+}
+
+const openProfitCalculator = (mode: ProfitCalculatorMode) => {
+  profitCalculatorMode.value = mode
+  profitCalculatorOpen.value = true
+}
+
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && profitCalculatorOpen.value) closeProfitCalculator()
 }
 
 const formatRunTime = (value: string | undefined): string => {
@@ -346,8 +528,14 @@ const loadData = async () => {
   }
 }
 
-onMounted(() => { void loadData() })
-onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
+onMounted(() => {
+  void loadData()
+  window.addEventListener('keydown', handleWindowKeydown)
+})
+onBeforeUnmount(() => {
+  if (savedTimer) clearTimeout(savedTimer)
+  window.removeEventListener('keydown', handleWindowKeydown)
+})
 </script>
 
 <template>
@@ -362,16 +550,27 @@ onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
           {{ t('admin.groupAssociations.subtitle', { count: counts.all, associated: counts.associated, unassociated: counts.unassociated }) }}
         </p>
       </div>
-      <button
-        type="button"
-        class="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
-        :disabled="loading"
-        @click="loadData"
-      >
-        <Loader2 v-if="loading" class="h-4 w-4 animate-spin" />
-        <RefreshCw v-else class="h-4 w-4" />
-        {{ t('admin.groupAssociations.actions.refresh') }}
-      </button>
+      <div class="flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          class="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-haspopup="dialog"
+          @click="openProfitCalculator('custom')"
+        >
+          <Calculator class="h-4 w-4" />
+          {{ t('admin.groupAssociations.actions.customProfitCalculator') }}
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+          :disabled="loading"
+          @click="loadData"
+        >
+          <Loader2 v-if="loading" class="h-4 w-4 animate-spin" />
+          <RefreshCw v-else class="h-4 w-4" />
+          {{ t('admin.groupAssociations.actions.refresh') }}
+        </button>
+      </div>
     </header>
 
     <div v-if="error" class="flex items-center justify-between gap-4 border-b border-warning/25 bg-warning/10 px-5 py-3 text-sm text-warning">
@@ -506,7 +705,7 @@ onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
             </button>
           </header>
 
-          <dl class="grid border-b border-border/50 sm:grid-cols-3">
+          <dl class="grid border-b border-border/50 sm:grid-cols-4">
             <div class="border-b border-border/50 px-5 py-4 sm:border-b-0 sm:border-r">
               <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.metrics.ownMultiplier') }}</dt>
               <dd class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatMultiplier(selectedRow.ownGroupInfo?.multiplier) }}</dd>
@@ -514,6 +713,22 @@ onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
             <div class="border-b border-border/50 px-5 py-4 sm:border-b-0 sm:border-r">
               <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.metrics.targets') }}</dt>
               <dd class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ selectedTargets.length }}</dd>
+            </div>
+            <div class="border-b border-border/50 px-5 py-4 sm:border-b-0 sm:border-r">
+              <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.metrics.budgetMargin') }}</dt>
+              <dd class="mt-1">
+                <button
+                  type="button"
+                  class="group inline-flex max-w-full items-center gap-1.5 text-left text-lg font-semibold tabular-nums transition-colors hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  :class="profitMarginClass(profitMarginRange?.minimum)"
+                  :aria-label="t('admin.groupAssociations.actions.openProfitCalculator')"
+                  aria-haspopup="dialog"
+                  @click="openProfitCalculator('group')"
+                >
+                  <span class="truncate">{{ formatProfitMarginRange() }}</span>
+                  <Calculator class="h-4 w-4 shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
+                </button>
+              </dd>
             </div>
             <div class="px-5 py-4">
               <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.metrics.autoPricing') }}</dt>
@@ -556,9 +771,21 @@ onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
                       <span v-if="target.platform" class="rounded bg-surface-elevated px-1.5 py-0.5">{{ target.platform }}</span>
                     </div>
                   </div>
-                  <div class="shrink-0 text-left sm:text-right">
-                    <div class="text-sm font-semibold tabular-nums text-foreground">{{ formatTargetMultiplier(target) }}</div>
-                    <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.metrics.effectiveUpstream') }}</div>
+                  <div class="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 text-left sm:grid-cols-3 sm:text-right">
+                    <div>
+                      <div class="text-sm font-semibold tabular-nums text-foreground">{{ formatTargetMultiplier(target) }}</div>
+                      <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.metrics.effectiveUpstream') }}</div>
+                    </div>
+                    <div>
+                      <div class="text-sm font-semibold tabular-nums text-foreground">{{ formatMultiplier(target.effectiveCostMultiplier) }}</div>
+                      <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.metrics.effectiveCost') }}</div>
+                    </div>
+                    <div>
+                      <div class="text-sm font-semibold tabular-nums" :class="profitMarginClass(target.profitMargin)">
+                        {{ formatProfitMargin(target.profitMargin) }}
+                      </div>
+                      <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.metrics.budgetMargin') }}</div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -634,6 +861,247 @@ onBeforeUnmount(() => { if (savedTimer) clearTimeout(savedTimer) })
       @close="pricingDrawerOpen = false"
       @save="savePricing"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="profitCalculatorOpen"
+        class="fixed inset-0 z-[180] flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm"
+        @click.self="closeProfitCalculator"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="profit-calculator-title"
+          class="flex max-h-[min(44rem,calc(100dvh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border/60 bg-card text-card-foreground shadow-xl"
+        >
+          <header class="flex items-start justify-between gap-4 border-b border-border/60 px-5 py-4">
+            <div class="flex min-w-0 items-start gap-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Calculator class="h-4 w-4" />
+              </span>
+              <div class="min-w-0">
+                <h2 id="profit-calculator-title" class="truncate text-base font-semibold text-foreground">
+                  {{ profitCalculatorMode === 'custom'
+                    ? t('admin.groupAssociations.profitCalculator.customTitle')
+                    : t('admin.groupAssociations.profitCalculator.titleWithGroup', { group: selectedRow?.ownGroup ?? '' }) }}
+                </h2>
+              </div>
+            </div>
+            <button
+              type="button"
+              class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :aria-label="t('admin.groupAssociations.profitCalculator.close')"
+              :title="t('admin.groupAssociations.profitCalculator.close')"
+              @click="closeProfitCalculator"
+            >
+              <X class="h-4 w-4" />
+            </button>
+          </header>
+
+          <div class="border-b border-border/60 px-5 py-3">
+            <div class="grid grid-cols-2 gap-1 rounded-lg bg-surface p-1" role="tablist" :aria-label="t('admin.groupAssociations.profitCalculator.modeLabel')">
+              <button
+                type="button"
+                role="tab"
+                class="rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50"
+                :class="profitCalculatorMode === 'group' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                :aria-selected="profitCalculatorMode === 'group'"
+                :disabled="!selectedRow"
+                @click="profitCalculatorMode = 'group'"
+              >
+                {{ t('admin.groupAssociations.profitCalculator.groupMode') }}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                class="rounded-md px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                :class="profitCalculatorMode === 'custom' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                :aria-selected="profitCalculatorMode === 'custom'"
+                @click="profitCalculatorMode = 'custom'"
+              >
+                {{ t('admin.groupAssociations.profitCalculator.customMode') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="overflow-y-auto">
+            <template v-if="profitCalculatorMode === 'group' && selectedRow">
+            <section class="border-b border-border/60 px-5 py-5">
+              <label for="simulated-revenue" class="text-xs font-medium text-muted-foreground">
+                {{ t('admin.groupAssociations.profitCalculator.revenueLabel') }}
+              </label>
+              <div class="relative mt-2 max-w-sm">
+                <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">¥</span>
+                <input
+                  id="simulated-revenue"
+                  v-model="simulatedRevenueInput"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputmode="decimal"
+                  :placeholder="t('admin.groupAssociations.profitCalculator.revenuePlaceholder')"
+                  class="h-11 w-full rounded-lg border bg-background pl-8 pr-3 text-base font-semibold tabular-nums text-foreground outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground focus-visible:ring-2"
+                  :class="simulatedRevenue == null ? 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20' : 'border-border/60 focus-visible:border-primary focus-visible:ring-primary/25'"
+                >
+              </div>
+              <p v-if="simulatedRevenue == null" class="mt-2 text-xs text-destructive">
+                {{ t('admin.groupAssociations.profitCalculator.invalidRevenue') }}
+              </p>
+            </section>
+
+            <dl class="grid border-b border-border/60 sm:grid-cols-2">
+              <div class="border-b border-border/60 px-5 py-4 sm:border-b-0 sm:border-r">
+                <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.ownMultiplier') }}</dt>
+                <dd class="mt-1 text-lg font-semibold tabular-nums text-foreground">{{ formatMultiplier(selectedRow.ownGroupInfo?.multiplier) }}</dd>
+              </div>
+              <div class="px-5 py-4">
+                <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.profitRange') }}</dt>
+                <dd class="mt-1 text-lg font-semibold tabular-nums" :class="profitMarginClass(simulatedProfitRange?.minimum)">
+                  {{ formatSimulatedProfitRange() }}
+                </dd>
+              </div>
+            </dl>
+
+            <section class="px-5 py-5">
+              <div v-if="profitSimulationRows.length === 0" class="flex min-h-36 flex-col items-center justify-center border-y border-dashed border-border/70 px-5 text-center">
+                <Calculator class="h-6 w-6 text-muted-foreground/45" />
+                <p class="mt-2 text-sm font-medium text-foreground">{{ t('admin.groupAssociations.profitCalculator.noTargetsTitle') }}</p>
+                <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.noTargetsDescription') }}</p>
+              </div>
+
+              <div v-else class="divide-y divide-border/50 border-y border-border/60">
+                <div
+                  v-for="target in profitSimulationRows"
+                  :key="targetKey(target.siteId, target.groupName)"
+                  class="grid grid-cols-2 gap-x-4 gap-y-3 py-4 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(7rem,auto))] sm:items-center"
+                >
+                  <div class="col-span-2 min-w-0 sm:col-span-1">
+                    <div class="truncate text-sm font-medium text-foreground">{{ target.groupName }}</div>
+                    <div class="mt-1 truncate text-xs text-muted-foreground">{{ target.siteName }}</div>
+                  </div>
+                  <div>
+                    <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.estimatedCost') }}</div>
+                    <div class="mt-1 text-sm font-semibold tabular-nums text-foreground">{{ formatCurrency(target.estimatedCost) }}</div>
+                  </div>
+                  <div>
+                    <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.metrics.budgetMargin') }}</div>
+                    <div class="mt-1 text-sm font-semibold tabular-nums" :class="profitMarginClass(target.profitMargin)">
+                      {{ formatProfitMargin(target.profitMargin) }}
+                    </div>
+                  </div>
+                  <div class="col-span-2 sm:col-span-1 sm:text-right">
+                    <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.estimatedProfit') }}</div>
+                    <div class="mt-1 text-base font-semibold tabular-nums" :class="profitMarginClass(target.estimatedProfit)">
+                      {{ formatCurrency(target.estimatedProfit) }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+            </template>
+
+            <template v-else>
+              <section class="border-b border-border/60 px-5 py-5">
+                <div class="grid gap-4 md:grid-cols-3">
+                  <div>
+                    <label for="custom-simulated-revenue" class="text-xs font-medium text-muted-foreground">
+                      {{ t('admin.groupAssociations.profitCalculator.revenueLabel') }}
+                    </label>
+                    <div class="relative mt-2">
+                      <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">¥</span>
+                      <input
+                        id="custom-simulated-revenue"
+                        v-model="simulatedRevenueInput"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputmode="decimal"
+                        :placeholder="t('admin.groupAssociations.profitCalculator.revenuePlaceholder')"
+                        :aria-invalid="simulatedRevenue == null"
+                        class="h-11 w-full rounded-lg border bg-background pl-8 pr-3 text-base font-semibold tabular-nums text-foreground outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground focus-visible:ring-2"
+                        :class="simulatedRevenue == null ? 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20' : 'border-border/60 focus-visible:border-primary focus-visible:ring-primary/25'"
+                      >
+                    </div>
+                    <p v-if="simulatedRevenue == null" class="mt-2 text-xs text-destructive">
+                      {{ t('admin.groupAssociations.profitCalculator.invalidRevenue') }}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label for="custom-upstream-multiplier" class="text-xs font-medium text-muted-foreground">
+                      {{ t('admin.groupAssociations.profitCalculator.upstreamCostMultiplier') }}
+                    </label>
+                    <div class="relative mt-2">
+                      <input
+                        id="custom-upstream-multiplier"
+                        v-model="customUpstreamMultiplierInput"
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        inputmode="decimal"
+                        :placeholder="t('admin.groupAssociations.profitCalculator.multiplierPlaceholder')"
+                        :aria-invalid="hasCustomUpstreamMultiplierInput && customUpstreamMultiplier == null"
+                        class="h-11 w-full rounded-lg border bg-background pl-3 pr-8 text-base font-semibold tabular-nums text-foreground outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground focus-visible:ring-2"
+                        :class="hasCustomUpstreamMultiplierInput && customUpstreamMultiplier == null ? 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20' : 'border-border/60 focus-visible:border-primary focus-visible:ring-primary/25'"
+                      >
+                      <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">x</span>
+                    </div>
+                    <p v-if="hasCustomUpstreamMultiplierInput && customUpstreamMultiplier == null" class="mt-2 text-xs text-destructive">
+                      {{ t('admin.groupAssociations.profitCalculator.invalidUpstreamMultiplier') }}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label for="custom-sale-multiplier" class="text-xs font-medium text-muted-foreground">
+                      {{ t('admin.groupAssociations.profitCalculator.saleMultiplier') }}
+                    </label>
+                    <div class="relative mt-2">
+                      <input
+                        id="custom-sale-multiplier"
+                        v-model="customSaleMultiplierInput"
+                        type="number"
+                        min="0.0001"
+                        step="0.0001"
+                        inputmode="decimal"
+                        :placeholder="t('admin.groupAssociations.profitCalculator.multiplierPlaceholder')"
+                        :aria-invalid="hasCustomSaleMultiplierInput && customSaleMultiplier == null"
+                        class="h-11 w-full rounded-lg border bg-background pl-3 pr-8 text-base font-semibold tabular-nums text-foreground outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground focus-visible:ring-2"
+                        :class="hasCustomSaleMultiplierInput && customSaleMultiplier == null ? 'border-destructive focus-visible:border-destructive focus-visible:ring-destructive/20' : 'border-border/60 focus-visible:border-primary focus-visible:ring-primary/25'"
+                      >
+                      <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">x</span>
+                    </div>
+                    <p v-if="hasCustomSaleMultiplierInput && customSaleMultiplier == null" class="mt-2 text-xs text-destructive">
+                      {{ t('admin.groupAssociations.profitCalculator.invalidSaleMultiplier') }}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <dl class="grid sm:grid-cols-3" aria-live="polite">
+                <div class="border-b border-border/60 px-5 py-5 sm:border-b-0 sm:border-r">
+                  <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.estimatedCost') }}</dt>
+                  <dd class="mt-1 text-lg font-semibold tabular-nums text-foreground">
+                    {{ formatCurrency(customProfitSimulation?.estimatedCost) }}
+                  </dd>
+                </div>
+                <div class="border-b border-border/60 px-5 py-5 sm:border-b-0 sm:border-r">
+                  <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.profitMargin') }}</dt>
+                  <dd class="mt-1 text-lg font-semibold tabular-nums" :class="profitMarginClass(customProfitSimulation?.margin)">
+                    {{ formatProfitMargin(customProfitSimulation?.margin) }}
+                  </dd>
+                </div>
+                <div class="px-5 py-5">
+                  <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.groupAssociations.profitCalculator.estimatedProfit') }}</dt>
+                  <dd class="mt-1 text-lg font-semibold tabular-nums" :class="profitMarginClass(customProfitSimulation?.estimatedProfit)">
+                    {{ formatCurrency(customProfitSimulation?.estimatedProfit) }}
+                  </dd>
+                </div>
+              </dl>
+            </template>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="cleanupDialogOpen && selectedRow" class="fixed inset-0 z-[170] flex items-center justify-center bg-background/75 p-4 backdrop-blur-sm">

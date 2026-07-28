@@ -22,8 +22,8 @@ type priorityTargetInventory struct {
 	currentPriority int
 }
 
-// syncMultiplierPriorities 在每轮探活前同步「健康优先、倍率次之」的上游优先级。它故意与探活
-// job 生成分开：某个目标暂时没有到探活时间，也仍应跟随倍率/健康状态调整调度顺序。
+// syncMultiplierPriorities 在每轮探活前同步上游优先级。普通倍率策略仍然「健康优先、倍率次之」，
+// 仅倍率策略则完全忽略探活状态。它故意与 job 生成分开，确保未到探活时间的目标也能更新顺序。
 func (s *Service) syncMultiplierPriorities(
 	ctx context.Context,
 	policies []Policy,
@@ -195,11 +195,13 @@ func (s *Service) syncWorkspacePriorities(
 	for targetID, item := range managed {
 		multiplier := item.multipliers[0]
 		activeModels := make(map[string]struct{})
-		for _, spec := range candidateModelSpecs(item.target.Models, item.policies) {
-			// 关闭自动降级后模型状态不会继续推进，因此不能让历史 suspended/degraded
-			// 状态永久影响倍率排序。倍率本身继续生效，但健康层级回到未配置档。
-			if spec.policy.AutoDegradeEnabled {
-				activeModels[spec.modelName] = struct{}{}
+		if !hasMultiplierOnlyPolicy(item.policies) {
+			for _, spec := range candidateModelSpecs(item.target.Models, item.policies) {
+				// 关闭自动降级后模型状态不会继续推进，因此不能让历史 suspended/degraded
+				// 状态永久影响倍率排序。倍率本身继续生效，但健康层级回到未配置档。
+				if spec.policy.AutoDegradeEnabled {
+					activeModels[spec.modelName] = struct{}{}
+				}
 			}
 		}
 		activeStates := make([]ConnectionHealthState, 0, len(activeModels))
@@ -361,6 +363,17 @@ func mapManagedPriorityToPlatform(platform upstream.Platform, score int) int {
 func hasMultiplierPriorityPolicy(policies []Policy) bool {
 	for _, policy := range policies {
 		if policy.Enabled && normalizePriorityMode(policy.PriorityMode) == PriorityModeMultiplier {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMultiplierOnlyPolicy 让明确的仅倍率策略成为同一目标的优先级依据。即使目标还叠加了
+// 一条负责记录健康状态的探活策略，健康状态也不会重新参与 priority 排名。
+func hasMultiplierOnlyPolicy(policies []Policy) bool {
+	for _, policy := range policies {
+		if policy.Enabled && normalizeStrategyMode(policy.StrategyMode) == StrategyModeMultiplierOnly {
 			return true
 		}
 	}
