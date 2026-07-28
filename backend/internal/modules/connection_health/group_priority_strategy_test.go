@@ -172,6 +172,28 @@ func TestSetAdminGroupPolicyConfiguration_QuickPolicyCreatesAndBindsTogether(t *
 	}
 }
 
+func TestSetAdminGroupPolicyConfiguration_MultiplierPolicyRequiresGroupMultiplier(t *testing.T) {
+	repo := newFakeRepository()
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: nil}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Name: "channel"}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+	_, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
+		QuickPolicy: &PolicyInput{
+			Name: "price only", Enabled: true, StrategyMode: StrategyModeMultiplierOnly,
+		},
+	})
+	if err == nil || err.Error() != ErrorMultiplierRequired {
+		t.Fatalf("missing group multiplier must reject multiplier policy, got %v", err)
+	}
+	if len(repo.policies) != 0 {
+		t.Fatalf("rejected multiplier policy must not be persisted: %+v", repo.policies)
+	}
+}
+
 func TestSetAdminGroupPolicyConfiguration_ReclaimsOnlyConflictedPriorities(t *testing.T) {
 	repo := newFakeRepository()
 	repo.policies = []Policy{probePolicy()}
@@ -406,6 +428,40 @@ func TestMultiplierPrioritySync_DoesNotRestoreWhenInventoryIsIncomplete(t *testi
 	}
 }
 
+func TestMultiplierPrioritySync_MissingMultiplierDoesNotWriteOrRestore(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	currentPriority := 40999
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: nil}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Name: "channel", Priority: &currentPriority}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
+		platformGroups: reader, priorityActions: priorityActions,
+	}
+	policy := Policy{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+	stored := PrioritySyncState{
+		UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100",
+		OriginalPriority: 7, LastAppliedPriority: currentPriority, EffectiveMultiplier: 0.4,
+	}
+	repo.priorityStates["user1|ws1|"+stored.TargetID] = stored
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, []PrioritySyncState{stored})
+	if len(priorityActions.calls) != 0 {
+		t.Fatalf("missing multiplier must not write or restore priority: %+v", priorityActions.calls)
+	}
+	if got, exists := repo.priorityStates["user1|ws1|"+stored.TargetID]; !exists || got.LastAppliedPriority != currentPriority {
+		t.Fatalf("missing multiplier must retain the existing sync checkpoint: %+v", got)
+	}
+}
+
 func TestMultiplierPrioritySync_MissingConflictedTargetIsNotOverwritten(t *testing.T) {
 	repo := newFakeRepository()
 	priorityActions := &fakeTargetPriorityActioner{}
@@ -534,6 +590,35 @@ func TestDesiredManagedPriority_UsesPlatformPriorityDirection(t *testing.T) {
 	sub2APIExpensive := desiredManagedPriorityForPlatform(upstream.PlatformSub2API, healthy, 1)
 	if sub2APICheap >= sub2APIExpensive {
 		t.Fatalf("Sub2API must use a smaller priority for the lower multiplier: cheap=%d expensive=%d", sub2APICheap, sub2APIExpensive)
+	}
+}
+
+func TestDesiredManagedPriority_Sub2APIUsesCompactStateBands(t *testing.T) {
+	tests := []struct {
+		name           string
+		states         []ConnectionHealthState
+		rank           int
+		expectedModels int
+		want           int
+	}{
+		{name: "multiplier only best", rank: 0, expectedModels: 0, want: 1},
+		{name: "multiplier only second", rank: 1, expectedModels: 0, want: 2},
+		{name: "healthy third", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 2, expectedModels: 1, want: 3},
+		{name: "recovering", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 0, expectedModels: 1, want: 10},
+		{name: "degraded", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 0, expectedModels: 1, want: 100},
+		{name: "observing second", states: []ConnectionHealthState{{State: StateObserving}}, rank: 1, expectedModels: 1, want: 101},
+		{name: "missing model", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 0, expectedModels: 2, want: 1000},
+		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10000},
+		{name: "disabled outranks missing", states: []ConnectionHealthState{{State: StateDisabled}}, rank: 0, expectedModels: 2, want: 10000},
+		{name: "healthy rank stays in band", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 9},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := desiredManagedPriorityForPlatformWithExpected(upstream.PlatformSub2API, tt.states, tt.rank, tt.expectedModels)
+			if got != tt.want {
+				t.Fatalf("unexpected Sub2API priority: got %d want %d", got, tt.want)
+			}
+		})
 	}
 }
 

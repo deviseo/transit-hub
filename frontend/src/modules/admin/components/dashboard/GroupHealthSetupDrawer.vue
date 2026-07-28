@@ -207,6 +207,13 @@ const effectivePriorityMode = computed<ConnectionHealthPriorityMode>(() =>
   mode.value === 'multiplier' || mode.value === 'multiplierOnly' ? 'multiplier' : 'none',
 )
 const selectedExistingPolicies = computed(() => props.policies.filter((policy) => selectedPolicyIds.value.has(policy.id)))
+const hasGroupMultiplier = computed(() => typeof props.group?.multiplier === 'number' && Number.isFinite(props.group.multiplier))
+const requiresGroupMultiplier = computed(() => {
+  if (mode.value === 'multiplier' || mode.value === 'multiplierOnly') return true
+  if (mode.value !== 'existing') return false
+  return selectedExistingPolicies.value.some((policy) => policy.enabled && policy.priorityMode === 'multiplier')
+})
+const multiplierMissing = computed(() => requiresGroupMultiplier.value && !hasGroupMultiplier.value)
 
 const toggleTarget = (targetId: string) => {
   const next = new Set(selectedTargetIds.value)
@@ -225,6 +232,7 @@ const togglePolicy = (policyId: string) => {
 const canContinue = computed(() => {
   if (phase.value !== 'ready') return false
   if (step.value === 1) return selectedCount.value > 0
+  if (step.value === 2 && multiplierMissing.value) return false
   if (step.value === 2 && mode.value === 'existing') return selectedPolicyIds.value.size > 0
   if (step.value === 2 && mode.value === 'multiplierOnly') return true
   if (step.value === 2) return models.value.length > 0
@@ -330,6 +338,10 @@ const bindLegacyQuickPolicy = async (
 const save = async () => {
   const group = props.group
   if (!group || phase.value === 'saving') return
+  if (multiplierMissing.value) {
+    errorKey.value = 'admin.connectionHealth.errors.multiplierRequired'
+    return
+  }
   phase.value = 'saving'
   errorKey.value = ''
   const policyIds = mode.value === 'existing' ? Array.from(selectedPolicyIds.value) : []
@@ -519,6 +531,11 @@ const close = () => {
                       <span class="mt-1 block text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.strategy.options.existing.description`) }}</span>
                     </span>
                   </button>
+                </div>
+
+                <div v-if="multiplierMissing" class="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-4 py-3">
+                  <p class="text-sm font-medium text-amber-700 dark:text-amber-400">{{ t(`${prefix}.strategy.multiplierMissingTitle`) }}</p>
+                  <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.strategy.multiplierMissingHelp`) }}</p>
                 </div>
 
                 <div v-if="mode === 'existing'" class="space-y-2 rounded-lg border border-border/60 p-3">

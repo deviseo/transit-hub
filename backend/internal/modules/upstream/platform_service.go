@@ -2186,8 +2186,8 @@ func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, chann
 }
 
 // UpdateAdminTargetPriority 按当前 admin session 平台更新账号/渠道调度优先级。该入口供
-// connection_health 的倍率排序策略使用，平台差异和安全的 GET+PUT merge 都封装在 upstream
-// 模块内部，避免健康模块了解各上游请求体细节。
+// connection_health 的倍率排序策略使用，平台差异和各自安全的更新语义都封装在 upstream
+// 模块内部，避免健康模块了解上游请求体细节。
 func (s *PlatformService) UpdateAdminTargetPriority(session Session, targetID string, priority int) error {
 	switch session.Platform {
 	case PlatformNewAPI:
@@ -2235,90 +2235,53 @@ func (s *PlatformService) updateNewAPIChannelPriority(session Session, channelID
 }
 
 func (s *PlatformService) updateSub2APIAdminAccountPriority(session Session, accountID string, priority int) error {
-	if session.Platform != PlatformSub2API || !session.IsAuthenticated() || strings.TrimSpace(accountID) == "" {
-		return newRequestError(ErrorAuth, PlatformSub2API)
-	}
-	accountURL := session.BaseURL + "/api/v1/admin/accounts/" + url.PathEscape(accountID)
-	response, err := s.httpClient.requestJSON(accountURL, adminAuthOptions(session))
-	if err != nil {
-		return err
-	}
-	data := dataRecord(response.Payload)
-	if len(data) == 0 {
-		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
-	}
-	payload := map[string]any{"priority": priority}
-	for _, key := range []string{
-		"name", "notes", "type", "credentials", "extra", "proxy_id", "status",
-		"concurrency", "rate_multiplier", "load_factor", "expires_at", "auto_pause_on_expired",
-		"confirm_mixed_channel_risk",
-	} {
-		if value, ok := data[key]; ok {
-			payload[key] = value
-		}
-	}
-	if groupIDs := resolveSub2APIAccountGroupIDsForPayload(data); len(groupIDs) > 0 {
-		payload["group_ids"] = groupIDs
-	}
-	options := adminAuthOptions(session)
-	options.Method = http.MethodPut
-	options.Body = payload
-	_, err = s.httpClient.requestJSON(accountURL, options)
-	return err
+	return s.bulkUpdateSub2APIAdminAccount(session, accountID, sub2APIAdminAccountBulkUpdate{
+		Priority: &priority,
+	})
 }
 
-// UpdateSub2APIAdminAccountStatus 通过 GET+PUT /api/v1/admin/accounts/:id 更新 sub2api 转发账号的
-// 启用状态（"active"/"inactive"），供 connection_health 模块的自动降级/恢复动作使用。
-// 采用与 UpdateNewAPIChannelWeightStatus / updateSub2APIAdminGroupMultiplier 一致的 GET+PUT-merge
-// 手法：先 GET 账号详情复制原始字段，仅替换 status 后整体 PUT 回去，避免覆盖 credentials/
-// group_ids/priority/concurrency/rate_multiplier/load_factor 等字段（PUT-merge 而不是直接发送
-// {"status": "..."}，因为尚未确认 sub2api UpdateAccountRequest 支持 partial patch 语义）。
-// 若 GET 失败（接口不存在、权限不足或账号已被删除），直接把错误透传给调用方，调用方应记录为
-// remote_action=unsupported 并停止后续动作，不做任何猜测性的 PUT 请求。
-// 明文 credentials 只是原样透传（从 GET 响应直接搬到 PUT 请求体），本方法不解析、不记录其内容。
-func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accountID string, status string) error {
+// sub2APIAdminAccountBulkUpdate 对应 Sub2API 的账号批量局部更新请求。指针字段配合
+// omitempty 保证请求体只包含本次明确要修改的字段，不会把详情接口缺失的 rate_multiplier、
+// credentials、group_ids 等字段用零值覆盖。
+type sub2APIAdminAccountBulkUpdate struct {
+	AccountIDs []int64 `json:"account_ids"`
+	Priority   *int    `json:"priority,omitempty"`
+	Status     *string `json:"status,omitempty"`
+}
+
+// bulkUpdateSub2APIAdminAccount 只调用 Sub2API 的字段级批量更新接口。旧版或第三方分支若以
+// 404/405/501 表示没有该能力，则转换为明确的升级错误；其它状态继续保留原始请求错误。
+// 这里禁止回退到整对象 PUT，因为详情缺字段时整对象回写可能把倍率等用户配置覆盖成默认值。
+func (s *PlatformService) bulkUpdateSub2APIAdminAccount(session Session, accountID string, payload sub2APIAdminAccountBulkUpdate) error {
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	if strings.TrimSpace(accountID) == "" {
+	parsedAccountID, err := strconv.ParseInt(strings.TrimSpace(accountID), 10, 64)
+	if err != nil || parsedAccountID <= 0 {
 		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
 	}
-	authOptions := adminAuthOptions(session)
-
-	getURL := session.BaseURL + "/api/v1/admin/accounts/" + url.PathEscape(accountID)
-	response, err := s.httpClient.requestJSON(getURL, authOptions)
-	if err != nil {
-		return err
-	}
-	data := dataRecord(response.Payload)
-	if len(data) == 0 {
-		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
-	}
-
-	payload := map[string]any{
-		"status": status,
-	}
-	for _, key := range []string{
-		"name", "notes", "type", "credentials", "extra", "proxy_id",
-		"concurrency", "priority", "rate_multiplier", "load_factor",
-		"expires_at", "auto_pause_on_expired", "confirm_mixed_channel_risk",
-	} {
-		if v, ok := data[key]; ok {
-			payload[key] = v
+	payload.AccountIDs = []int64{parsedAccountID}
+	options := adminAuthOptions(session)
+	options.Method = http.MethodPost
+	options.Body = payload
+	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/bulk-update", options)
+	if requestErr, ok := err.(*RequestError); ok {
+		switch requestErr.StatusCode {
+		case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+			// 仅这些明确表示 endpoint/HTTP method 不存在的状态才提示升级；401/403/500
+			// 仍按认证或请求失败处理，避免掩盖权限、网络和上游临时故障。
+			return newRequestErrorWithStatus(ErrorSub2APIBulkUpdateUnsupported, PlatformSub2API, requestErr.StatusCode)
 		}
 	}
-	// group_ids 需要单独解析并保留原始元素类型（数字仍是数字）：sub2api 线上已确认 PUT 传
-	// 字符串化的 group_ids（如 ["50"]）会返回 400，必须和 GET 响应的原始类型一致（如 [50]）。
-	// 解析不到任何分组 ID 时完全不带这个字段，避免用空数组覆盖账号已有的分组绑定。
-	if groupIDs := resolveSub2APIAccountGroupIDsForPayload(data); len(groupIDs) > 0 {
-		payload["group_ids"] = groupIDs
-	}
-
-	updateOptions := adminAuthOptions(session)
-	updateOptions.Method = http.MethodPut
-	updateOptions.Body = payload
-	_, err = s.httpClient.requestJSON(getURL, updateOptions)
 	return err
+}
+
+// UpdateSub2APIAdminAccountStatus 通过字段级批量接口更新 sub2api 转发账号的启用状态
+// （"active"/"inactive"），供 connection_health 模块的自动降级/恢复动作使用。
+func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accountID string, status string) error {
+	return s.bulkUpdateSub2APIAdminAccount(session, accountID, sub2APIAdminAccountBulkUpdate{
+		Status: &status,
+	})
 }
 
 // sub2APIUserIDKeys/sub2APIUserCreatedAtKeys/sub2APIUserLastUsedAtKeys/sub2APIBalanceHistoryTimeKeys

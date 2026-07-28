@@ -9,7 +9,7 @@ import (
 )
 
 // TargetPriorityActioner 是倍率排序策略对 upstream 模块的唯一写依赖。真实实现根据 session
-// 平台更新 New API channel 或 Sub2API account 的 priority，并使用 GET+PUT merge 保留其它字段。
+// 平台更新 New API channel 或 Sub2API account 的 priority，并由 upstream 模块保证字段级写入安全。
 type TargetPriorityActioner interface {
 	UpdateAdminTargetPriority(session upstream.Session, targetID string, priority int) error
 }
@@ -167,10 +167,17 @@ func (s *Service) syncWorkspacePriorities(
 	}
 
 	managed := make(map[string]*priorityTargetInventory)
+	missingMultiplier := make(map[string]struct{})
 	distinctMultipliers := make([]float64, 0)
 	seenMultipliers := make(map[float64]struct{})
 	for targetID, item := range inventory {
-		if !hasMultiplierPriorityPolicy(item.policies) || len(item.multipliers) == 0 {
+		if !hasMultiplierPriorityPolicy(item.policies) {
+			continue
+		}
+		if len(item.multipliers) == 0 {
+			// 分组没有返回倍率时进入等待态：既不猜测 1x，也不把已接管目标恢复成旧优先级。
+			// 保留同步快照后，倍率恢复可见时下一轮会从原状态继续安全同步。
+			missingMultiplier[targetID] = struct{}{}
 			continue
 		}
 		multiplier := minFloat(item.multipliers)
@@ -276,6 +283,9 @@ func (s *Service) syncWorkspacePriorities(
 		if _, stillManaged := managed[targetID]; stillManaged {
 			continue
 		}
+		if _, waitingForMultiplier := missingMultiplier[targetID]; waitingForMultiplier {
+			continue
+		}
 		item := inventory[targetID]
 		if item == nil {
 			if !inventoryComplete {
@@ -331,14 +341,19 @@ func (s *Service) syncWorkspacePriorities(
 	}
 }
 
-// desiredManagedPriorityForPlatform 把统一的「分数越高越优先」结果映射到平台真实语义：
-// NewAPI 选择更大的 priority，Sub2API 调度器则选择更小的 priority。
+// desiredManagedPriorityForPlatform 按平台真实语义计算优先级：NewAPI 沿用「分数越高越优先」；
+// Sub2API 使用紧凑的小数值状态分段，数值越小越优先。
 func desiredManagedPriorityForPlatform(platform upstream.Platform, states []ConnectionHealthState, multiplierRank int) int {
-	score := desiredManagedPriority(states, multiplierRank)
-	return mapManagedPriorityToPlatform(platform, score)
+	if platform == upstream.PlatformSub2API {
+		return desiredSub2APIManagedPriority(states, multiplierRank, len(states))
+	}
+	return desiredManagedPriority(states, multiplierRank)
 }
 
 func desiredManagedPriorityForPlatformWithExpected(platform upstream.Platform, states []ConnectionHealthState, multiplierRank int, expectedModels int) int {
+	if platform == upstream.PlatformSub2API {
+		return desiredSub2APIManagedPriority(states, multiplierRank, expectedModels)
+	}
 	score := desiredManagedPriority(states, multiplierRank)
 	if len(states) < expectedModels && score != 1 {
 		// Missing model states are unconfigured, not healthy. A known suspended/disabled
@@ -346,18 +361,40 @@ func desiredManagedPriorityForPlatformWithExpected(platform upstream.Platform, s
 		priceScore := maxInt(0, 999-multiplierRank)
 		score = 10000 + priceScore
 	}
-	return mapManagedPriorityToPlatform(platform, score)
+	return score
 }
 
-func mapManagedPriorityToPlatform(platform upstream.Platform, score int) int {
-	if platform == upstream.PlatformSub2API {
-		priority := 50000 - score
-		if priority < 1 {
-			return 1
+// desiredSub2APIManagedPriority 使用 Sub2API「数值越小越优先」的原生语义，并为不同健康
+// 状态预留互不重叠的区间：健康 1-9、恢复中 10-99、降级/观察 100-999、待配置
+// 1000-9999、暂停/禁用 10000。同一状态内 multiplierRank 越小，priority 越小。
+// rank 超出区间容量时在区间末尾并列，避免价格排序跨越健康状态边界。
+func desiredSub2APIManagedPriority(states []ConnectionHealthState, multiplierRank int, expectedModels int) int {
+	for _, state := range states {
+		if state.State == StateDisabled || state.State == StateSuspended {
+			return 10000
 		}
-		return priority
 	}
-	return score
+	if len(states) < expectedModels {
+		return sub2APIPriorityWithinBand(1000, 10000, multiplierRank)
+	}
+
+	base, nextBase := 1, 10
+	for _, state := range states {
+		switch state.State {
+		case StateDegraded, StateObserving:
+			base, nextBase = 100, 1000
+		case StateRecovering:
+			if base < 10 {
+				base, nextBase = 10, 100
+			}
+		}
+	}
+	return sub2APIPriorityWithinBand(base, nextBase, multiplierRank)
+}
+
+func sub2APIPriorityWithinBand(base int, nextBase int, multiplierRank int) int {
+	offset := maxInt(0, multiplierRank)
+	return base + minInt(offset, nextBase-base-1)
 }
 
 func hasMultiplierPriorityPolicy(policies []Policy) bool {

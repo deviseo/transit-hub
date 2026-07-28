@@ -78,6 +78,9 @@ const (
 	ErrorManualModelsRequired = "admin.connectionHealth.errors.manualModelsRequired"
 	// ErrorPolicyNotFound：分配策略时传入的 policyId 不属于当前 workspace 或不存在。
 	ErrorPolicyNotFound = "admin.connectionHealth.errors.policyNotFound"
+	// ErrorMultiplierRequired 表示用户尝试给没有有效倍率的分组启用倍率优先级策略。
+	// 前端应提示先在上游配置倍率；后端绝不使用 1x 等猜测值代替。
+	ErrorMultiplierRequired = "admin.connectionHealth.errors.multiplierRequired"
 )
 
 // PolicyAssignment 对应 connection_health_policy_assignments 表：一条「target 显式绑定某条策略」
@@ -263,6 +266,13 @@ type MySitesReader interface {
 	ListRealConnectionsForWorkspace(ctx context.Context, userID string, adminAccountID string) ([]my_sites.RealConnection, error)
 	MappingOptions(ctx context.Context, userID string) (my_sites.MappingOptionsResponse, error)
 	RequireSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, error)
+}
+
+// UpstreamKeyReader 是分组健康展示上游 API Key 当前分组时使用的可选能力。
+// 它没有并入 MySitesReader 的必选方法，避免破坏旧测试替身和其它既有注入实现；生产环境的
+// *my_sites.Service 已结构性满足该接口。调用方只读取 ID/分组元数据，绝不记录或返回 Key 明文。
+type UpstreamKeyReader interface {
+	ListUpstreamKeys(ctx context.Context, userID string, siteID string) ([]upstream.Sub2APIKeyItem, error)
 }
 
 // SiteLookup 是 connection_health 对 upstream 模块的只读依赖：按站点 ID 取 base_url 和平台类型。

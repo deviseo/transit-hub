@@ -31,6 +31,9 @@ const (
 	ErrorRequest         = "admin.upstream.errors.request"
 	ErrorInvalidResponse = "admin.upstream.errors.invalidResponse"
 	ErrorUnknown         = "admin.upstream.errors.unknown"
+	// ErrorSub2APIBulkUpdateUnsupported 表示当前 Sub2API 站点没有字段级批量更新能力。
+	// 调度优先级/状态更新遇到该能力缺失时必须要求升级，绝不回退到整对象回写。
+	ErrorSub2APIBulkUpdateUnsupported = "admin.upstream.errors.sub2APIBulkUpdateUnsupported"
 )
 
 // SSE 同步流事件类型。

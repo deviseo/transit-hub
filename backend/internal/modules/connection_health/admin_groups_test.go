@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
 
@@ -47,6 +48,17 @@ func newAdminGroupsService(reader PlatformGroupReader, mySites MySitesReader, re
 		probeRunner:    NewRealProbeRunner(),
 		platformGroups: reader,
 	}
+}
+
+// fakeAdminGroupKeyReader 为分组健康倍率展示提供当前上游 Key 元数据；Key 字段本身不参与测试，
+// 用于确保生产代码不会为了关联倍率而读取、记录或返回敏感凭据。
+type fakeAdminGroupKeyReader struct {
+	fakeMySitesReader
+	keysBySite map[string][]upstream.Sub2APIKeyItem
+}
+
+func (f fakeAdminGroupKeyReader) ListUpstreamKeys(ctx context.Context, userID string, siteID string) ([]upstream.Sub2APIKeyItem, error) {
+	return f.keysBySite[siteID], nil
 }
 
 // probePolicy 返回一条启用策略，含一个启用的 gpt-4o 模型目标，供候选模型/可探活判断使用。
@@ -126,6 +138,94 @@ func TestAdminGroups_TargetIDProbeAvailableAndModelHealth(t *testing.T) {
 	}
 	if groups[0].HealthSummary.HealthyModels != 1 {
 		t.Fatalf("healthyModels = %d, want 1", groups[0].HealthSummary.HealthyModels)
+	}
+}
+
+// TestAdminGroups_UsesRealUpstreamAPIKeyGroupMultiplier 验证“上游 API Key 倍率”来自当前
+// API Key 所在的上游分组，而不是连接记录里的历史分组或 Sub2API admin 账号自身倍率。
+// 未建立真实对接关联、或同一账号存在无法全部解析的连接时，必须保持未知。
+func TestAdminGroups_UsesRealUpstreamAPIKeyGroupMultiplier(t *testing.T) {
+	forwardingAccountMultiplier := 1.75
+	unlinkedAccountMultiplier := 2.25
+	upstreamKeyGroupMultiplier := 0.42
+	mySites := fakeAdminGroupKeyReader{
+		fakeMySitesReader: fakeMySitesReader{
+			session: upstream.Session{Platform: upstream.PlatformSub2API},
+			connections: []my_sites.RealConnection{{
+				UserID:                  "user1",
+				WorkspaceAdminAccountID: "ws1",
+				UpstreamSiteID:          "site-1",
+				UpstreamGroupID:         "historical-group",
+				UpstreamGroupName:       "historical-vip",
+				UpstreamKeyID:           "key-9",
+				AdminAccountID:          "100",
+				AdminPlatform:           string(upstream.PlatformSub2API),
+				Status:                  my_sites.ConnectionStatusActive,
+			}, {
+				UserID:                  "user1",
+				WorkspaceAdminAccountID: "ws1",
+				UpstreamSiteID:          "site-1",
+				UpstreamKeyID:           "missing-key",
+				AdminAccountID:          "300",
+				AdminPlatform:           string(upstream.PlatformSub2API),
+				Status:                  my_sites.ConnectionStatusActive,
+			}},
+		},
+		keysBySite: map[string][]upstream.Sub2APIKeyItem{
+			"site-1": {{ID: "key-9", GroupID: "upstream-group-7", GroupName: "upstream-vip", Key: "sk-never-used"}},
+		},
+	}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "own-group", Name: "own-vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"own-group": {
+				{ID: "100", Name: "linked", RateMultiplier: &forwardingAccountMultiplier},
+				{ID: "200", Name: "unlinked", RateMultiplier: &unlinkedAccountMultiplier},
+				{ID: "300", Name: "ambiguous", RateMultiplier: &unlinkedAccountMultiplier},
+			},
+		},
+	}
+	svc := newAdminGroupsService(reader, mySites, newFakeRepository())
+	svc.sites = fakeSiteLookup{site: &upstream.Site{
+		ID: "site-1",
+		Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{{
+			ID:         "historical-group",
+			Name:       "historical-vip",
+			Multiplier: &forwardingAccountMultiplier,
+		}, {
+			ID:         "upstream-group-7",
+			Name:       "upstream-vip",
+			Multiplier: &upstreamKeyGroupMultiplier,
+		}}},
+	}}
+
+	groups, err := svc.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(groups) != 1 || len(groups[0].Accounts) != 3 {
+		t.Fatalf("expected one group with three accounts, got %+v", groups)
+	}
+
+	accountsByID := make(map[string]AdminGroupAccount, len(groups[0].Accounts))
+	for _, account := range groups[0].Accounts {
+		accountsByID[account.ID] = account
+	}
+	linked := accountsByID["100"]
+	if linked.UpstreamKeyGroupName != "upstream-vip" || linked.UpstreamKeyGroupMultiplier == nil {
+		t.Fatalf("expected linked upstream API key group, got %+v", linked)
+	}
+	if got := *linked.UpstreamKeyGroupMultiplier; got != upstreamKeyGroupMultiplier {
+		t.Fatalf("upstream API key group multiplier = %v, want %v", got, upstreamKeyGroupMultiplier)
+	}
+	if *linked.UpstreamKeyGroupMultiplier == forwardingAccountMultiplier {
+		t.Fatalf("must not use forwarding account rate_multiplier")
+	}
+	if unlinked := accountsByID["200"]; unlinked.UpstreamKeyGroupMultiplier != nil || unlinked.UpstreamKeyGroupName != "" {
+		t.Fatalf("unlinked account must keep upstream API key group unknown, got %+v", unlinked)
+	}
+	if ambiguous := accountsByID["300"]; ambiguous.UpstreamKeyGroupMultiplier != nil || ambiguous.UpstreamKeyGroupName != "" {
+		t.Fatalf("account with an unresolved second connection must keep upstream API key group unknown, got %+v", ambiguous)
 	}
 }
 

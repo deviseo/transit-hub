@@ -93,6 +93,7 @@ const toggleModels = (targetId: string) => {
 }
 
 const formatNumber = (value: number | null | undefined): string => value == null ? '-' : String(value)
+const formatMultiplier = (value: number | null | undefined): string => value == null ? '-' : `${value}x`
 </script>
 
 <template>
@@ -175,7 +176,7 @@ const formatNumber = (value: number | null | undefined): string => value == null
         <p class="mt-3 text-sm text-muted-foreground">{{ t(`${detailPrefix}.empty`) }}</p>
       </div>
       <div v-else class="overflow-x-auto rounded-lg border border-border/60">
-        <table class="w-full min-w-[58rem] text-sm">
+        <table class="w-full min-w-[66rem] text-sm">
           <thead class="bg-surface/60 text-left text-xs text-muted-foreground">
             <tr>
               <th class="w-10 px-3 py-2.5 font-medium"><span class="sr-only">{{ t(`${detailPrefix}.columns.expand`) }}</span></th>
@@ -183,7 +184,8 @@ const formatNumber = (value: number | null | undefined): string => value == null
               <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.health`) }}</th>
               <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.strategy`) }}</th>
               <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.priority`) }}</th>
-              <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.multiplier`) }}</th>
+              <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.strategyMultiplier`) }}</th>
+              <th class="px-3 py-2.5 font-medium">{{ t(`${detailPrefix}.columns.upstreamMultiplier`) }}</th>
               <th class="px-3 py-2.5 text-right font-medium">{{ t(`${detailPrefix}.columns.actions`) }}</th>
             </tr>
           </thead>
@@ -244,6 +246,15 @@ const formatNumber = (value: number | null | undefined): string => value == null
                 <td class="px-3 py-3 tabular-nums text-muted-foreground">
                   {{ account.effectiveMultiplier == null ? (group.multiplierDisplay || '-') : `${account.effectiveMultiplier}x` }}
                 </td>
+                <td class="px-3 py-3 tabular-nums text-foreground">
+                  <span v-if="account.upstreamKeyGroupMultiplier == null" class="text-xs text-muted-foreground">
+                    {{ t(`${detailPrefix}.upstreamMultiplierPending`) }}
+                  </span>
+                  <span v-else>{{ formatMultiplier(account.upstreamKeyGroupMultiplier) }}</span>
+                  <span v-if="account.upstreamKeyGroupName" class="mt-0.5 block max-w-32 truncate text-[11px] text-muted-foreground">
+                    {{ account.upstreamKeyGroupName }}
+                  </span>
+                </td>
                 <td class="px-3 py-3">
                   <div class="flex items-center justify-end gap-1">
                     <Tooltip :text="t(`${prefix}.actions.probe`)">
@@ -272,7 +283,7 @@ const formatNumber = (value: number | null | undefined): string => value == null
                 </td>
               </tr>
               <tr v-if="expandedTargetId === account.targetId" class="border-t border-border/40 bg-surface/25">
-                <td colspan="7" class="px-12 py-4">
+                <td colspan="8" class="px-12 py-4">
                   <div v-if="account.modelHealth.length === 0 && unprobedModels(account).length === 0" class="text-xs text-muted-foreground">{{ t(`${detailPrefix}.models.empty`) }}</div>
                   <div v-else class="grid gap-2 lg:grid-cols-2">
                     <div v-for="model in account.modelHealth" :key="model.modelName" class="rounded-lg border border-border/50 bg-background px-3 py-2.5">

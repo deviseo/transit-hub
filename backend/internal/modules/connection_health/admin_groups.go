@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
+	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
 
@@ -74,6 +76,11 @@ type AdminGroupAccount struct {
 	Weight         *int     `json:"weight,omitempty"`
 	Models         string   `json:"models,omitempty"`
 	GroupIDs       []string `json:"groupIds,omitempty"`
+	// UpstreamKeyGroup* 来自 real_connections 中该 admin 转发账号实际绑定的上游 API Key
+	// 分组，再以站点缓存的 Groups 解析其当前倍率。无法可靠关联时保持空值，绝不使用
+	// admin 转发账号自身的 rate_multiplier 猜测。
+	UpstreamKeyGroupName       string   `json:"upstreamKeyGroupName,omitempty"`
+	UpstreamKeyGroupMultiplier *float64 `json:"upstreamKeyGroupMultiplier,omitempty"`
 	// 独立探活字段。
 	TargetID               string        `json:"targetId"`
 	ProbeAvailable         bool          `json:"probeAvailable"`
@@ -177,6 +184,9 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	for _, state := range priorityStates {
 		priorityByTarget[state.TargetID] = state
 	}
+	// 真实上游 API Key 分组倍率仅用于展示，不参与探活或优先级计算。读取失败时降级为空，
+	// 保证既有分组健康功能不会因为可选的倍率信息不可用而中断。
+	upstreamKeyGroups := s.upstreamKeyGroupsByAdminAccount(ctx, userID, adminAccountID, platform)
 
 	// stateIndex[targetId][modelName] = 独立探活当前健康状态。旧的 real_connection 状态行
 	// 也会出现在这里（connection_id 为 UUID），但不会与 targetId 命名空间碰撞，互不影响。
@@ -227,6 +237,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		summary := AdminGroupHealthSummary{TotalAccounts: len(accounts)}
 		for _, acc := range accounts {
 			targetID := buildTargetID(platform, adminAccountID, acc.ID)
+			upstreamKeyGroup := upstreamKeyGroups[strings.TrimSpace(acc.ID)]
 			available, reason := targetManualProbeAvailability(platform, acc.BaseURL)
 			excluded := false
 			if exclusions := excludedByGroup[group.ID]; exclusions != nil {
@@ -261,34 +272,36 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			}
 
 			item := AdminGroupAccount{
-				ID:                      acc.ID,
-				Name:                    acc.Name,
-				Platform:                acc.Platform,
-				Type:                    acc.Type,
-				Status:                  acc.Status,
-				Schedulable:             acc.Schedulable,
-				Priority:                acc.Priority,
-				Concurrency:             acc.Concurrency,
-				RateMultiplier:          acc.RateMultiplier,
-				LoadFactor:              acc.LoadFactor,
-				Weight:                  acc.Weight,
-				Models:                  acc.Models,
-				GroupIDs:                acc.GroupIDs,
-				TargetID:                targetID,
-				ProbeAvailable:          available,
-				ProbeUnavailableReason:  reason,
-				ModelHealth:             modelHealth,
-				UnprobedModels:          unprobedModels,
-				AssignedPolicyIDs:       assignedIDs,
-				AssignedPolicies:        assignedSummaries,
-				HasAssignedPolicy:       len(assignedIDs) > 0,
-				HasEnabledPolicy:        hasEnabledAssignedPolicy(assignedSummaries),
-				HasEnabledProbePolicy:   hasProbePolicy,
-				PolicyAssignmentSource:  assignmentSource,
-				ExcludedFromGroupPolicy: excluded,
-				PriorityManaged:         priorityManaged,
-				PriorityConflict:        priorityManaged && priorityState.Conflict,
-				EffectiveMultiplier:     effectiveMultiplier,
+				ID:                         acc.ID,
+				Name:                       acc.Name,
+				Platform:                   acc.Platform,
+				Type:                       acc.Type,
+				Status:                     acc.Status,
+				Schedulable:                acc.Schedulable,
+				Priority:                   acc.Priority,
+				Concurrency:                acc.Concurrency,
+				RateMultiplier:             acc.RateMultiplier,
+				LoadFactor:                 acc.LoadFactor,
+				Weight:                     acc.Weight,
+				Models:                     acc.Models,
+				GroupIDs:                   acc.GroupIDs,
+				UpstreamKeyGroupName:       upstreamKeyGroup.name,
+				UpstreamKeyGroupMultiplier: upstreamKeyGroup.multiplier,
+				TargetID:                   targetID,
+				ProbeAvailable:             available,
+				ProbeUnavailableReason:     reason,
+				ModelHealth:                modelHealth,
+				UnprobedModels:             unprobedModels,
+				AssignedPolicyIDs:          assignedIDs,
+				AssignedPolicies:           assignedSummaries,
+				HasAssignedPolicy:          len(assignedIDs) > 0,
+				HasEnabledPolicy:           hasEnabledAssignedPolicy(assignedSummaries),
+				HasEnabledProbePolicy:      hasProbePolicy,
+				PolicyAssignmentSource:     assignmentSource,
+				ExcludedFromGroupPolicy:    excluded,
+				PriorityManaged:            priorityManaged,
+				PriorityConflict:           priorityManaged && priorityState.Conflict,
+				EffectiveMultiplier:        effectiveMultiplier,
 			}
 			if item.HasEnabledProbePolicy {
 				health.MonitoredAccountCount++
@@ -319,6 +332,220 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		result = append(result, health)
 	}
 	return result, nil
+}
+
+type upstreamKeyGroupInfo struct {
+	siteID     string
+	keyID      string
+	groupID    string
+	name       string
+	multiplier *float64
+}
+
+type upstreamKeyMetadata struct {
+	id        string
+	groupID   string
+	groupName string
+}
+
+// upstreamKeyGroupsByAdminAccount 构建 admin 转发账号 ID 到其当前真实上游 API Key 分组的映射。
+// real_connections 只负责给出 admin 账号、站点和 Key ID 的可信绑定关系；Key 当前所在分组
+// 必须再向上游 Key 列表回查，不能沿用连接创建时保存的历史 UpstreamGroupID/Name。
+func (s *Service) upstreamKeyGroupsByAdminAccount(
+	ctx context.Context,
+	userID string,
+	adminAccountID string,
+	adminPlatform string,
+) map[string]upstreamKeyGroupInfo {
+	result := make(map[string]upstreamKeyGroupInfo)
+	if s.mySites == nil || s.sites == nil {
+		return result
+	}
+	keyReader, ok := s.mySites.(UpstreamKeyReader)
+	if !ok {
+		// 这是向后兼容的可选展示能力。旧注入实现没有 Key 查询能力时保持未知，
+		// 不阻断分组健康、探活和优先级等原有功能。
+		return result
+	}
+
+	connections, err := s.mySites.ListRealConnectionsForWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] upstream key group lookup skipped workspace=%s err=%v", adminAccountID, err)
+		return result
+	}
+
+	connectionsByAccount := make(map[string][]my_sites.RealConnection)
+	for _, connection := range connections {
+		accountID := strings.TrimSpace(connection.AdminAccountID)
+		siteID := strings.TrimSpace(connection.UpstreamSiteID)
+		if accountID == "" || siteID == "" {
+			continue
+		}
+		if platform := strings.TrimSpace(connection.AdminPlatform); platform != "" && !strings.EqualFold(platform, adminPlatform) {
+			continue
+		}
+		connectionsByAccount[accountID] = append(connectionsByAccount[accountID], connection)
+	}
+
+	// 站点、Key 元数据按站点缓存，避免同一页面为每个账号重复访问上游。Key 明文不会复制进
+	// 缓存，也不会进入日志或响应；这里只保留识别当前分组所需的 ID 和分组字段。
+	siteCache := make(map[string]*upstream.Site)
+	missingSites := make(map[string]struct{})
+	keysBySite := make(map[string][]upstreamKeyMetadata)
+	failedKeySites := make(map[string]struct{})
+	for accountID, accountConnections := range connectionsByAccount {
+		var resolved upstreamKeyGroupInfo
+		reliable := len(accountConnections) > 0
+		for index, connection := range accountConnections {
+			candidate, candidateOK := s.upstreamKeyGroupForConnection(
+				ctx,
+				userID,
+				connection,
+				keyReader,
+				siteCache,
+				missingSites,
+				keysBySite,
+				failedKeySites,
+			)
+			// 一个 admin 账号可能因脏数据存在多条连接。必须逐条成功解析并且精确指向同一
+			// 站点、Key 和当前分组，才允许展示；不能跳过失败项后采用另一条看似有效的记录。
+			if !candidateOK || (index > 0 && !sameUpstreamKeyGroup(resolved, candidate)) {
+				reliable = false
+				break
+			}
+			resolved = candidate
+		}
+		if reliable {
+			result[accountID] = resolved
+		}
+	}
+	return result
+}
+
+// upstreamKeyGroupForConnection 先用连接保存的 UpstreamKeyID 精确查找当前上游 Key，再用
+// Key 当前返回的分组 ID/名称匹配站点分组倍率。连接里的历史分组字段不参与判断，避免 Key
+// 被上游移动分组后继续展示旧倍率。任一阶段缺失、重复或冲突都返回未知。
+func (s *Service) upstreamKeyGroupForConnection(
+	ctx context.Context,
+	userID string,
+	connection my_sites.RealConnection,
+	keyReader UpstreamKeyReader,
+	siteCache map[string]*upstream.Site,
+	missingSites map[string]struct{},
+	keysBySite map[string][]upstreamKeyMetadata,
+	failedKeySites map[string]struct{},
+) (upstreamKeyGroupInfo, bool) {
+	siteID := strings.TrimSpace(connection.UpstreamSiteID)
+	keyID := strings.TrimSpace(connection.UpstreamKeyID)
+	if siteID == "" || keyID == "" {
+		return upstreamKeyGroupInfo{}, false
+	}
+	if _, failed := failedKeySites[siteID]; failed {
+		return upstreamKeyGroupInfo{}, false
+	}
+	keys, cached := keysBySite[siteID]
+	if !cached {
+		items, err := keyReader.ListUpstreamKeys(ctx, userID, siteID)
+		if err != nil {
+			failedKeySites[siteID] = struct{}{}
+			return upstreamKeyGroupInfo{}, false
+		}
+		keys = make([]upstreamKeyMetadata, 0, len(items))
+		for _, item := range items {
+			// item.Key 可能包含敏感明文，禁止复制、记录或向前端返回。
+			keys = append(keys, upstreamKeyMetadata{
+				id:        strings.TrimSpace(item.ID),
+				groupID:   strings.TrimSpace(item.GroupID),
+				groupName: strings.TrimSpace(item.GroupName),
+			})
+		}
+		keysBySite[siteID] = keys
+	}
+
+	var currentKey *upstreamKeyMetadata
+	for index := range keys {
+		if keys[index].id != keyID {
+			continue
+		}
+		if currentKey != nil {
+			return upstreamKeyGroupInfo{}, false
+		}
+		currentKey = &keys[index]
+	}
+	if currentKey == nil || (currentKey.groupID == "" && currentKey.groupName == "") {
+		return upstreamKeyGroupInfo{}, false
+	}
+
+	if _, missing := missingSites[siteID]; missing {
+		return upstreamKeyGroupInfo{}, false
+	}
+	site, cached := siteCache[siteID]
+	if !cached {
+		var err error
+		site, err = s.sites.GetSite(ctx, siteID)
+		if err != nil || site == nil {
+			missingSites[siteID] = struct{}{}
+			return upstreamKeyGroupInfo{}, false
+		}
+		siteCache[siteID] = site
+	}
+
+	var matched *upstream.GroupInfo
+	if currentKey.groupID != "" {
+		for index := range site.Metrics.Groups {
+			if strings.TrimSpace(site.Metrics.Groups[index].ID) != currentKey.groupID {
+				continue
+			}
+			if matched != nil {
+				return upstreamKeyGroupInfo{}, false
+			}
+			matched = &site.Metrics.Groups[index]
+		}
+	}
+	// 有些兼容实现不返回分组 ID，或站点缓存的 ID 形态与 Key 接口不同；此时仅在完整
+	// 分组名唯一命中时回退。模糊、部分匹配会把倍率关联到错误分组，因此明确禁止。
+	if matched == nil && currentKey.groupName != "" {
+		for index := range site.Metrics.Groups {
+			if !strings.EqualFold(strings.TrimSpace(site.Metrics.Groups[index].Name), currentKey.groupName) {
+				continue
+			}
+			if matched != nil {
+				return upstreamKeyGroupInfo{}, false
+			}
+			matched = &site.Metrics.Groups[index]
+		}
+	}
+	if matched == nil {
+		return upstreamKeyGroupInfo{}, false
+	}
+	return newUpstreamKeyGroupInfo(siteID, keyID, *matched), true
+}
+
+func newUpstreamKeyGroupInfo(siteID string, keyID string, group upstream.GroupInfo) upstreamKeyGroupInfo {
+	info := upstreamKeyGroupInfo{
+		siteID:  strings.TrimSpace(siteID),
+		keyID:   strings.TrimSpace(keyID),
+		groupID: strings.TrimSpace(group.ID),
+		name:    strings.TrimSpace(group.Name),
+	}
+	if group.Multiplier != nil {
+		value := *group.Multiplier
+		info.multiplier = &value
+	}
+	return info
+}
+
+func sameUpstreamKeyGroup(left upstreamKeyGroupInfo, right upstreamKeyGroupInfo) bool {
+	if left.siteID != right.siteID || left.keyID != right.keyID || left.groupID != right.groupID {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(left.name), strings.TrimSpace(right.name)) {
+		return false
+	}
+	if left.multiplier == nil || right.multiplier == nil {
+		return left.multiplier == nil && right.multiplier == nil
+	}
+	return *left.multiplier == *right.multiplier
 }
 
 // modelHealthForConnection 把某个 targetId 的健康状态表（modelName -> state）展开为 ModelHealth 列表。

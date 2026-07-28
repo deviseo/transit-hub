@@ -945,8 +945,11 @@ export default {
           strategy: '生效策略',
           priority: '上游优先级',
           multiplier: '有效倍率',
+          strategyMultiplier: '我的分组倍率',
+          upstreamMultiplier: '上游 API Key 倍率',
           actions: '操作'
         },
+        upstreamMultiplierPending: '关联后展示倍率',
         models: {
           empty: '该目标还没有模型探活结果。',
           latency: '延迟 {value} ms',
@@ -1008,7 +1011,9 @@ export default {
           remoteActionLabel: '执行上游动作',
           remoteActionHelp: '故障和恢复时按平台能力自动禁用或恢复目标',
           multiplierOnlyTitle: '仅同步倍率优先级',
-          multiplierOnlyHelp: '后台约每 30 秒读取一次最新分组倍率；倍率越低，优先级越高。此模式不需要模型或上游探活凭据。'
+          multiplierOnlyHelp: '后台约每 30 秒读取一次最新分组倍率；倍率越低，优先级越高。此模式不需要模型或上游探活凭据。',
+          multiplierMissingTitle: '当前分组没有有效倍率',
+          multiplierMissingHelp: '请先在上游设置该分组倍率后再启用倍率排序。系统不会用 1x 兜底，也不会修改当前优先级。'
         },
         confirm: {
           title: '确认分组配置',
@@ -1359,6 +1364,7 @@ export default {
         credentialsRedacted: '上游凭据已脱敏，无法用于探活。',
         modelListUnavailable: '无法获取上游模型列表，请稍后重试。',
         modelListInvalid: '上游模型列表响应格式无法识别。',
+        multiplierRequired: '当前分组没有有效倍率，请先在上游设置倍率后再启用倍率排序。',
         manualModelsRequired: '请至少选择一个模型再开始测试。',
         policyNotFound: '所选策略不存在或不属于当前工作区。'
       }
@@ -1501,6 +1507,7 @@ export default {
         invalidResponse: '上游返回内容无法解析。',
         tokenMissing: '登录成功但未返回访问令牌。',
         detect: '无法自动识别平台，请手动选择平台后重试。',
+        sub2APIBulkUpdateUnsupported: '当前 Sub2API 版本不支持安全的账号字段更新，请升级 Sub2API 后重试。',
         unknown: '连接上游站点时发生未知错误。'
       }
     },

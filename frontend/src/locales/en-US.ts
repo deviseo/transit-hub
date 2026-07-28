@@ -945,8 +945,11 @@ export default {
           strategy: 'Effective Policy',
           priority: 'Upstream Priority',
           multiplier: 'Effective Multiplier',
+          strategyMultiplier: 'My Group Multiplier',
+          upstreamMultiplier: 'Upstream API Key Multiplier',
           actions: 'Actions'
         },
+        upstreamMultiplierPending: 'Shown after linking',
         models: {
           empty: 'This target has no model probe results yet.',
           latency: 'Latency {value} ms',
@@ -1008,7 +1011,9 @@ export default {
           remoteActionLabel: 'Run Upstream Actions',
           remoteActionHelp: 'Automatically disable or restore targets on failure and recovery when the platform supports it',
           multiplierOnlyTitle: 'Sync Multiplier Priority Only',
-          multiplierOnlyHelp: 'The scheduler reads current group multipliers about every 30 seconds. Lower multipliers receive higher priority. No models or probe credentials are required.'
+          multiplierOnlyHelp: 'The scheduler reads current group multipliers about every 30 seconds. Lower multipliers receive higher priority. No models or probe credentials are required.',
+          multiplierMissingTitle: 'This group has no valid multiplier',
+          multiplierMissingHelp: 'Set the group multiplier upstream before enabling multiplier sorting. The system will not assume 1x or change the current priority.'
         },
         confirm: {
           title: 'Review Group Configuration',
@@ -1359,6 +1364,7 @@ export default {
         credentialsRedacted: 'Upstream credentials are redacted and cannot be used for probing.',
         modelListUnavailable: 'Could not fetch the upstream model list. Please try again later.',
         modelListInvalid: 'The upstream model list response format is not recognized.',
+        multiplierRequired: 'This group has no valid multiplier. Set it upstream before enabling multiplier sorting.',
         manualModelsRequired: 'Please select at least one model before starting the test.',
         policyNotFound: 'The selected policy does not exist or is not in the current workspace.'
       }
@@ -1501,6 +1507,7 @@ export default {
         invalidResponse: 'The upstream response could not be parsed.',
         tokenMissing: 'Login succeeded but no access token was returned.',
         detect: 'The platform could not be auto-detected. Choose a platform and try again.',
+        sub2APIBulkUpdateUnsupported: 'This Sub2API version does not support safe account field updates. Upgrade Sub2API and try again.',
         unknown: 'An unknown error occurred while connecting the upstream site.'
       }
     },
