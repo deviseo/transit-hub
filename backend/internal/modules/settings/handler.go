@@ -145,7 +145,7 @@ func (h *Handler) testNotificationChannel(w http.ResponseWriter, r *http.Request
 
 func writeSettingsError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrInvalidNotificationChannel), errors.Is(err, ErrMissingWebhook), errors.Is(err, ErrMissingTelegramConfig):
+	case errors.Is(err, ErrInvalidNotificationChannel), errors.Is(err, ErrMissingWebhook), errors.Is(err, ErrMissingTelegramConfig), errors.Is(err, ErrMissingQQConfig):
 		httpjson.WriteError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrSendNotificationFailed):
 		log.Printf("send test notification: %v", err)

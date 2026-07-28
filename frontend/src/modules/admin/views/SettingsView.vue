@@ -5,6 +5,7 @@ import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmailTemplatesPanel from '../components/settings/EmailTemplatesPanel.vue'
+import NotificationTemplateEditor from '../components/settings/NotificationTemplateEditor.vue'
 import {
   getNotificationChannelSettings,
   getSmtpSettings,
@@ -15,7 +16,7 @@ import {
   testNotificationChannel,
   testSmtpEmail,
 } from '../api/settings'
-import type { NotificationChannel, NotificationChannelSettings, SmtpSettings, SmtpTlsMode, StrategySettings, TestNotificationChannelPayload } from '../types/settings'
+import type { NotificationChannel, NotificationChannelSettings, NotificationTemplateFormat, SmtpSettings, SmtpTlsMode, StrategySettings, TestNotificationChannelPayload } from '../types/settings'
 
 const { t } = useI18n()
 
@@ -41,15 +42,73 @@ const minimumRefreshInterval = 60
 const enableBalanceWarning = ref(false)
 const defaultBalanceThreshold = ref('10.00')
 const balanceSelectedBots = ref<string[]>([])
-const defaultBalanceTemplate = '【余额预警】{siteName} 站点余额（CNY）已不足 {threshold} 元，当前余额为 {balance} 元。'
-const defaultMultiplierTemplate = '【倍率变更】{siteName} 的 {groupName} 分组倍率已{changeDirection}：{oldRate}x -> {newRate}x。'
-const balanceTemplate = ref(defaultBalanceTemplate)
+const defaultBalanceTemplate = computed(() => t('admin.settings.sections.templates.balanceDefaultTemplate', {
+  siteName: '{siteName}',
+  balance: '{balance}',
+  threshold: '{threshold}',
+}))
+const defaultMultiplierTemplate = computed(() => t('admin.settings.sections.templates.multiplierDefaultTemplate', {
+  siteName: '{siteName}',
+  groupName: '{groupName}',
+  oldRate: '{oldRate}',
+  newRate: '{newRate}',
+  changeDirection: '{changeDirection}',
+}))
+const normalizeBuiltInTemplate = (template?: string) => (template?.trim() ?? '').replace(/>\s+</g, '><')
+const legacyBalanceTemplates = new Set([
+  '【余额预警】{siteName} 站点余额（CNY）已不足 {threshold} 元，当前余额为 {balance} 元。',
+  '[Balance warning] {siteName} balance (CNY) is below {threshold}; current balance is {balance}.',
+  '<div style="border-left:4px solid #f59e0b;background:rgba(245,158,11,0.12);padding:16px;border-radius:6px"><div style="font-size:18px;font-weight:700;color:#f59e0b">🔴 余额预警</div><p style="margin:10px 0 0">上游站点 <strong style="color:#3b82f6">{siteName}</strong> 的可用余额已低于预警阈值。</p><p style="margin:10px 0 0">💰 当前余额: <strong style="color:#ef4444">¥{balance}</strong><br>⚠️ 预警阈值: <strong>¥{threshold}</strong></p><p style="margin:10px 0 0">请及时检查并充值，避免服务中断。</p></div>',
+  '<div style="border-left:4px solid #f59e0b;background:rgba(245,158,11,0.12);padding:16px;border-radius:6px"><div style="font-size:18px;font-weight:700;color:#f59e0b">🔴 Balance warning</div><p style="margin:10px 0 0">The available balance for <strong style="color:#3b82f6">{siteName}</strong> is below the warning threshold.</p><p style="margin:10px 0 0">💰 Current balance: <strong style="color:#ef4444">¥{balance}</strong><br>⚠️ Warning threshold: <strong>¥{threshold}</strong></p><p style="margin:10px 0 0">Please review and recharge the upstream account to avoid service interruption.</p></div>',
+].map(normalizeBuiltInTemplate))
+const legacyMultiplierTemplates = new Set([
+  '【倍率变更】{siteName} 的 {groupName} 分组倍率已{changeDirection}：{oldRate}x -> {newRate}x。',
+  '[Multiplier change] {siteName} / {groupName} {changeDirection}: {oldRate}x -> {newRate}x.',
+  '<div style="border-left:4px solid #3b82f6;background:rgba(59,130,246,0.12);padding:16px;border-radius:6px"><div style="font-size:18px;font-weight:700;color:#3b82f6">🟠 倍率变更预警</div><p style="margin:10px 0 0">上游站点 <strong style="color:#3b82f6">{siteName}</strong> 的分组 <strong style="color:#8b5cf6">{groupName}</strong> 倍率已<strong style="color:#f59e0b">{changeDirection}</strong>。</p><p style="margin:10px 0 0">▫️ 原倍率: <strong>{oldRate}x</strong><br>🔸 新倍率: <strong style="color:#f59e0b">{newRate}x</strong></p><p style="margin:10px 0 0">🔎 请确认成本变化，并检查下游定价策略。</p></div>',
+  '<div style="border-left:4px solid #3b82f6;background:rgba(59,130,246,0.12);padding:16px;border-radius:6px"><div style="font-size:18px;font-weight:700;color:#3b82f6">🟠 Multiplier change warning</div><p style="margin:10px 0 0">The <strong style="color:#8b5cf6">{groupName}</strong> multiplier on <strong style="color:#3b82f6">{siteName}</strong> has <strong style="color:#f59e0b">{changeDirection}</strong>.</p><p style="margin:10px 0 0">▫️ Previous rate: <strong>{oldRate}x</strong><br>🔸 New rate: <strong style="color:#f59e0b">{newRate}x</strong></p><p style="margin:10px 0 0">🔎 Review the cost change and confirm whether downstream pricing needs adjustment.</p></div>',
+].map(normalizeBuiltInTemplate))
+const shouldUseDefaultTemplate = (template: string | undefined, legacyTemplates: ReadonlySet<string>) => {
+  const normalized = normalizeBuiltInTemplate(template)
+  return normalized === '' || legacyTemplates.has(normalized)
+}
+const balanceTemplate = ref(defaultBalanceTemplate.value)
+const balanceTemplateFormat = ref<NotificationTemplateFormat>('markdown')
 
 const enableMultiplierAlert = ref(false)
 const multiplierSelectedBots = ref<string[]>([])
-const multiplierTemplate = ref(defaultMultiplierTemplate)
+const multiplierTemplate = ref(defaultMultiplierTemplate.value)
+const multiplierTemplateFormat = ref<NotificationTemplateFormat>('markdown')
+
+const normalizeTemplateFormat = (format?: string): NotificationTemplateFormat => (
+  format === 'markdown' || format === 'html' ? format : 'text'
+)
+
+const balanceTemplateVariables = computed(() => [
+  { token: '{siteName}', label: t('admin.settings.varSiteName') },
+  { token: '{balance}', label: t('admin.settings.varBalance') },
+  { token: '{threshold}', label: t('admin.settings.varThreshold') },
+])
+const balancePreviewValues = computed(() => ({
+  '{siteName}': t('admin.settings.templateEditor.samples.siteName'),
+  '{balance}': t('admin.settings.templateEditor.samples.balance'),
+  '{threshold}': t('admin.settings.templateEditor.samples.threshold'),
+}))
+const multiplierTemplateVariables = computed(() => [
+  { token: '{siteName}', label: t('admin.settings.varSiteName') },
+  { token: '{groupName}', label: t('admin.settings.varGroupName') },
+  { token: '{oldRate}', label: t('admin.settings.varOldRate') },
+  { token: '{newRate}', label: t('admin.settings.varNewRate') },
+  { token: '{changeDirection}', label: t('admin.settings.varChangeDirection') },
+])
+const multiplierPreviewValues = computed(() => ({
+  '{siteName}': t('admin.settings.templateEditor.samples.siteName'),
+  '{groupName}': t('admin.settings.templateEditor.samples.groupName'),
+  '{oldRate}': t('admin.settings.templateEditor.samples.oldRate'),
+  '{newRate}': t('admin.settings.templateEditor.samples.newRate'),
+  '{changeDirection}': t('admin.settings.templateEditor.samples.changeDirection'),
+}))
 // === Tab 2: Channels ===
-const activeChannelTab = ref<'dingtalk' | 'feishu' | 'telegram'>('dingtalk')
+const activeChannelTab = ref<NotificationChannel>('dingtalk')
 
 type WebhookBotForm = {
   id: string
@@ -66,18 +125,33 @@ type TelegramBotForm = {
   proxyUrl: string
 }
 
+type QQBotForm = {
+  id: string
+  name: string
+  appId: string
+  clientSecret: string
+  userOpenId: string
+  groupOpenId: string
+}
+
 const dingtalkBots = ref<WebhookBotForm[]>([])
+const wecomBots = ref<WebhookBotForm[]>([])
+const qqBots = ref<QQBotForm[]>([])
 const feishuBots = ref<WebhookBotForm[]>([])
 const telegramBots = ref<TelegramBotForm[]>([])
 
-const addBot = (type: 'dingtalk' | 'feishu' | 'telegram') => {
+const addBot = (type: NotificationChannel) => {
   if (type === 'dingtalk') dingtalkBots.value.push({ id: uniqueId(), name: '', webhook: '', secret: '' })
+  if (type === 'wecom') wecomBots.value.push({ id: uniqueId(), name: '', webhook: '', secret: '' })
+  if (type === 'qq') qqBots.value.push({ id: uniqueId(), name: '', appId: '', clientSecret: '', userOpenId: '', groupOpenId: '' })
   if (type === 'feishu') feishuBots.value.push({ id: uniqueId(), name: '', webhook: '', secret: '' })
   if (type === 'telegram') telegramBots.value.push({ id: uniqueId(), name: '', botToken: '', chatId: '', proxyUrl: '' })
 }
 
-const removeBot = (type: 'dingtalk' | 'feishu' | 'telegram', index: number) => {
+const removeBot = (type: NotificationChannel, index: number) => {
   if (type === 'dingtalk') dingtalkBots.value.splice(index, 1)
+  if (type === 'wecom') wecomBots.value.splice(index, 1)
+  if (type === 'qq') qqBots.value.splice(index, 1)
   if (type === 'feishu') feishuBots.value.splice(index, 1)
   if (type === 'telegram') telegramBots.value.splice(index, 1)
 }
@@ -104,10 +178,14 @@ const applyStrategySettings = (settings: StrategySettings) => {
   enableBalanceWarning.value = settings.enableBalanceWarning
   defaultBalanceThreshold.value = String(settings.defaultBalanceThreshold || 10)
   balanceSelectedBots.value = settings.balanceNotifyBotIds ?? []
-  balanceTemplate.value = settings.balanceTemplate || defaultBalanceTemplate
+  const usesDefaultBalanceTemplate = shouldUseDefaultTemplate(settings.balanceTemplate, legacyBalanceTemplates)
+  balanceTemplate.value = usesDefaultBalanceTemplate ? defaultBalanceTemplate.value : settings.balanceTemplate
+  balanceTemplateFormat.value = usesDefaultBalanceTemplate ? 'markdown' : normalizeTemplateFormat(settings.balanceTemplateFormat)
   enableMultiplierAlert.value = settings.enableMultiplierAlert
   multiplierSelectedBots.value = settings.multiplierNotifyBotIds ?? []
-  multiplierTemplate.value = settings.multiplierTemplate || defaultMultiplierTemplate
+  const usesDefaultMultiplierTemplate = shouldUseDefaultTemplate(settings.multiplierTemplate, legacyMultiplierTemplates)
+  multiplierTemplate.value = usesDefaultMultiplierTemplate ? defaultMultiplierTemplate.value : settings.multiplierTemplate
+  multiplierTemplateFormat.value = usesDefaultMultiplierTemplate ? 'markdown' : normalizeTemplateFormat(settings.multiplierTemplateFormat)
 }
 
 const currentStrategySettings = (): StrategySettings => ({
@@ -117,9 +195,11 @@ const currentStrategySettings = (): StrategySettings => ({
   defaultBalanceThreshold: Number.parseFloat(defaultBalanceThreshold.value) || 10,
   balanceNotifyBotIds: balanceSelectedBots.value,
   balanceTemplate: balanceTemplate.value.trim(),
+  balanceTemplateFormat: balanceTemplateFormat.value,
   enableMultiplierAlert: enableMultiplierAlert.value,
   multiplierNotifyBotIds: multiplierSelectedBots.value,
   multiplierTemplate: multiplierTemplate.value.trim(),
+  multiplierTemplateFormat: multiplierTemplateFormat.value,
 })
 
 const loadStrategy = async () => {
@@ -159,19 +239,33 @@ const errorBotMessage = ref('')
 const uniqueId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
 const applyNotificationChannelSettings = (settings: NotificationChannelSettings) => {
-  dingtalkBots.value = settings.dingtalk.map(bot => ({
+  dingtalkBots.value = (settings.dingtalk ?? []).map(bot => ({
     id: bot.id || uniqueId(),
     name: bot.name,
     webhook: bot.webhook,
     secret: bot.secret,
   }))
-  feishuBots.value = settings.feishu.map(bot => ({
+  wecomBots.value = (settings.wecom ?? []).map(bot => ({
+    id: bot.id || uniqueId(),
+    name: bot.name,
+    webhook: bot.webhook,
+    secret: '',
+  }))
+  qqBots.value = (settings.qq ?? []).map(bot => ({
+    id: bot.id || uniqueId(),
+    name: bot.name,
+    appId: bot.appId,
+    clientSecret: bot.clientSecret,
+    userOpenId: bot.userOpenId ?? '',
+    groupOpenId: bot.groupOpenId ?? '',
+  }))
+  feishuBots.value = (settings.feishu ?? []).map(bot => ({
     id: bot.id || uniqueId(),
     name: bot.name,
     webhook: bot.webhook,
     secret: bot.secret,
   }))
-  telegramBots.value = settings.telegram.map(bot => ({
+  telegramBots.value = (settings.telegram ?? []).map(bot => ({
     id: bot.id || uniqueId(),
     name: bot.name,
     botToken: bot.botToken,
@@ -187,6 +281,22 @@ const currentNotificationChannelSettings = (): NotificationChannelSettings => ({
     enabled: true,
     webhook: bot.webhook.trim(),
     secret: bot.secret.trim(),
+  })),
+  wecom: wecomBots.value.map(bot => ({
+    id: bot.id,
+    name: bot.name.trim(),
+    enabled: true,
+    webhook: bot.webhook.trim(),
+    secret: '',
+  })),
+  qq: qqBots.value.map(bot => ({
+    id: bot.id,
+    name: bot.name.trim(),
+    enabled: true,
+    appId: bot.appId.trim(),
+    clientSecret: bot.clientSecret.trim(),
+    userOpenId: bot.userOpenId.trim(),
+    groupOpenId: bot.groupOpenId.trim(),
   })),
   feishu: feishuBots.value.map(bot => ({
     id: bot.id,
@@ -238,6 +348,16 @@ const testBot = async (channel: NotificationChannel, id: string) => {
 }
 
 const testPayload = (channel: NotificationChannel, id: string): TestNotificationChannelPayload | null => {
+  if (channel === 'qq') {
+    const bot = qqBots.value.find(item => item.id === id)
+    if (!bot) return null
+    return {
+      channel,
+      qqAppId: bot.appId.trim(),
+      qqClientSecret: bot.clientSecret.trim(),
+      qqUserOpenId: bot.userOpenId.trim(),
+    }
+  }
   if (channel === 'telegram') {
     const bot = telegramBots.value.find(item => item.id === id)
     if (!bot) return null
@@ -245,12 +365,14 @@ const testPayload = (channel: NotificationChannel, id: string): TestNotification
   }
   const bot = channel === 'dingtalk'
     ? dingtalkBots.value.find(item => item.id === id)
-    : feishuBots.value.find(item => item.id === id)
+    : channel === 'wecom'
+      ? wecomBots.value.find(item => item.id === id)
+      : feishuBots.value.find(item => item.id === id)
   if (!bot) return null
-  return { channel, webhook: bot.webhook.trim(), secret: bot.secret.trim() }
+  return { channel, webhook: bot.webhook.trim(), secret: channel === 'wecom' ? '' : bot.secret.trim() }
 }
 
-const allBots = computed(() => [...dingtalkBots.value, ...feishuBots.value, ...telegramBots.value])
+const allBots = computed(() => [...dingtalkBots.value, ...wecomBots.value, ...qqBots.value, ...feishuBots.value, ...telegramBots.value])
 const hasBots = computed(() => allBots.value.length > 0)
 
 const toggleBalanceBot = (botId: string) => {
@@ -427,7 +549,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="space-y-6 max-w-4xl mx-auto pb-12">
+  <div class="mx-auto max-w-6xl space-y-6 pb-12">
     <!-- Tab bar -->
     <div class="sticky top-0 z-10 -mx-3 mb-8 flex justify-start border-b border-border/40 bg-background/90 px-3 py-4 backdrop-blur-xl sm:-mx-6 sm:justify-center sm:px-6">
       <div class="inline-flex max-w-full overflow-x-auto rounded-lg border border-border/50 bg-surface-elevated p-1 shadow-sm" role="tablist" :aria-label="t('admin.menu.settings')">
@@ -532,7 +654,7 @@ onMounted(async () => {
               </label>
             </div>
             <div v-if="enableRefreshInterval" class="px-5 pb-5 pt-0">
-              <div class="pl-12 animate-in slide-in-from-top-2 fade-in duration-200">
+              <div class="animate-in slide-in-from-top-2 fade-in duration-200 sm:pl-12">
                 <div class="flex items-center gap-3 max-w-xs">
                   <Input type="number" v-model="refreshInterval" :min="minimumRefreshInterval" step="10" class="w-24" />
                   <span class="text-sm text-muted-foreground whitespace-nowrap">{{ t('admin.settings.sections.basic.seconds') }}</span>
@@ -563,7 +685,7 @@ onMounted(async () => {
               </label>
             </div>
             <div v-if="enableBalanceWarning" class="px-5 pb-5 pt-0">
-              <div class="pl-12 space-y-4 animate-in slide-in-from-top-2 fade-in duration-200">
+              <div class="space-y-4 animate-in slide-in-from-top-2 fade-in duration-200 sm:pl-12">
                 <!-- Threshold amount -->
                 <div class="grid gap-1.5">
                   <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.balanceWarningAmount') }}</label>
@@ -588,19 +710,13 @@ onMounted(async () => {
                   <p v-if="balanceSelectedBots.length === 0 && hasBots" class="text-xs text-destructive mt-0.5">{{ t('admin.settings.mustSelectBot') }}</p>
                 </div>
 
-                <!-- Custom template -->
-                <div class="grid gap-1.5">
-                  <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.customTemplate') }}</label>
-                  <div class="flex flex-wrap gap-1.5 mb-1">
-                    <code class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-xs font-mono">{siteName}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varSiteName') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-xs font-mono ml-2">{balance}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varBalance') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-xs font-mono ml-2">{threshold}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varThreshold') }}</span>
-                  </div>
-                  <textarea v-model="balanceTemplate" :placeholder="t('admin.settings.sections.templates.balanceTemplatePlaceholder')" class="flex min-h-[72px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"></textarea>
-                </div>
+                <NotificationTemplateEditor
+                  v-model="balanceTemplate"
+                  v-model:format="balanceTemplateFormat"
+                  :variables="balanceTemplateVariables"
+                  :preview-values="balancePreviewValues"
+                  :placeholder="t('admin.settings.sections.templates.balanceTemplatePlaceholder', { siteName: '{siteName}', balance: '{balance}', threshold: '{threshold}' })"
+                />
               </div>
             </div>
           </div>
@@ -627,7 +743,7 @@ onMounted(async () => {
               </label>
             </div>
             <div v-if="enableMultiplierAlert" class="px-5 pb-5 pt-0">
-              <div class="pl-12 space-y-4 animate-in slide-in-from-top-2 fade-in duration-200">
+              <div class="space-y-4 animate-in slide-in-from-top-2 fade-in duration-200 sm:pl-12">
                 <!-- Bot selector -->
                 <div class="grid gap-1.5">
                   <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.notifyBots') }} <span class="text-destructive">*</span></label>
@@ -643,23 +759,13 @@ onMounted(async () => {
                   <p v-if="multiplierSelectedBots.length === 0 && hasBots" class="text-xs text-destructive mt-0.5">{{ t('admin.settings.mustSelectBot') }}</p>
                 </div>
 
-                <!-- Custom template -->
-                <div class="grid gap-1.5">
-                  <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.customTemplate') }}</label>
-                  <div class="flex flex-wrap gap-1.5 mb-1">
-                    <code class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 text-xs font-mono">{siteName}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varSiteName') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 text-xs font-mono ml-2">{groupName}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varGroupName') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 text-xs font-mono ml-2">{oldRate}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varOldRate') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 text-xs font-mono ml-2">{newRate}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varNewRate') }}</span>
-                    <code class="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-500 text-xs font-mono ml-2">{changeDirection}</code>
-                    <span class="text-xs text-muted-foreground">{{ t('admin.settings.varChangeDirection') }}</span>
-                  </div>
-                  <textarea v-model="multiplierTemplate" :placeholder="t('admin.settings.sections.templates.multiplierTemplatePlaceholder')" class="flex min-h-[72px] w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 resize-none"></textarea>
-                </div>
+                <NotificationTemplateEditor
+                  v-model="multiplierTemplate"
+                  v-model:format="multiplierTemplateFormat"
+                  :variables="multiplierTemplateVariables"
+                  :preview-values="multiplierPreviewValues"
+                  :placeholder="t('admin.settings.sections.templates.multiplierTemplatePlaceholder', { siteName: '{siteName}', groupName: '{groupName}', oldRate: '{oldRate}', newRate: '{newRate}' })"
+                />
 
               </div>
             </div>
@@ -693,27 +799,41 @@ onMounted(async () => {
             <p v-if="errorChannels" class="text-sm text-destructive">{{ t(errorChannels) }}</p>
 
             <!-- Channels Sub-tabs -->
-            <div class="flex border-b border-border/30">
+            <div class="flex overflow-x-auto border-b border-border/30">
               <button
                 @click="activeChannelTab = 'dingtalk'"
-                class="px-6 py-3 text-sm font-medium transition-colors border-b-2"
+                class="shrink-0 px-6 py-3 text-sm font-medium transition-colors border-b-2"
                 :class="activeChannelTab === 'dingtalk' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
               >
                 {{ t('admin.settings.sections.channels.dingtalk') }} ({{ dingtalkBots.length }})
               </button>
               <button
+                @click="activeChannelTab = 'wecom'"
+                class="shrink-0 px-6 py-3 text-sm font-medium transition-colors border-b-2"
+                :class="activeChannelTab === 'wecom' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+              >
+                {{ t('admin.settings.sections.channels.wecom') }} ({{ wecomBots.length }})
+              </button>
+              <button
+                @click="activeChannelTab = 'qq'"
+                class="shrink-0 px-6 py-3 text-sm font-medium transition-colors border-b-2"
+                :class="activeChannelTab === 'qq' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+              >
+                {{ t('admin.settings.sections.channels.qq') }} ({{ qqBots.length }})
+              </button>
+              <button
                 @click="activeChannelTab = 'feishu'"
-                class="px-6 py-3 text-sm font-medium transition-colors border-b-2"
+                class="shrink-0 px-6 py-3 text-sm font-medium transition-colors border-b-2"
                 :class="activeChannelTab === 'feishu' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
               >
                 {{ t('admin.settings.sections.channels.feishu') }} ({{ feishuBots.length }})
               </button>
               <button
                 @click="activeChannelTab = 'telegram'"
-                class="px-6 py-3 text-sm font-medium transition-colors border-b-2"
+                class="shrink-0 px-6 py-3 text-sm font-medium transition-colors border-b-2"
                 :class="activeChannelTab === 'telegram' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
               >
-                Telegram ({{ telegramBots.length }})
+                {{ t('admin.settings.sections.channels.telegram') }} ({{ telegramBots.length }})
               </button>
             </div>
 
@@ -760,6 +880,99 @@ onMounted(async () => {
               </div>
               <div v-if="dingtalkBots.length === 0" class="text-center py-6 text-sm text-muted-foreground border border-dashed border-border/50 rounded-xl">
                 {{ t('admin.settings.emptyDingtalk') }}
+              </div>
+            </div>
+
+            <!-- WeCom -->
+            <div v-if="activeChannelTab === 'wecom'" class="space-y-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-medium text-foreground">{{ t('admin.settings.sections.channels.wecom') }}</h4>
+                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.channels.wecomHelp') }}</p>
+                </div>
+                <Button variant="secondary" size="sm" class="h-8 shrink-0" @click="addBot('wecom')">
+                  <Plus class="h-3 w-3 mr-1.5" /> {{ t('admin.settings.addWecomBot') }}
+                </Button>
+              </div>
+              <div class="grid md:grid-cols-2 gap-4">
+                <div v-for="(bot, idx) in wecomBots" :key="bot.id" class="p-4 rounded-xl border border-border/50 bg-surface/20 relative group">
+                  <Button variant="ghost" size="sm" class="absolute top-2 right-2 h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-500/10" @click="removeBot('wecom', idx)">
+                    <Trash2 class="h-4 w-4" />
+                  </Button>
+                  <div class="grid gap-4 pr-10">
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.botNameLabel') }}</label>
+                      <Input v-model="bot.name" :placeholder="t('admin.settings.botNameWecomPlaceholder')" class="h-8 text-sm" />
+                    </div>
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.sections.channels.webhookUrl') }}</label>
+                      <Input type="url" v-model="bot.webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." class="h-8 text-sm" />
+                    </div>
+                    <div>
+                      <Button variant="secondary" size="sm" class="h-8" :disabled="testingBotId === bot.id || !bot.webhook" @click="testBot('wecom', bot.id)">
+                        <Loader2 v-if="testingBotId === bot.id" class="h-3 w-3 animate-spin mr-1.5" />
+                        <CheckCircle2 v-else-if="successBotId === bot.id" class="h-3 w-3 mr-1.5 text-green-500" />
+                        <Send v-else class="h-3 w-3 mr-1.5 text-muted-foreground" />
+                        <span :class="{ 'text-green-500': successBotId === bot.id }">{{ successBotId === bot.id ? t('admin.settings.sections.channels.testConnectionSuccess') : t('admin.settings.sections.channels.testConnection') }}</span>
+                      </Button>
+                      <p v-if="errorBotId === bot.id" class="mt-2 text-xs text-destructive">{{ t(errorBotMessage) }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="wecomBots.length === 0" class="text-center py-6 text-sm text-muted-foreground border border-dashed border-border/50 rounded-xl">
+                {{ t('admin.settings.emptyWecom') }}
+              </div>
+            </div>
+
+            <!-- QQ -->
+            <div v-if="activeChannelTab === 'qq'" class="space-y-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <h4 class="font-medium text-foreground">{{ t('admin.settings.sections.channels.qq') }}</h4>
+                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.channels.qqHelp') }}</p>
+                </div>
+                <Button variant="secondary" size="sm" class="h-8 shrink-0" @click="addBot('qq')">
+                  <Plus class="h-3 w-3 mr-1.5" /> {{ t('admin.settings.addQQBot') }}
+                </Button>
+              </div>
+              <div class="grid md:grid-cols-2 gap-4">
+                <div v-for="(bot, idx) in qqBots" :key="bot.id" class="p-4 rounded-xl border border-border/50 bg-surface/20 relative group">
+                  <Button variant="ghost" size="sm" class="absolute top-2 right-2 h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:bg-red-500/10" @click="removeBot('qq', idx)">
+                    <Trash2 class="h-4 w-4" />
+                  </Button>
+                  <div class="grid gap-4 pr-10">
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.botNameLabel') }}</label>
+                      <Input v-model="bot.name" :placeholder="t('admin.settings.botNameQQPlaceholder')" class="h-8 text-sm" />
+                    </div>
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.sections.channels.appId') }}</label>
+                      <Input v-model="bot.appId" :placeholder="t('admin.settings.sections.channels.appIdPlaceholder')" class="h-8 text-sm" />
+                    </div>
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.sections.channels.appSecret') }}</label>
+                      <Input type="password" v-model="bot.clientSecret" :placeholder="t('admin.settings.sections.channels.appSecretPlaceholder')" class="h-8 text-sm" />
+                    </div>
+                    <div class="grid gap-2">
+                      <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.sections.channels.userOpenId') }}</label>
+                      <Input v-model="bot.userOpenId" :placeholder="t('admin.settings.sections.channels.userOpenIdPlaceholder')" class="h-8 text-sm" />
+                      <p class="text-xs text-muted-foreground">{{ t('admin.settings.sections.channels.userOpenIdHelp') }}</p>
+                    </div>
+                    <div>
+                      <Button variant="secondary" size="sm" class="h-8" :disabled="testingBotId === bot.id || !bot.appId || !bot.clientSecret || !bot.userOpenId" @click="testBot('qq', bot.id)">
+                        <Loader2 v-if="testingBotId === bot.id" class="h-3 w-3 animate-spin mr-1.5" />
+                        <CheckCircle2 v-else-if="successBotId === bot.id" class="h-3 w-3 mr-1.5 text-green-500" />
+                        <Send v-else class="h-3 w-3 mr-1.5 text-muted-foreground" />
+                        <span :class="{ 'text-green-500': successBotId === bot.id }">{{ successBotId === bot.id ? t('admin.settings.sections.channels.testConnectionSuccess') : t('admin.settings.sections.channels.testConnection') }}</span>
+                      </Button>
+                      <p v-if="errorBotId === bot.id" class="mt-2 text-xs text-destructive">{{ t(errorBotMessage) }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="qqBots.length === 0" class="text-center py-6 text-sm text-muted-foreground border border-dashed border-border/50 rounded-xl">
+                {{ t('admin.settings.emptyQQ') }}
               </div>
             </div>
 

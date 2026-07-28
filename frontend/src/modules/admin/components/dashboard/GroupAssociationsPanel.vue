@@ -325,7 +325,7 @@ const loadData = async () => {
     const [mappingResponse, sites, channelSettings] = await Promise.all([
       getMySiteMappingOptions(),
       listUpstreamSites().catch(() => []),
-      getNotificationChannelSettings().catch(() => ({ dingtalk: [], feishu: [], telegram: [] })),
+      getNotificationChannelSettings().catch(() => ({ dingtalk: [], wecom: [], qq: [], feishu: [], telegram: [] })),
     ])
     ownGroups.value = mappingResponse.ownGroups ?? []
     mappings.value = mappingResponse.mappings ?? []
@@ -334,6 +334,8 @@ const loadData = async () => {
     upstreamSites.value = sites
     botOptions.value = [
       ...(channelSettings.dingtalk ?? []).filter(bot => bot.enabled).map(bot => ({ id: bot.id, name: bot.name, channel: 'DingTalk' })),
+      ...(channelSettings.wecom ?? []).filter(bot => bot.enabled).map(bot => ({ id: bot.id, name: bot.name, channel: 'WeCom' })),
+      ...(channelSettings.qq ?? []).filter(bot => bot.enabled).map(bot => ({ id: bot.id, name: bot.name, channel: 'QQ' })),
       ...(channelSettings.feishu ?? []).filter(bot => bot.enabled).map(bot => ({ id: bot.id, name: bot.name, channel: 'Feishu' })),
       ...(channelSettings.telegram ?? []).filter(bot => bot.enabled).map(bot => ({ id: bot.id, name: bot.name, channel: 'Telegram' })),
     ]

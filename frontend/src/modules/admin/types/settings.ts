@@ -1,4 +1,5 @@
-export type NotificationChannel = 'dingtalk' | 'feishu' | 'telegram'
+export type NotificationChannel = 'dingtalk' | 'wecom' | 'qq' | 'feishu' | 'telegram'
+export type NotificationTemplateFormat = 'text' | 'markdown' | 'html'
 
 export type TestNotificationChannelPayload = {
   channel: NotificationChannel
@@ -7,6 +8,10 @@ export type TestNotificationChannelPayload = {
   telegramBotToken?: string
   telegramChatId?: string
   telegramProxyUrl?: string
+  qqAppId?: string
+  qqClientSecret?: string
+  qqUserOpenId?: string
+  qqGroupOpenId?: string
 }
 
 export type TestNotificationChannelResponse = {
@@ -16,6 +21,8 @@ export type TestNotificationChannelResponse = {
 
 export type NotificationChannelSettings = {
   dingtalk: DingtalkChannelSettings[]
+  wecom: WebhookChannelSettings[]
+  qq: QQChannelSettings[]
   feishu: WebhookChannelSettings[]
   telegram: TelegramChannelSettings[]
 }
@@ -27,9 +34,11 @@ export type StrategySettings = {
   defaultBalanceThreshold: number
   balanceNotifyBotIds: string[]
   balanceTemplate: string
+  balanceTemplateFormat?: NotificationTemplateFormat
   enableMultiplierAlert: boolean
   multiplierNotifyBotIds: string[]
   multiplierTemplate: string
+  multiplierTemplateFormat?: NotificationTemplateFormat
 }
 
 export type DingtalkChannelSettings = {
@@ -55,6 +64,16 @@ export type TelegramChannelSettings = {
   botToken: string
   chatId: string
   proxyUrl: string
+}
+
+export type QQChannelSettings = {
+  id: string
+  name: string
+  enabled: boolean
+  appId: string
+  clientSecret: string
+  userOpenId: string
+  groupOpenId?: string
 }
 
 export type SmtpTlsMode = 'implicit' | 'starttls'

@@ -44,21 +44,22 @@ func NewRedisSiteCache(client *redis.Client) *RedisSiteCache {
 // 嵌入 Site 后通过额外字段覆盖 json:"-" 标记的 UserID 和 Session，
 // 确保这些关键字段不会在序列化时丢失。
 type sitePayload struct {
-	ID                string   `json:"id"`
-	UserID            string   `json:"userId"`
-	AdminAccountID    string   `json:"adminAccountId"`
-	Name              string   `json:"name"`
-	BaseURL           string   `json:"baseUrl"`
-	Platform          Platform `json:"platform"`
-	RequestedPlatform Platform `json:"requestedPlatform"`
-	Account           string   `json:"account"`
-	Remark            string   `json:"remark"`
-	RechargeRate      float64  `json:"rechargeRate"`
-	Status            Status   `json:"status"`
-	ErrorKey          *string  `json:"errorKey"`
-	Metrics           Metrics  `json:"metrics"`
-	LastSyncedAt      *int64   `json:"lastSyncedAt"`
-	Session           *Session `json:"session,omitempty"`
+	ID                string       `json:"id"`
+	UserID            string       `json:"userId"`
+	AdminAccountID    string       `json:"adminAccountId"`
+	Name              string       `json:"name"`
+	BaseURL           string       `json:"baseUrl"`
+	Platform          Platform     `json:"platform"`
+	RequestedPlatform Platform     `json:"requestedPlatform"`
+	Account           string       `json:"account"`
+	Remark            string       `json:"remark"`
+	RechargeRate      float64      `json:"rechargeRate"`
+	Status            Status       `json:"status"`
+	ErrorKey          *string      `json:"errorKey"`
+	Metrics           Metrics      `json:"metrics"`
+	Settings          SiteSettings `json:"settings"`
+	LastSyncedAt      *int64       `json:"lastSyncedAt"`
+	Session           *Session     `json:"session,omitempty"`
 }
 
 func toPayload(site *Site) sitePayload {
@@ -76,6 +77,7 @@ func toPayload(site *Site) sitePayload {
 		Status:            site.Status,
 		ErrorKey:          site.ErrorKey,
 		Metrics:           site.Metrics,
+		Settings:          site.Settings,
 		LastSyncedAt:      site.LastSyncedAt,
 		Session:           site.Session,
 	}
@@ -96,6 +98,7 @@ func fromPayload(p sitePayload) *Site {
 		Status:            p.Status,
 		ErrorKey:          p.ErrorKey,
 		Metrics:           p.Metrics,
+		Settings:          p.Settings,
 		LastSyncedAt:      p.LastSyncedAt,
 		Session:           p.Session,
 	}
