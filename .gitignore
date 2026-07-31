@@ -5,9 +5,18 @@ coverage
 .env
 .env.*
 .sisyphus/
+.playwright-cli/
 .playwright-mcp/
-**/AGENTS.md
-**/CLAUDE.md
+.codegraph/
+.claude/
+.codex/
+.cursor/
+.gemini/
+.idea/
+.vscode/
+**/[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+**/[Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
+**/[Gg][Ee][Mm][Ii][Nn][Ii].[Mm][Dd]
 frontend/node_modules
 frontend/dist
 frontend/.vite
@@ -20,3 +29,4 @@ backend/.prisma
 *.tsbuildinfo
 development-docs/
 data/
+docs/

@@ -51,7 +51,7 @@ const {
 } = useConnectionHealth()
 
 const searchText = ref('')
-const selectedType = ref('')
+const selectedType = ref('public')
 const selectedGroupId = ref('')
 const selectedConnectionId = ref('')
 const eventsDialogOpen = ref(false)
