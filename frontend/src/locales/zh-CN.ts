@@ -2197,7 +2197,28 @@ export default {
         strategy: '自动化与策略',
         channels: '通知与渠道',
         templates: '消息模板',
-        email: '邮件设置'
+        email: '邮件设置',
+        system: '系统升级'
+      },
+      upgrade: {
+        title: '源码升级',
+        statusLabel: '当前状态',
+        action: '立即升级',
+        running: '升级中...',
+        successTitle: '升级成功',
+        successMessage: '源码已更新，服务已重启并通过健康检查。',
+        failedTitle: '升级失败',
+        failedMessage: '升级已停止，本次执行的错误输出如下。',
+        timeout: '等待升级结果超时，请检查服务状态。',
+        close: '关闭',
+        reload: '刷新页面',
+        statuses: {
+          idle: '待命',
+          starting: '正在启动',
+          running: '正在执行',
+          succeeded: '上次升级成功',
+          failed: '上次升级失败'
+        }
       },
       sections: {
         basic: {

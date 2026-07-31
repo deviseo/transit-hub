@@ -1,0 +1,13 @@
+[Unit]
+Description=TransitHub fixed source upgrade
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/transithub
+Environment=PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/transithub/run-source-upgrade.sh
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
