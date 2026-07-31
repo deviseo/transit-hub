@@ -533,7 +533,7 @@ func sumFilteredBalances(users []any, filter BalanceFilter) float64 {
 		if balance == nil {
 			continue
 		}
-		if balanceExcluded(*balance, filter.ExcludeBalances) {
+		if balanceAboveConfiguredThreshold(*balance, filter.ExcludeBalances) {
 			continue
 		}
 		sum += *balance
@@ -748,6 +748,28 @@ func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGr
 		})
 	}
 	return groups, nil
+}
+
+// balanceAboveConfiguredThreshold 检查余额是否严格高于配置的排除阈值。
+func balanceAboveConfiguredThreshold(balance float64, excludes []float64) bool {
+	threshold, ok := configuredBalanceThreshold(excludes)
+	return ok && balance > threshold
+}
+
+// configuredBalanceThreshold 返回排除配置中最小的有限非负值。
+func configuredBalanceThreshold(excludes []float64) (float64, bool) {
+	var threshold float64
+	found := false
+	for _, value := range excludes {
+		if !isFinite(value) || value < 0 {
+			continue
+		}
+		if !found || value < threshold {
+			threshold = value
+			found = true
+		}
+	}
+	return threshold, found
 }
 
 // balanceExcluded 检查余额值是否在排除列表中（使用 epsilon 比较避免浮点精度问题）。

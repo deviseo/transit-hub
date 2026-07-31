@@ -75,6 +75,9 @@ const {
 } = useDashboardAdmin()
 
 const adminIdentity = computed(() => adminStatus.value.identity || adminStatus.value.baseUrl || '')
+const balanceFilterPlatform = computed<DashboardAdminPlatform>(() =>
+  adminStatus.value.platform === 'newapi' ? 'newapi' : 'sub2api',
+)
 const adminLoginInitialValue = computed(() => ({
   platform: (adminStatus.value.platform as DashboardAdminPlatform) || 'sub2api',
   siteUrl: adminStatus.value.baseUrl || '',
@@ -920,7 +923,12 @@ const lastProbeLabel = computed(() => {
       @submit="submitAdminLogin"
       @close="closeAdminModal"
     />
-    <BalanceFilterModal :open="balanceFilterOpen" @close="closeBalanceFilter" @saved="onBalanceFilterSaved" />
+    <BalanceFilterModal
+      :open="balanceFilterOpen"
+      :platform="balanceFilterPlatform"
+      @close="closeBalanceFilter"
+      @saved="onBalanceFilterSaved"
+    />
     <GroupUsageTodayModal :open="groupUsageTodayOpen" @close="closeGroupUsageToday" />
     <UpstreamKeyUsageTodayModal :open="upstreamKeyUsageTodayOpen" @close="closeUpstreamKeyUsageToday" />
     <UpstreamBalanceBreakdownModal :open="upstreamBalanceBreakdownOpen" @close="closeUpstreamBalanceBreakdown" />

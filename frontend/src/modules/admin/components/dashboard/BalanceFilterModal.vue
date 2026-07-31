@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertCircle, Filter, Loader2, Plus, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getBalanceFilter, saveBalanceFilter, type BalanceFilterConfig } from '../../api/dashboardAdmin'
+import type { DashboardAdminPlatform } from '../../types/dashboardAdmin'
 
 const props = defineProps<{
   open: boolean
+  platform: DashboardAdminPlatform
 }>()
 
 const emit = defineEmits<{
@@ -25,13 +27,45 @@ const excludeAdmin = ref(true)
 const excludeBalances = ref<number[]>([])
 const newBalanceInput = ref('')
 
+const isSub2API = computed(() => props.platform === 'sub2api')
+
+const normalizeLoadedBalances = (values: unknown): number[] => {
+  if (!Array.isArray(values)) return []
+  const finiteValues = values.filter(
+    (value): value is number => typeof value === 'number' && Number.isFinite(value),
+  )
+  if (!isSub2API.value) return [...finiteValues]
+  const thresholds = finiteValues.filter((value) => value >= 0)
+  return thresholds.length > 0 ? [Math.min(...thresholds)] : []
+}
+
+const canAddBalance = computed(() => {
+  const raw = String(newBalanceInput.value).trim()
+  if (!raw) return false
+  const value = Number(raw)
+  return Number.isFinite(value) && (!isSub2API.value || value >= 0)
+})
+
+const balanceTitleKey = computed(() => isSub2API.value
+  ? 'admin.dashboard.balanceFilter.threshold'
+  : 'admin.dashboard.balanceFilter.excludeBalances')
+const balanceHelpKey = computed(() => isSub2API.value
+  ? 'admin.dashboard.balanceFilter.thresholdHelp'
+  : 'admin.dashboard.balanceFilter.excludeBalancesHelp')
+const balancePlaceholderKey = computed(() => isSub2API.value
+  ? 'admin.dashboard.balanceFilter.thresholdPlaceholder'
+  : 'admin.dashboard.balanceFilter.addPlaceholder')
+const balanceActionKey = computed(() => isSub2API.value
+  ? 'admin.dashboard.balanceFilter.setThreshold'
+  : 'admin.dashboard.balanceFilter.add')
+
 const loadConfig = async () => {
   loading.value = true
   errorKey.value = null
   try {
     const config = await getBalanceFilter()
     excludeAdmin.value = config.excludeAdmin
-    excludeBalances.value = Array.isArray(config.excludeBalances) ? [...config.excludeBalances] : []
+    excludeBalances.value = normalizeLoadedBalances(config.excludeBalances)
   } catch (err) {
     errorKey.value = err instanceof Error ? err.message : 'admin.dashboard.balanceFilter.loadError'
   } finally {
@@ -42,9 +76,12 @@ const loadConfig = async () => {
 const addBalance = () => {
   const raw = String(newBalanceInput.value).trim()
   if (!raw) return
-  const num = parseFloat(raw)
-  if (isNaN(num)) return
-  if (!excludeBalances.value.includes(num)) {
+  const num = Number(raw)
+  if (!Number.isFinite(num) || (isSub2API.value && num < 0)) return
+
+  if (isSub2API.value) {
+    excludeBalances.value = [num]
+  } else if (!excludeBalances.value.includes(num)) {
     excludeBalances.value.push(num)
   }
   newBalanceInput.value = ''
@@ -72,7 +109,7 @@ const handleSave = async () => {
   }
 }
 
-watch(() => props.open, (isOpen) => {
+watch([() => props.open, () => props.platform], ([isOpen]) => {
   if (isOpen) {
     void loadConfig()
   }
@@ -146,11 +183,11 @@ onMounted(() => {
               </button>
             </div>
 
-            <!-- Exclude balance values -->
+            <!-- Balance exclusion -->
             <div class="space-y-3">
               <div>
-                <p class="text-sm font-medium text-foreground">{{ t('admin.dashboard.balanceFilter.excludeBalances') }}</p>
-                <p class="mt-0.5 text-xs text-muted-foreground">{{ t('admin.dashboard.balanceFilter.excludeBalancesHelp') }}</p>
+                <p class="text-sm font-medium text-foreground">{{ t(balanceTitleKey) }}</p>
+                <p class="mt-0.5 text-xs text-muted-foreground">{{ t(balanceHelpKey) }}</p>
               </div>
 
               <!-- Existing values -->
@@ -160,7 +197,7 @@ onMounted(() => {
                   :key="idx"
                   class="inline-flex items-center gap-1 rounded-lg border border-border/60 bg-surface/60 px-2.5 py-1 text-sm text-foreground"
                 >
-                  <span class="font-mono">= {{ val }}</span>
+                  <span class="font-mono">{{ isSub2API ? '>' : '=' }} {{ val }}</span>
                   <button
                     type="button"
                     class="rounded p-0.5 text-muted-foreground transition-colors hover:text-red-500"
@@ -177,7 +214,8 @@ onMounted(() => {
                   v-model="newBalanceInput"
                   type="number"
                   step="any"
-                  :placeholder="t('admin.dashboard.balanceFilter.addPlaceholder')"
+                  :min="isSub2API ? 0 : undefined"
+                  :placeholder="t(balancePlaceholderKey)"
                   class="flex-1"
                   @keydown.enter.prevent="addBalance"
                 />
@@ -186,11 +224,11 @@ onMounted(() => {
                   variant="secondary"
                   size="sm"
                   class="shrink-0"
-                  :disabled="!String(newBalanceInput).trim()"
+                  :disabled="!canAddBalance"
                   @click="addBalance"
                 >
                   <Plus class="h-4 w-4" />
-                  {{ t('admin.dashboard.balanceFilter.add') }}
+                  {{ t(balanceActionKey) }}
                 </Button>
               </div>
             </div>

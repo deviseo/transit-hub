@@ -5,6 +5,7 @@ coverage
 .env
 .env.*
 .sisyphus/
+.playwright-cli/
 .playwright-mcp/
 .codegraph/
 .claude/
