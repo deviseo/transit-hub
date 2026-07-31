@@ -2197,7 +2197,28 @@ export default {
         strategy: 'Strategy & Automation',
         channels: 'Channels & Alerts',
         templates: 'Message Templates',
-        email: 'Email Settings'
+        email: 'Email Settings',
+        system: 'System Upgrade'
+      },
+      upgrade: {
+        title: 'Source Upgrade',
+        statusLabel: 'Current status',
+        action: 'Upgrade now',
+        running: 'Upgrading...',
+        successTitle: 'Upgrade successful',
+        successMessage: 'The source was updated, and the service restarted and passed its health check.',
+        failedTitle: 'Upgrade failed',
+        failedMessage: 'The upgrade stopped. The error output from this run is shown below.',
+        timeout: 'Timed out waiting for the upgrade result. Check the service status.',
+        close: 'Close',
+        reload: 'Reload page',
+        statuses: {
+          idle: 'Ready',
+          starting: 'Starting',
+          running: 'Running',
+          succeeded: 'Last upgrade succeeded',
+          failed: 'Last upgrade failed'
+        }
       },
       sections: {
         basic: {

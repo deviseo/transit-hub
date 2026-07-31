@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail } from 'lucide-vue-next'
+import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail, RefreshCw, ServerCog, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmailTemplatesPanel from '../components/settings/EmailTemplatesPanel.vue'
 import NotificationTemplateEditor from '../components/settings/NotificationTemplateEditor.vue'
+import {
+  getSystemUpgradeStatus,
+  isTransientSystemApiError,
+  startSystemUpgrade,
+} from '../api/system'
+import type { SystemUpgradeStatusResponse } from '../api/system'
 import {
   getNotificationChannelSettings,
   getSmtpSettings,
@@ -21,7 +27,7 @@ import type { NotificationChannel, NotificationChannelSettings, NotificationTemp
 const { t } = useI18n()
 
 // Tab Settings
-const activeTab = ref<'strategy' | 'channels' | 'email'>('strategy')
+const activeTab = ref<'strategy' | 'channels' | 'email' | 'system'>('strategy')
 
 // Save loading states
 const isSavingStrategy = ref(false)
@@ -541,11 +547,138 @@ const testSmtp = async () => {
   }
 }
 
+// === Tab 4: System upgrade ===
+const upgradeStatus = ref<SystemUpgradeStatusResponse>({ state: 'idle' })
+const isStartingUpgrade = ref(false)
+const upgradeResult = ref<{ state: 'succeeded' | 'failed'; message: string; output: string } | null>(null)
+const isUpgradeBusy = computed(() => (
+  isStartingUpgrade.value || upgradeStatus.value.state === 'starting' || upgradeStatus.value.state === 'running'
+))
+const upgradeStatusKey = computed(() => `admin.settings.upgrade.statuses.${upgradeStatus.value.state}`)
+
+let upgradePollTimer: number | undefined
+let upgradePollDeadline = 0
+let currentUpgradeRequestedAt = ''
+
+const clearUpgradePoll = () => {
+  if (upgradePollTimer !== undefined) {
+    window.clearTimeout(upgradePollTimer)
+    upgradePollTimer = undefined
+  }
+}
+
+const localizeUpgradeError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : 'admin.system.errors.request'
+  return message.startsWith('admin.') ? t(message) : message
+}
+
+const scheduleUpgradePoll = (delay = 2000) => {
+  clearUpgradePoll()
+  upgradePollTimer = window.setTimeout(() => { void pollUpgradeStatus() }, delay)
+}
+
+const statusIsOlderThanRequest = (status: SystemUpgradeStatusResponse): boolean => {
+  if (!currentUpgradeRequestedAt || status.state === 'starting' || status.state === 'running') return false
+  if (status.state === 'idle' || !status.startedAt) return true
+  const requestedAt = Date.parse(currentUpgradeRequestedAt)
+  const startedAt = Date.parse(status.startedAt)
+  return Number.isFinite(requestedAt) && Number.isFinite(startedAt) && startedAt < requestedAt
+}
+
+const showUpgradeFailure = (message: string, output = '') => {
+  clearUpgradePoll()
+  upgradeResult.value = { state: 'failed', message, output }
+}
+
+async function pollUpgradeStatus() {
+  try {
+    const status = await getSystemUpgradeStatus()
+    if (statusIsOlderThanRequest(status)) {
+      if (Date.now() < upgradePollDeadline) {
+        scheduleUpgradePoll()
+      } else {
+        showUpgradeFailure(t('admin.settings.upgrade.timeout'))
+      }
+      return
+    }
+
+    upgradeStatus.value = status
+    if (status.state === 'starting' || status.state === 'running') {
+      scheduleUpgradePoll()
+      return
+    }
+    if (status.state === 'succeeded') {
+      clearUpgradePoll()
+      upgradeResult.value = {
+        state: 'succeeded',
+        message: t('admin.settings.upgrade.successMessage'),
+        output: '',
+      }
+      currentUpgradeRequestedAt = ''
+      return
+    }
+    if (status.state === 'failed') {
+      showUpgradeFailure(t('admin.settings.upgrade.failedMessage'), status.output ?? '')
+      currentUpgradeRequestedAt = ''
+    }
+  } catch (error) {
+    if (isTransientSystemApiError(error) && Date.now() < upgradePollDeadline) {
+      scheduleUpgradePoll()
+      return
+    }
+    showUpgradeFailure(localizeUpgradeError(error))
+  }
+}
+
+const beginUpgradePolling = () => {
+  upgradePollDeadline = Date.now() + 20 * 60 * 1000
+  scheduleUpgradePoll(500)
+}
+
+const startUpgrade = async () => {
+  if (isUpgradeBusy.value) return
+  isStartingUpgrade.value = true
+  upgradeResult.value = null
+  try {
+    const response = await startSystemUpgrade()
+    currentUpgradeRequestedAt = response.requestedAt
+    upgradeStatus.value = { state: response.state }
+    beginUpgradePolling()
+  } catch (error) {
+    showUpgradeFailure(localizeUpgradeError(error))
+  } finally {
+    isStartingUpgrade.value = false
+  }
+}
+
+const restoreUpgradeStatus = async () => {
+  try {
+    const status = await getSystemUpgradeStatus()
+    upgradeStatus.value = status
+    if (status.state === 'starting' || status.state === 'running') {
+      beginUpgradePolling()
+    }
+  } catch {
+    upgradeStatus.value = { state: 'idle' }
+  }
+}
+
+const closeUpgradeResult = () => {
+  if (upgradeResult.value?.state === 'succeeded') {
+    window.location.reload()
+    return
+  }
+  upgradeResult.value = null
+}
+
 onMounted(async () => {
   await loadChannels()
   void loadStrategy()
   void loadSmtp()
+  void restoreUpgradeStatus()
 })
+
+onBeforeUnmount(clearUpgradePoll)
 </script>
 
 <template>
@@ -599,6 +732,22 @@ onMounted(async () => {
           <div class="flex items-center gap-2">
             <Mail class="w-4 h-4" />
             {{ t('admin.settings.tabs.email') }}
+          </div>
+        </button>
+        <button
+          id="settings-tab-system"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'system'"
+          aria-controls="settings-panel-system"
+          @click="activeTab = 'system'"
+          class="relative whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:px-6"
+          :class="activeTab === 'system' ? 'text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-surface/50'"
+        >
+          <div v-if="activeTab === 'system'" class="absolute inset-0 -z-10 rounded-md border border-border/50 bg-background shadow-sm"></div>
+          <div class="flex items-center gap-2">
+            <ServerCog class="w-4 h-4" />
+            {{ t('admin.settings.tabs.system') }}
           </div>
         </button>
       </div>
@@ -1189,7 +1338,76 @@ onMounted(async () => {
         </section>
         <EmailTemplatesPanel />
         </div>
+
+        <!-- ============================================ -->
+        <!-- System Upgrade Tab                           -->
+        <!-- ============================================ -->
+        <div v-else id="settings-panel-system" role="tabpanel" aria-labelledby="settings-tab-system">
+          <section class="w-full overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
+            <div class="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex min-w-0 items-center gap-3">
+                <div class="rounded-lg bg-blue-500/10 p-2 text-blue-500">
+                  <ServerCog class="h-5 w-5" />
+                </div>
+                <div class="min-w-0">
+                  <h3 class="text-lg font-semibold text-foreground">{{ t('admin.settings.upgrade.title') }}</h3>
+                  <div class="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                    <span
+                      class="h-2 w-2 rounded-full"
+                      :class="isUpgradeBusy ? 'animate-pulse bg-blue-500' : (upgradeStatus.state === 'failed' ? 'bg-destructive' : (upgradeStatus.state === 'succeeded' ? 'bg-green-500' : 'bg-muted-foreground/50'))"
+                    ></span>
+                    <span>{{ t('admin.settings.upgrade.statusLabel') }}：{{ t(upgradeStatusKey) }}</span>
+                  </div>
+                </div>
+              </div>
+              <Button class="min-w-[132px]" :disabled="isUpgradeBusy" @click="startUpgrade">
+                <Loader2 v-if="isUpgradeBusy" class="mr-2 h-4 w-4 animate-spin" />
+                <RefreshCw v-else class="mr-2 h-4 w-4" />
+                {{ isUpgradeBusy ? t('admin.settings.upgrade.running') : t('admin.settings.upgrade.action') }}
+              </Button>
+            </div>
+          </section>
+        </div>
       </transition>
     </div>
+
+    <Teleport to="body">
+      <div v-if="upgradeResult" class="fixed inset-0 z-[180] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-background/80 backdrop-blur-sm"></div>
+        <div class="relative z-10 w-full max-w-lg overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl" role="dialog" aria-modal="true">
+          <div class="flex items-start justify-between gap-4 border-b border-border/50 px-5 py-4">
+            <div class="flex min-w-0 items-center gap-3">
+              <div
+                class="rounded-lg p-2"
+                :class="upgradeResult.state === 'succeeded' ? 'bg-green-500/10 text-green-500' : 'bg-destructive/10 text-destructive'"
+              >
+                <CheckCircle2 v-if="upgradeResult.state === 'succeeded'" class="h-5 w-5" />
+                <AlertTriangle v-else class="h-5 w-5" />
+              </div>
+              <h3 class="text-base font-semibold text-foreground">
+                {{ upgradeResult.state === 'succeeded' ? t('admin.settings.upgrade.successTitle') : t('admin.settings.upgrade.failedTitle') }}
+              </h3>
+            </div>
+            <button
+              type="button"
+              class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :aria-label="t('admin.settings.upgrade.close')"
+              @click="closeUpgradeResult"
+            >
+              <X class="h-5 w-5" />
+            </button>
+          </div>
+          <div class="space-y-4 px-5 py-5">
+            <p class="text-sm leading-6 text-muted-foreground">{{ upgradeResult.message }}</p>
+            <pre v-if="upgradeResult.output" class="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs leading-5 text-foreground">{{ upgradeResult.output }}</pre>
+            <div class="flex justify-end">
+              <Button @click="closeUpgradeResult">
+                {{ upgradeResult.state === 'succeeded' ? t('admin.settings.upgrade.reload') : t('admin.settings.upgrade.close') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

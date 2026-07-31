@@ -58,6 +58,12 @@ func TestLoadUsesHardcodedAppVersion(t *testing.T) {
 	}
 }
 
+func TestDefaultAppVersionIsV0115B(t *testing.T) {
+	if defaultAppVersion != "V0.1.15B" {
+		t.Fatalf("expected version V0.1.15B, got %q", defaultAppVersion)
+	}
+}
+
 func TestLoadDefaultsLotteryPrivateTargetsToDisabled(t *testing.T) {
 	t.Setenv("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "")
 

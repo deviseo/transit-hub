@@ -17,7 +17,22 @@ const authHeaders = (): HeadersInit => {
 
 type AdminErrorPayload = {
   message?: string
+  output?: string
 }
+
+class SystemApiError extends Error {
+  readonly transient: boolean
+
+  constructor(message: string, transient = false) {
+    super(message)
+    this.name = 'SystemApiError'
+    this.transient = transient
+  }
+}
+
+export const isTransientSystemApiError = (error: unknown): boolean => (
+  error instanceof SystemApiError && error.transient
+)
 
 const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   let response: Response
@@ -32,18 +47,29 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
       },
     })
   } catch (error) {
-    throw new Error('admin.system.errors.network')
+    throw new SystemApiError('admin.system.errors.network', true)
   }
 
   const text = await response.text()
-  const payload = text ? JSON.parse(text) as T & AdminErrorPayload : ({} as T & AdminErrorPayload)
+  let payload = {} as T & AdminErrorPayload
+  if (text) {
+    try {
+      payload = JSON.parse(text) as T & AdminErrorPayload
+    } catch {
+      throw new SystemApiError(
+        response.ok ? 'admin.system.errors.request' : 'admin.system.errors.network',
+        response.status === 502 || response.status === 503 || response.status === 504,
+      )
+    }
+  }
 
   if (!response.ok) {
     if (isUnauthorizedApiResponse(response.status, payload)) {
       handleAuthExpired()
       throw new Error(authUnauthorizedErrorKey)
     }
-    throw new Error(payload.message ?? 'admin.system.errors.request')
+    const message = [payload.message, payload.output].filter(Boolean).join('\n') || 'admin.system.errors.request'
+    throw new SystemApiError(message, response.status === 502 || response.status === 503 || response.status === 504)
   }
 
   return payload
@@ -55,4 +81,27 @@ export interface SystemVersionResponse {
 
 export const getSystemVersion = async (): Promise<SystemVersionResponse> => (
   requestJson<SystemVersionResponse>('/system/version')
+)
+
+export type SystemUpgradeState = 'idle' | 'starting' | 'running' | 'succeeded' | 'failed'
+
+export interface SystemUpgradeStartResponse {
+  state: 'starting'
+  requestedAt: string
+}
+
+export interface SystemUpgradeStatusResponse {
+  state: SystemUpgradeState
+  startedAt?: string
+  finishedAt?: string
+  exitCode?: number
+  output?: string
+}
+
+export const startSystemUpgrade = async (): Promise<SystemUpgradeStartResponse> => (
+  requestJson<SystemUpgradeStartResponse>('/system/upgrade', { method: 'POST' })
+)
+
+export const getSystemUpgradeStatus = async (): Promise<SystemUpgradeStatusResponse> => (
+  requestJson<SystemUpgradeStatusResponse>('/system/upgrade')
 )
