@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2 } from 'lucide-vue-next'
+import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, ArrowUpDown, ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -24,6 +24,10 @@ let countdownTimer: ReturnType<typeof window.setInterval> | null = null
 const nextRefreshAtStorageKey = 'transit-hub:upstream-next-refresh-at'
 
 const viewMode = ref<'card' | 'list'>('card')
+type UpstreamSortField = 'balance' | 'todayConsume' | 'historyRecharge'
+type UpstreamSortDirection = 'asc' | 'desc'
+const sortField = ref<UpstreamSortField>('todayConsume')
+const sortDirection = ref<UpstreamSortDirection>('desc')
 
 const countdownDisplay = computed(() => {
   if (!refreshIntervalSeconds.value) return t('admin.upstream.refresh.disabled')
@@ -175,6 +179,49 @@ const filteredSites = computed(() => {
   )
 })
 
+const metricCnyValue = (site: UpstreamSite, field: UpstreamSortField): number | null => {
+  const metric = site.metrics[field]
+  if (metric.value === null || !Number.isFinite(metric.value) || site.rechargeRate <= 0 || !Number.isFinite(site.rechargeRate)) return null
+  const value = metric.value * site.rechargeRate
+  return Number.isFinite(value) ? value : null
+}
+
+const compareSitesByName = (first: UpstreamSite, second: UpstreamSite): number => {
+  const nameDiff = first.name.localeCompare(second.name)
+  if (nameDiff !== 0) return nameDiff
+  return first.id.localeCompare(second.id)
+}
+
+const sortedSites = computed(() => (
+  [...filteredSites.value].sort((first, second) => {
+    const firstValue = metricCnyValue(first, sortField.value)
+    const secondValue = metricCnyValue(second, sortField.value)
+
+    if (firstValue === null || secondValue === null) {
+      if (firstValue === null && secondValue === null) return compareSitesByName(first, second)
+      return firstValue === null ? 1 : -1
+    }
+
+    const diff = sortDirection.value === 'asc' ? firstValue - secondValue : secondValue - firstValue
+    if (diff !== 0) return diff
+    return compareSitesByName(first, second)
+  })
+))
+
+const toggleSort = (field: UpstreamSortField) => {
+  if (sortField.value === field) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortField.value = field
+  sortDirection.value = 'desc'
+}
+
+const ariaSort = (field: UpstreamSortField): 'ascending' | 'descending' | 'none' => {
+  if (sortField.value !== field) return 'none'
+  return sortDirection.value === 'asc' ? 'ascending' : 'descending'
+}
+
 const statusClasses: Record<UpstreamStatus, string> = {
   connecting: 'bg-primary/10 text-primary border-primary/20',
   syncing: 'bg-warning/10 text-warning border-warning/20',
@@ -323,7 +370,7 @@ onBeforeUnmount(() => {
     <!-- Cards Grid -->
     <div v-if="viewMode === 'card'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
       <div
-        v-for="site in filteredSites"
+        v-for="site in sortedSites"
         :key="site.id"
         class="group relative bg-card border border-border/60 rounded-2xl p-5 hover:border-primary/50 transition-colors shadow-sm hover:shadow-md"
       >
@@ -486,14 +533,35 @@ onBeforeUnmount(() => {
               <th class="px-6 py-4 font-medium">{{ t('admin.upstream.fields.siteName') }}</th>
               <th class="px-6 py-4 font-medium">{{ t('admin.upstream.fields.platform') }}</th>
               <th class="px-6 py-4 font-medium">{{ t('admin.upstream.status.connected') }}</th>
-              <th class="px-6 py-4 font-medium">{{ t('admin.upstream.fields.balance') }}</th>
-              <th class="px-6 py-4 font-medium">{{ t('admin.upstream.fields.todayConsume') }}</th>
-              <th class="px-6 py-4 font-medium">{{ t('admin.upstream.fields.historyRecharge') }}</th>
+              <th class="px-6 py-4 font-medium" :aria-sort="ariaSort('balance')">
+                <button type="button" class="inline-flex items-center gap-1 font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary" @click="toggleSort('balance')">
+                  {{ t('admin.upstream.fields.balance') }}
+                  <ChevronUp v-if="sortField === 'balance' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="sortField === 'balance'" class="h-3.5 w-3.5" />
+                  <ArrowUpDown v-else class="h-3.5 w-3.5 opacity-60" />
+                </button>
+              </th>
+              <th class="px-6 py-4 font-medium" :aria-sort="ariaSort('todayConsume')">
+                <button type="button" class="inline-flex items-center gap-1 font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary" @click="toggleSort('todayConsume')">
+                  {{ t('admin.upstream.fields.todayConsume') }}
+                  <ChevronUp v-if="sortField === 'todayConsume' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="sortField === 'todayConsume'" class="h-3.5 w-3.5" />
+                  <ArrowUpDown v-else class="h-3.5 w-3.5 opacity-60" />
+                </button>
+              </th>
+              <th class="px-6 py-4 font-medium" :aria-sort="ariaSort('historyRecharge')">
+                <button type="button" class="inline-flex items-center gap-1 font-medium outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary" @click="toggleSort('historyRecharge')">
+                  {{ t('admin.upstream.fields.historyRecharge') }}
+                  <ChevronUp v-if="sortField === 'historyRecharge' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="sortField === 'historyRecharge'" class="h-3.5 w-3.5" />
+                  <ArrowUpDown v-else class="h-3.5 w-3.5 opacity-60" />
+                </button>
+              </th>
               <th class="px-6 py-4 font-medium text-right">{{ t('admin.upstream.action.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border/40">
-            <tr v-for="site in filteredSites" :key="site.id" class="hover:bg-surface/30 transition-colors">
+            <tr v-for="site in sortedSites" :key="site.id" class="hover:bg-surface/30 transition-colors">
               <td class="px-6 py-4">
                 <div class="flex items-center gap-3">
                   <div :class="['w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0', site.logoBg]">
@@ -614,7 +682,7 @@ onBeforeUnmount(() => {
                 </div>
               </td>
             </tr>
-            <tr v-if="filteredSites.length === 0">
+            <tr v-if="sortedSites.length === 0">
               <td colspan="7" class="px-6 py-12 text-center text-muted-foreground">
                 {{ t('admin.upstream.empty.description') }}
               </td>
@@ -625,7 +693,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Empty State -->
-    <div v-if="filteredSites.length === 0" class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/60 rounded-2xl bg-surface/30">
+    <div v-if="sortedSites.length === 0" class="flex flex-col items-center justify-center py-12 text-center border border-dashed border-border/60 rounded-2xl bg-surface/30">
       <div class="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-4">
         <Search class="w-6 h-6 text-muted-foreground" />
       </div>
