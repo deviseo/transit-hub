@@ -7,6 +7,10 @@ After=network-online.target docker.service
 Type=oneshot
 WorkingDirectory=/opt/transithub
 Environment=PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=HOME=/root
+Environment=GOPATH=/root/go
+Environment=GOMODCACHE=/root/go/pkg/mod
+Environment=GOCACHE=/root/.cache/go-build
 ExecStart=/opt/transithub/run-source-upgrade.sh
 TimeoutStartSec=infinity
 StandardOutput=journal

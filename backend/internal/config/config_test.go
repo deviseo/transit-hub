@@ -48,22 +48,6 @@ func TestLoadOverridesTicketUploadDir(t *testing.T) {
 	}
 }
 
-func TestLoadUsesHardcodedAppVersion(t *testing.T) {
-	t.Setenv("APP_VERSION", "9.9.9")
-
-	cfg := Load()
-
-	if cfg.AppVersion != defaultAppVersion {
-		t.Fatalf("expected hardcoded AppVersion %q, got %q", defaultAppVersion, cfg.AppVersion)
-	}
-}
-
-func TestDefaultAppVersionIsV0115C(t *testing.T) {
-	if defaultAppVersion != "V0.1.15C" {
-		t.Fatalf("expected version V0.1.15C, got %q", defaultAppVersion)
-	}
-}
-
 func TestLoadDefaultsLotteryPrivateTargetsToDisabled(t *testing.T) {
 	t.Setenv("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "")
 

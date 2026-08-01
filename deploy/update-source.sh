@@ -25,6 +25,32 @@ print_service_diagnostics() {
     sudo journalctl -u "$SERVICE" -n 100 --no-pager >&2 || true
 }
 
+prepare_go_environment() {
+    export HOME="${HOME:-/root}"
+    export GOPATH="${GOPATH:-$HOME/go}"
+    export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
+    export GOCACHE="${GOCACHE:-$HOME/.cache/go-build}"
+    install -d -m 0755 "$GOPATH" "$GOMODCACHE" "$GOCACHE"
+}
+
+wait_for_health() {
+    local attempts=60
+    local attempt
+    local health_response
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if health_response="$(curl -fsS "$HEALTH_URL" 2>/dev/null)"; then
+            if printf '%s' "$health_response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+                printf '%s\n' "$health_response"
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    printf '升级失败：健康接口在 %s 秒内未返回 status=ok。\n' "$attempts" >&2
+    return 1
+}
+
 cleanup() {
     sudo docker exec "$POSTGRES_CONTAINER" rm -f "$CONTAINER_BACKUP" >/dev/null 2>&1 || true
     sudo rm -f "$BACKUP_NEXT" >/dev/null 2>&1 || true
@@ -64,6 +90,7 @@ npm ci --registry=https://registry.npmmirror.com
 npm run build
 
 cd "$PROJECT_DIR/backend"
+prepare_go_environment
 GOPROXY=https://goproxy.cn,direct CGO_ENABLED=0 go build \
     -o "$PROJECT_DIR/transithub-api.next" \
     ./cmd/api
@@ -73,13 +100,8 @@ mv -f "$PROJECT_DIR/transithub-api.next" "$PROJECT_DIR/transithub-api"
 sudo systemctl restart "$SERVICE"
 sudo systemctl is-active --quiet "$SERVICE"
 
-health_response="$(curl -fsS "$HEALTH_URL")"
+health_response="$(wait_for_health)"
 printf '%s\n' "$health_response"
-if ! printf '%s' "$health_response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
-    printf '升级失败：健康接口未返回 status=ok。\n' >&2
-    print_service_diagnostics
-    exit 1
-fi
 
 sudo journalctl -u "$SERVICE" -n 100 --no-pager
 printf '升级成功：源码已更新，服务已重启并通过健康检查。\n'
