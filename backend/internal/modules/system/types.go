@@ -30,3 +30,28 @@ type UpgradeStatusResponse struct {
 	ExitCode   *int         `json:"exitCode,omitempty"`
 	Output     string       `json:"output,omitempty"`
 }
+
+type RestartState string
+
+const (
+	RestartStateIdle      RestartState = "idle"
+	RestartStateStarting  RestartState = "starting"
+	RestartStateRunning   RestartState = "running"
+	RestartStateSucceeded RestartState = "succeeded"
+	RestartStateFailed    RestartState = "failed"
+)
+
+// RestartStartResponse POST /api/system/restart 响应。
+type RestartStartResponse struct {
+	State       RestartState `json:"state"`
+	RequestedAt string       `json:"requestedAt"`
+}
+
+// RestartStatusResponse GET /api/system/restart 响应。
+type RestartStatusResponse struct {
+	State      RestartState `json:"state"`
+	StartedAt  string       `json:"startedAt,omitempty"`
+	FinishedAt string       `json:"finishedAt,omitempty"`
+	ExitCode   *int         `json:"exitCode,omitempty"`
+	Output     string       `json:"output,omitempty"`
+}

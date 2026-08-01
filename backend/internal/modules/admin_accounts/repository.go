@@ -162,9 +162,14 @@ func (r *Repository) createLegacyAccountsForTable(ctx context.Context, table wor
 	if err != nil || !exists {
 		return err
 	}
-	_, err = r.db.Exec(ctx, fmt.Sprintf(`
+	_, err = r.db.Exec(ctx, createLegacyAccountsForTableSQL(table))
+	return err
+}
+
+func createLegacyAccountsForTableSQL(table workspaceTableDescriptor) string {
+	return fmt.Sprintf(`
 		WITH scoped_users AS (
-			SELECT DISTINCT user_id FROM %s WHERE user_id <> ''
+			SELECT DISTINCT user_id FROM %s WHERE user_id <> '' AND %s = ''
 		), legacy AS (
 			SELECT users.id AS user_id, 'adminacct_' || encode(sha256(convert_to(users.id || '|legacy||legacy', 'UTF8')), 'hex') AS account_id
 			FROM users JOIN scoped_users ON scoped_users.user_id = users.id
@@ -172,8 +177,7 @@ func (r *Repository) createLegacyAccountsForTable(ctx context.Context, table wor
 		INSERT INTO admin_accounts (id, user_id, platform, base_url, identity, display_name, auth_method, last_used_at, created_at, updated_at)
 		SELECT account_id, user_id, 'legacy', '', 'legacy', 'Legacy workspace', 'legacy', now(), now(), now() FROM legacy
 		ON CONFLICT (user_id, platform, base_url, identity) DO UPDATE SET updated_at = EXCLUDED.updated_at
-	`, table.Name))
-	return err
+	`, table.Name, table.WorkspaceColumn)
 }
 
 // assignLegacyRows 将 admin_account_id 为空的旧业务行归属到用户的第一个工作区（legacy workspace）。

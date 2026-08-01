@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail, RefreshCw, ServerCog, X } from 'lucide-vue-next'
+import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail, RefreshCw, ServerCog, Power, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmailTemplatesPanel from '../components/settings/EmailTemplatesPanel.vue'
 import NotificationTemplateEditor from '../components/settings/NotificationTemplateEditor.vue'
 import {
+  getSystemRestartStatus,
   getSystemUpgradeStatus,
   isTransientSystemApiError,
+  startSystemRestart,
   startSystemUpgrade,
 } from '../api/system'
-import type { SystemUpgradeStatusResponse } from '../api/system'
+import type { SystemRestartStatusResponse, SystemUpgradeStatusResponse } from '../api/system'
 import {
   getNotificationChannelSettings,
   getSmtpSettings,
@@ -567,7 +569,7 @@ const clearUpgradePoll = () => {
   }
 }
 
-const localizeUpgradeError = (error: unknown): string => {
+const localizeSystemError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : 'admin.system.errors.request'
   return message.startsWith('admin.') ? t(message) : message
 }
@@ -626,7 +628,7 @@ async function pollUpgradeStatus() {
       scheduleUpgradePoll()
       return
     }
-    showUpgradeFailure(localizeUpgradeError(error))
+    showUpgradeFailure(localizeSystemError(error))
   }
 }
 
@@ -636,7 +638,7 @@ const beginUpgradePolling = () => {
 }
 
 const startUpgrade = async () => {
-  if (isUpgradeBusy.value) return
+  if (isUpgradeBusy.value || isRestartBusy.value) return
   isStartingUpgrade.value = true
   upgradeResult.value = null
   try {
@@ -645,7 +647,7 @@ const startUpgrade = async () => {
     upgradeStatus.value = { state: response.state }
     beginUpgradePolling()
   } catch (error) {
-    showUpgradeFailure(localizeUpgradeError(error))
+    showUpgradeFailure(localizeSystemError(error))
   } finally {
     isStartingUpgrade.value = false
   }
@@ -671,14 +673,159 @@ const closeUpgradeResult = () => {
   upgradeResult.value = null
 }
 
+// === Manual backend service restart ===
+const restartStatus = ref<SystemRestartStatusResponse>({ state: 'idle' })
+const isStartingRestart = ref(false)
+const isRestartConfirmOpen = ref(false)
+const restartResult = ref<{ state: 'succeeded' | 'failed'; message: string; output: string } | null>(null)
+const isRestartBusy = computed(() => (
+  isStartingRestart.value || restartStatus.value.state === 'starting' || restartStatus.value.state === 'running'
+))
+const restartStatusKey = computed(() => `admin.settings.restart.statuses.${restartStatus.value.state}`)
+
+let restartPollTimer: number | undefined
+let restartPollDeadline = 0
+let currentRestartRequestedAt = ''
+
+const clearRestartPoll = () => {
+  if (restartPollTimer !== undefined) {
+    window.clearTimeout(restartPollTimer)
+    restartPollTimer = undefined
+  }
+}
+
+const scheduleRestartPoll = (delay = 2000) => {
+  clearRestartPoll()
+  restartPollTimer = window.setTimeout(() => { void pollRestartStatus() }, delay)
+}
+
+const restartStatusIsOlderThanRequest = (status: SystemRestartStatusResponse): boolean => {
+  if (!currentRestartRequestedAt || status.state === 'starting' || status.state === 'running') return false
+  if (status.state === 'idle' || !status.startedAt) return true
+  const requestedAt = Date.parse(currentRestartRequestedAt)
+  const startedAt = Date.parse(status.startedAt)
+  return Number.isFinite(requestedAt) && Number.isFinite(startedAt) && startedAt < requestedAt
+}
+
+const showRestartFailure = (message: string, output = '') => {
+  clearRestartPoll()
+  restartResult.value = { state: 'failed', message, output }
+}
+
+const showRestartClientFailure = (message: string) => {
+  restartStatus.value = { state: 'idle' }
+  currentRestartRequestedAt = ''
+  showRestartFailure(message)
+}
+
+async function pollRestartStatus() {
+  try {
+    const status = await getSystemRestartStatus()
+    if (restartStatusIsOlderThanRequest(status)) {
+      if (Date.now() < restartPollDeadline) {
+        scheduleRestartPoll()
+      } else {
+        showRestartClientFailure(t('admin.settings.restart.timeout'))
+      }
+      return
+    }
+
+    restartStatus.value = status
+    if (status.state === 'starting' || status.state === 'running') {
+      scheduleRestartPoll()
+      return
+    }
+    if (status.state === 'succeeded') {
+      clearRestartPoll()
+      restartResult.value = {
+        state: 'succeeded',
+        message: t('admin.settings.restart.successMessage'),
+        output: '',
+      }
+      currentRestartRequestedAt = ''
+      return
+    }
+    if (status.state === 'failed') {
+      showRestartFailure(t('admin.settings.restart.failedMessage'), status.output ?? '')
+      currentRestartRequestedAt = ''
+    }
+  } catch (error) {
+    if (isTransientSystemApiError(error) && Date.now() < restartPollDeadline) {
+      scheduleRestartPoll()
+      return
+    }
+    showRestartClientFailure(localizeSystemError(error))
+  }
+}
+
+const beginRestartPolling = () => {
+  restartPollDeadline = Date.now() + 90 * 1000
+  scheduleRestartPoll(500)
+}
+
+const openRestartConfirm = () => {
+  if (isRestartBusy.value || isUpgradeBusy.value) return
+  isRestartConfirmOpen.value = true
+}
+
+const closeRestartConfirm = () => {
+  if (isStartingRestart.value) return
+  isRestartConfirmOpen.value = false
+}
+
+const startRestart = async () => {
+  if (isRestartBusy.value || isUpgradeBusy.value) return
+  isRestartConfirmOpen.value = false
+  isStartingRestart.value = true
+  restartResult.value = null
+  currentRestartRequestedAt = new Date().toISOString()
+  restartStatus.value = { state: 'starting' }
+  beginRestartPolling()
+  try {
+    const response = await startSystemRestart()
+    currentRestartRequestedAt = response.requestedAt
+    restartStatus.value = { state: response.state }
+  } catch (error) {
+    if (!isTransientSystemApiError(error)) {
+      showRestartClientFailure(localizeSystemError(error))
+    }
+  } finally {
+    isStartingRestart.value = false
+  }
+}
+
+const restoreRestartStatus = async () => {
+  try {
+    const status = await getSystemRestartStatus()
+    restartStatus.value = status
+    if (status.state === 'starting' || status.state === 'running') {
+      beginRestartPolling()
+    }
+  } catch {
+    restartStatus.value = { state: 'idle' }
+  }
+}
+
+const closeRestartResult = () => {
+  if (restartResult.value?.state === 'succeeded') {
+    window.location.reload()
+    return
+  }
+  restartResult.value = null
+}
+
 onMounted(async () => {
   await loadChannels()
   void loadStrategy()
   void loadSmtp()
   void restoreUpgradeStatus()
+  void restoreRestartStatus()
 })
 
-onBeforeUnmount(clearUpgradePoll)
+onBeforeUnmount(() => {
+  clearUpgradePoll()
+  clearRestartPoll()
+})
 </script>
 
 <template>
@@ -1342,7 +1489,7 @@ onBeforeUnmount(clearUpgradePoll)
         <!-- ============================================ -->
         <!-- System Upgrade Tab                           -->
         <!-- ============================================ -->
-        <div v-else id="settings-panel-system" role="tabpanel" aria-labelledby="settings-tab-system">
+        <div v-else id="settings-panel-system" class="space-y-4" role="tabpanel" aria-labelledby="settings-tab-system">
           <section class="w-full overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
             <div class="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
               <div class="flex min-w-0 items-center gap-3">
@@ -1360,16 +1507,75 @@ onBeforeUnmount(clearUpgradePoll)
                   </div>
                 </div>
               </div>
-              <Button class="min-w-[132px]" :disabled="isUpgradeBusy" @click="startUpgrade">
+              <Button class="min-w-[156px]" :disabled="isUpgradeBusy || isRestartBusy" @click="startUpgrade">
                 <Loader2 v-if="isUpgradeBusy" class="mr-2 h-4 w-4 animate-spin" />
                 <RefreshCw v-else class="mr-2 h-4 w-4" />
                 {{ isUpgradeBusy ? t('admin.settings.upgrade.running') : t('admin.settings.upgrade.action') }}
               </Button>
             </div>
           </section>
+
+          <section class="w-full overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
+            <div class="flex flex-col gap-5 p-6 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex min-w-0 items-center gap-3">
+                <div class="rounded-lg bg-blue-500/10 p-2 text-blue-500">
+                  <Power class="h-5 w-5" />
+                </div>
+                <div class="min-w-0">
+                  <h3 class="text-lg font-semibold text-foreground">{{ t('admin.settings.restart.title') }}</h3>
+                  <div class="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+                    <span
+                      class="h-2 w-2 rounded-full"
+                      :class="isRestartBusy ? 'animate-pulse bg-blue-500' : (restartStatus.state === 'failed' ? 'bg-destructive' : (restartStatus.state === 'succeeded' ? 'bg-green-500' : 'bg-muted-foreground/50'))"
+                    ></span>
+                    <span>{{ t('admin.settings.restart.statusLabel') }}：{{ t(restartStatusKey) }}</span>
+                  </div>
+                </div>
+              </div>
+              <Button class="min-w-[156px]" :disabled="isRestartBusy || isUpgradeBusy" @click="openRestartConfirm">
+                <Loader2 v-if="isRestartBusy" class="mr-2 h-4 w-4 animate-spin" />
+                <Power v-else class="mr-2 h-4 w-4" />
+                {{ isRestartBusy ? t('admin.settings.restart.running') : t('admin.settings.restart.action') }}
+              </Button>
+            </div>
+          </section>
         </div>
       </transition>
     </div>
+
+    <Teleport to="body">
+      <div v-if="isRestartConfirmOpen" class="fixed inset-0 z-[180] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-background/80 backdrop-blur-sm"></div>
+        <div
+          class="relative z-10 w-full max-w-lg overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="restart-confirm-title"
+        >
+          <div class="flex items-start gap-3 border-b border-border/50 px-5 py-4">
+            <div class="rounded-lg bg-destructive/10 p-2 text-destructive">
+              <AlertTriangle class="h-5 w-5" />
+            </div>
+            <h3 id="restart-confirm-title" class="pt-1 text-base font-semibold text-foreground">
+              {{ t('admin.settings.restart.confirmTitle') }}
+            </h3>
+          </div>
+          <div class="space-y-5 px-5 py-5">
+            <p class="text-sm leading-6 text-muted-foreground">{{ t('admin.settings.restart.confirmMessage') }}</p>
+            <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="secondary" :disabled="isStartingRestart" @click="closeRestartConfirm">
+                {{ t('admin.settings.restart.cancel') }}
+              </Button>
+              <Button :disabled="isStartingRestart" @click="startRestart">
+                <Loader2 v-if="isStartingRestart" class="mr-2 h-4 w-4 animate-spin" />
+                <Power v-else class="mr-2 h-4 w-4" />
+                {{ t('admin.settings.restart.confirm') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="upgradeResult" class="fixed inset-0 z-[180] flex items-center justify-center p-4">
@@ -1403,6 +1609,45 @@ onBeforeUnmount(clearUpgradePoll)
             <div class="flex justify-end">
               <Button @click="closeUpgradeResult">
                 {{ upgradeResult.state === 'succeeded' ? t('admin.settings.upgrade.reload') : t('admin.settings.upgrade.close') }}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="restartResult" class="fixed inset-0 z-[180] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-background/80 backdrop-blur-sm"></div>
+        <div class="relative z-10 w-full max-w-lg overflow-hidden rounded-xl border border-border/60 bg-card shadow-2xl" role="dialog" aria-modal="true">
+          <div class="flex items-start justify-between gap-4 border-b border-border/50 px-5 py-4">
+            <div class="flex min-w-0 items-center gap-3">
+              <div
+                class="rounded-lg p-2"
+                :class="restartResult.state === 'succeeded' ? 'bg-green-500/10 text-green-500' : 'bg-destructive/10 text-destructive'"
+              >
+                <CheckCircle2 v-if="restartResult.state === 'succeeded'" class="h-5 w-5" />
+                <AlertTriangle v-else class="h-5 w-5" />
+              </div>
+              <h3 class="text-base font-semibold text-foreground">
+                {{ restartResult.state === 'succeeded' ? t('admin.settings.restart.successTitle') : t('admin.settings.restart.failedTitle') }}
+              </h3>
+            </div>
+            <button
+              type="button"
+              class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :aria-label="t('admin.settings.restart.close')"
+              @click="closeRestartResult"
+            >
+              <X class="h-5 w-5" />
+            </button>
+          </div>
+          <div class="space-y-4 px-5 py-5">
+            <p class="text-sm leading-6 text-muted-foreground">{{ restartResult.message }}</p>
+            <pre v-if="restartResult.output" class="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs leading-5 text-foreground">{{ restartResult.output }}</pre>
+            <div class="flex justify-end">
+              <Button @click="closeRestartResult">
+                {{ restartResult.state === 'succeeded' ? t('admin.settings.restart.reload') : t('admin.settings.restart.close') }}
               </Button>
             </div>
           </div>

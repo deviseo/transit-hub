@@ -21,6 +21,11 @@ type fakeUpgradeExecutor struct {
 	startCalls int
 }
 
+func newUpgradeTestService(executor UpgradeExecutor) *Service {
+	restartExecutor := &fakeRestartExecutor{status: RestartStatusResponse{State: RestartStateIdle}}
+	return newServiceWithExecutors(config.Config{}, executor, restartExecutor)
+}
+
 func (f *fakeUpgradeExecutor) Start(context.Context) error {
 	f.startCalls++
 	return f.startErr
@@ -32,7 +37,7 @@ func (f *fakeUpgradeExecutor) Status(context.Context) (UpgradeStatusResponse, er
 
 func TestStartUpgradeStartsFixedExecutor(t *testing.T) {
 	executor := &fakeUpgradeExecutor{status: UpgradeStatusResponse{State: UpgradeStateIdle}}
-	service := newServiceWithUpgradeExecutor(config.Config{}, executor)
+	service := newUpgradeTestService(executor)
 
 	response, err := service.StartUpgrade(context.Background())
 	if err != nil {
@@ -48,7 +53,7 @@ func TestStartUpgradeStartsFixedExecutor(t *testing.T) {
 
 func TestStartUpgradeRejectsRunningUpgrade(t *testing.T) {
 	executor := &fakeUpgradeExecutor{status: UpgradeStatusResponse{State: UpgradeStateRunning}}
-	service := newServiceWithUpgradeExecutor(config.Config{}, executor)
+	service := newUpgradeTestService(executor)
 
 	_, err := service.StartUpgrade(context.Background())
 	if !errors.Is(err, ErrUpgradeInProgress) {
@@ -56,6 +61,20 @@ func TestStartUpgradeRejectsRunningUpgrade(t *testing.T) {
 	}
 	if executor.startCalls != 0 {
 		t.Fatalf("executor must not start while running, got %d calls", executor.startCalls)
+	}
+}
+
+func TestStartUpgradeRejectsRunningRestart(t *testing.T) {
+	upgradeExecutor := &fakeUpgradeExecutor{status: UpgradeStatusResponse{State: UpgradeStateIdle}}
+	restartExecutor := &fakeRestartExecutor{status: RestartStatusResponse{State: RestartStateRunning}}
+	service := newServiceWithExecutors(config.Config{}, upgradeExecutor, restartExecutor)
+
+	_, err := service.StartUpgrade(context.Background())
+	if !errors.Is(err, ErrRestartInProgress) {
+		t.Fatalf("expected ErrRestartInProgress, got %v", err)
+	}
+	if upgradeExecutor.startCalls != 0 {
+		t.Fatalf("upgrade must not start during restart, got %d calls", upgradeExecutor.startCalls)
 	}
 }
 
@@ -124,7 +143,7 @@ func TestSystemdUpgradeExecutorReturnsIdleWhenStatusDoesNotExist(t *testing.T) {
 
 func TestUpgradeHandlerStartsAndReturnsStatus(t *testing.T) {
 	executor := &fakeUpgradeExecutor{status: UpgradeStatusResponse{State: UpgradeStateIdle}}
-	service := newServiceWithUpgradeExecutor(config.Config{}, executor)
+	service := newUpgradeTestService(executor)
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, service)
 
@@ -158,7 +177,7 @@ func TestUpgradeHandlerStartsAndReturnsStatus(t *testing.T) {
 
 func TestUpgradeHandlerReturnsConflictWhileRunning(t *testing.T) {
 	executor := &fakeUpgradeExecutor{status: UpgradeStatusResponse{State: UpgradeStateRunning}}
-	service := newServiceWithUpgradeExecutor(config.Config{}, executor)
+	service := newUpgradeTestService(executor)
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, service)
 
@@ -174,7 +193,7 @@ func TestUpgradeHandlerReturnsExecutorFailureReason(t *testing.T) {
 		status:   UpgradeStatusResponse{State: UpgradeStateIdle},
 		startErr: errors.New("access denied by systemd"),
 	}
-	service := newServiceWithUpgradeExecutor(config.Config{}, executor)
+	service := newUpgradeTestService(executor)
 	mux := http.NewServeMux()
 	RegisterRoutes(mux, service)
 

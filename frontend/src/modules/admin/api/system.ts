@@ -105,3 +105,26 @@ export const startSystemUpgrade = async (): Promise<SystemUpgradeStartResponse> 
 export const getSystemUpgradeStatus = async (): Promise<SystemUpgradeStatusResponse> => (
   requestJson<SystemUpgradeStatusResponse>('/system/upgrade')
 )
+
+export type SystemRestartState = 'idle' | 'starting' | 'running' | 'succeeded' | 'failed'
+
+export interface SystemRestartStartResponse {
+  state: 'starting'
+  requestedAt: string
+}
+
+export interface SystemRestartStatusResponse {
+  state: SystemRestartState
+  startedAt?: string
+  finishedAt?: string
+  exitCode?: number
+  output?: string
+}
+
+export const startSystemRestart = async (): Promise<SystemRestartStartResponse> => (
+  requestJson<SystemRestartStartResponse>('/system/restart', { method: 'POST' })
+)
+
+export const getSystemRestartStatus = async (): Promise<SystemRestartStatusResponse> => (
+  requestJson<SystemRestartStatusResponse>('/system/restart')
+)

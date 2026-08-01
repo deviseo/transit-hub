@@ -1,0 +1,13 @@
+[Unit]
+Description=TransitHub fixed backend service restart
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/transithub
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/transithub/run-service-restart.sh
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal

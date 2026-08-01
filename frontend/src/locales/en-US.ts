@@ -2221,6 +2221,30 @@ export default {
           failed: 'Last upgrade failed'
         }
       },
+      restart: {
+        title: 'Backend Service',
+        statusLabel: 'Current status',
+        action: 'Restart backend',
+        running: 'Restarting...',
+        confirmTitle: 'Restart backend service?',
+        confirmMessage: 'The page and API will be briefly unavailable. This only restarts the TransitHub backend service; PostgreSQL, Redis, and Sub2API are not restarted.',
+        cancel: 'Cancel',
+        confirm: 'Restart',
+        successTitle: 'Restart successful',
+        successMessage: 'The backend service recovered and passed its health check.',
+        failedTitle: 'Restart failed',
+        failedMessage: 'The backend service did not recover. The error output from this run is shown below.',
+        timeout: 'Timed out waiting for the backend service to recover. Check the server status.',
+        close: 'Close',
+        reload: 'Reload page',
+        statuses: {
+          idle: 'Ready',
+          starting: 'Starting',
+          running: 'Restarting',
+          succeeded: 'Last restart succeeded',
+          failed: 'Last restart failed'
+        }
+      },
       sections: {
         basic: {
           title: 'Basic Settings',

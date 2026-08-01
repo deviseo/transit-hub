@@ -48,6 +48,50 @@ func TestSourceUpgradeWaitsForHealthAfterRestart(t *testing.T) {
 	requireTextNotContains(t, script, `health_response="$(curl -fsS "$HEALTH_URL")"`)
 }
 
+func TestServiceRestartUsesFixedSystemdUnitAndHealthContract(t *testing.T) {
+	unit := readProjectFileForUpgradeTest(t, "deploy/transithub-restart.service")
+	for _, want := range []string{
+		"Type=oneshot",
+		"WorkingDirectory=/opt/transithub",
+		"ExecStart=/opt/transithub/run-service-restart.sh",
+		"TimeoutStartSec=120",
+	} {
+		requireTextContains(t, unit, want)
+	}
+
+	script := readProjectFileForUpgradeTest(t, "deploy/run-service-restart.sh")
+	for _, want := range []string{
+		"SERVICE='transithub-api.service'",
+		"HEALTH_URL='http://127.0.0.1:10621/api/health'",
+		"HEALTH_TIMEOUT_SECONDS=60",
+		"LOCK_FILE='/run/lock/transithub-maintenance.lock'",
+		`systemctl restart "$SERVICE"`,
+		`systemctl is-active --quiet "$SERVICE"`,
+		`>>"$LOG_FILE" 2>&1`,
+		`systemctl status "$SERVICE" --no-pager -l`,
+		`journalctl -u "$SERVICE" -n 50 --no-pager`,
+		`health_response="$(curl -fsS --max-time 2 "$HEALTH_URL" 2>&1)"`,
+		"最后一次健康检查输出",
+		"sleep 1",
+		"restart-status.json",
+		"restart.log",
+		"flock -n 9",
+	} {
+		requireTextContains(t, script, want)
+	}
+}
+
+func TestSourceUpgradeAndServiceRestartShareMaintenanceLock(t *testing.T) {
+	upgradeScript := readProjectFileForUpgradeTest(t, "deploy/run-source-upgrade.sh")
+	restartScript := readProjectFileForUpgradeTest(t, "deploy/run-service-restart.sh")
+	for _, script := range []string{upgradeScript, restartScript} {
+		requireTextContains(t, script, "LOCK_FILE='/run/lock/transithub-maintenance.lock'")
+		requireTextContains(t, script, `if ! exec 9>"$LOCK_FILE"; then`)
+		requireTextContains(t, script, "flock -n 9")
+		requireTextContains(t, script, "无法打开维护锁文件")
+	}
+}
+
 func readProjectFileForUpgradeTest(t *testing.T, relativePath string) string {
 	t.Helper()
 

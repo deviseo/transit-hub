@@ -94,6 +94,19 @@ func TestLegacyWorkspaceDescriptorsCoverDeleteTables(t *testing.T) {
 	}
 }
 
+func TestLegacyWorkspaceCreationOnlySelectsUnassignedRows(t *testing.T) {
+	for _, table := range []workspaceTableDescriptor{
+		{Name: "upstream_sites", WorkspaceColumn: "admin_account_id"},
+		{Name: "real_connections", WorkspaceColumn: "workspace_admin_account_id"},
+	} {
+		sql := createLegacyAccountsForTableSQL(table)
+		want := "WHERE user_id <> '' AND " + table.WorkspaceColumn + " = ''"
+		if !strings.Contains(sql, want) {
+			t.Fatalf("legacy creation for %s must only select unassigned rows: %s", table.Name, sql)
+		}
+	}
+}
+
 func TestWorkspaceDeleteStatementsDeleteChildrenBeforeParents(t *testing.T) {
 	order := map[string]int{}
 	for i, stmt := range workspaceDeleteStatements {

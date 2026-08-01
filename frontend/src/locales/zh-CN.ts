@@ -2221,6 +2221,30 @@ export default {
           failed: '上次升级失败'
         }
       },
+      restart: {
+        title: '后台服务',
+        statusLabel: '当前状态',
+        action: '重启后台服务',
+        running: '正在重启...',
+        confirmTitle: '确认重启后台服务',
+        confirmMessage: '重启期间页面和 API 会短暂断开。本操作只重启 TransitHub 后台服务，不会重启 PostgreSQL、Redis 或 Sub2API。',
+        cancel: '取消',
+        confirm: '确认重启',
+        successTitle: '重启成功',
+        successMessage: '后台服务已恢复并通过健康检查。',
+        failedTitle: '重启失败',
+        failedMessage: '后台服务未恢复，本次执行的错误输出如下。',
+        timeout: '等待后台服务恢复超时，请检查服务器状态。',
+        close: '关闭',
+        reload: '刷新页面',
+        statuses: {
+          idle: '待命',
+          starting: '正在启动',
+          running: '正在重启',
+          succeeded: '上次重启成功',
+          failed: '上次重启失败'
+        }
+      },
       sections: {
         basic: {
           title: '基础设置',

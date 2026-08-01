@@ -7,6 +7,7 @@ STATE_DIR='/var/lib/transithub'
 STATUS_FILE="$STATE_DIR/upgrade-status.json"
 STATUS_NEXT="$STATE_DIR/upgrade-status.json.next"
 LOG_FILE="$STATE_DIR/upgrade.log"
+LOCK_FILE='/run/lock/transithub-maintenance.lock'
 
 started_at=''
 
@@ -44,6 +45,23 @@ trap 'rm -f "$STATUS_NEXT"' EXIT
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 trap 'on_signal HUP 129' HUP
+
+if ! command -v flock >/dev/null 2>&1; then
+    printf '升级失败：服务器缺少 flock 命令。\n' | tee -a "$LOG_FILE" >&2
+    write_status 'failed' "$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')" 127
+    exit 127
+fi
+
+if ! exec 9>"$LOCK_FILE"; then
+    printf '升级失败：无法打开维护锁文件。\n' | tee -a "$LOG_FILE" >&2
+    write_status 'failed' "$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')" 73
+    exit 73
+fi
+if ! flock -n 9; then
+    printf '升级失败：后台服务重启或其他维护任务正在执行。\n' | tee -a "$LOG_FILE" >&2
+    write_status 'failed' "$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')" 75
+    exit 75
+fi
 
 set +e
 "$UPGRADE_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
