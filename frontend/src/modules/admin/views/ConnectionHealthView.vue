@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -7,6 +7,8 @@ import {
   AlertTriangle,
   ArrowDownUp,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Gauge,
   Layers,
   Loader2,
@@ -18,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { listUpstreamSites } from '../api/upstream'
 import { connectionHealthMessageKey, useConnectionHealth } from '../composables/useConnectionHealth'
+import { useAdminAccounts } from '../composables/useAdminAccounts'
 import AdminGroupHealthDetail from '../components/dashboard/AdminGroupHealthDetail.vue'
 import ConnectionHealthEventsDialog from '../components/dashboard/ConnectionHealthEventsDialog.vue'
 import GroupHealthSetupDrawer from '../components/dashboard/GroupHealthSetupDrawer.vue'
@@ -33,6 +36,13 @@ import type {
   PolicyInput,
 } from '../types/connectionHealth'
 import { resolveConnectionHealthStrategyMode } from '../utils/connectionHealthPolicy'
+import {
+  createDefaultConnectionHealthPreferences,
+  mergeConnectionHealthGroupOrder,
+  readConnectionHealthPreferences,
+  type ConnectionHealthPreferences,
+  writeConnectionHealthPreferences,
+} from '../utils/connectionHealthPreferences'
 
 const { t, te } = useI18n()
 const {
@@ -49,37 +59,100 @@ const {
   removePolicy,
   savePolicy,
 } = useConnectionHealth()
+const { currentAccount } = useAdminAccounts()
 
 const searchText = ref('')
-const selectedType = ref('public')
+const selectedType = ref('')
 const selectedGroupId = ref('')
 const selectedConnectionId = ref('')
 const eventsDialogOpen = ref(false)
 const siteNameMap = ref<Map<string, string>>(new Map())
+const preferences = ref<ConnectionHealthPreferences>(createDefaultConnectionHealthPreferences())
+const groupManagerOpen = ref(false)
+const preferenceScope = computed(() => currentAccount.value?.id ?? 'anonymous')
+let loadedPreferenceScope = ''
 
 const groupTypes = ['public', 'exclusive', 'subscription']
 const groupTypeLabel = (type: string): string => t(`admin.connectionHealth.groupTypes.${groupTypes.includes(type) ? type : 'public'}`)
 
+const updatePreferences = (updater: (current: ConnectionHealthPreferences) => ConnectionHealthPreferences) => {
+  const next = updater(preferences.value)
+  preferences.value = next
+  writeConnectionHealthPreferences(preferenceScope.value, next)
+}
+
+const loadPreferences = (scope: string) => {
+  if (loadedPreferenceScope === scope) return
+  preferences.value = readConnectionHealthPreferences(scope)
+  loadedPreferenceScope = scope
+}
+
+watch(preferenceScope, loadPreferences, { immediate: true })
+
 const filteredGroups = computed(() => {
   const keyword = searchText.value.trim().toLocaleLowerCase()
-  return adminGroups.value.filter((group) => {
-    if (selectedType.value && group.type !== selectedType.value) return false
-    if (!keyword) return true
-    return group.name.toLocaleLowerCase().includes(keyword)
-      || group.platform.toLocaleLowerCase().includes(keyword)
-      || group.accounts.some((account) => (account.name || account.id).toLocaleLowerCase().includes(keyword))
+  return orderedGroups.value
+    .filter(group => !preferences.value.hiddenGroupIds.includes(group.id))
+    .filter((group) => {
+      if (selectedType.value && group.type !== selectedType.value) return false
+      if (!keyword) return true
+      return group.name.toLocaleLowerCase().includes(keyword)
+        || group.platform.toLocaleLowerCase().includes(keyword)
+        || group.accounts.some((account) => (account.name || account.id).toLocaleLowerCase().includes(keyword))
+    })
+})
+
+const emptyGroupMessage = computed(() => {
+  if (adminGroups.value.length === 0 || searchText.value.trim() || selectedType.value) {
+    return t('admin.connectionHealth.adminEmpty')
+  }
+  return t('admin.connectionHealth.groupDisplay.noVisibleGroups')
+})
+
+const groupMonitoringEnabled = (group: AdminGroupHealth): boolean =>
+  group.hasEnabledProbePolicy ?? group.hasEnabledPolicy ?? group.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(group.hasAssignedPolicy)
+
+const compareDefaultGroups = (first: AdminGroupHealth, second: AdminGroupHealth): number => {
+  const monitoredDiff = Number(groupMonitoringEnabled(first)) - Number(groupMonitoringEnabled(second))
+  if (monitoredDiff !== 0) return -monitoredDiff
+  const nameDiff = first.name.localeCompare(second.name)
+  return nameDiff !== 0 ? nameDiff : first.id.localeCompare(second.id)
+}
+
+const orderedGroups = computed(() => {
+  const currentGroups = adminGroups.value
+  const currentIds = currentGroups.map(group => group.id)
+  const hasStoredOrder = preferences.value.groupOrder.some(id => currentIds.includes(id))
+  if (!hasStoredOrder) return [...currentGroups].sort(compareDefaultGroups)
+
+  const order = mergeConnectionHealthGroupOrder(preferences.value.groupOrder, currentIds)
+  const groupMap = new Map(currentGroups.map(group => [group.id, group]))
+  return order.flatMap(id => {
+    const group = groupMap.get(id)
+    return group ? [group] : []
   })
 })
 
-const selectedGroup = computed(() => adminGroups.value.find((group) => group.id === selectedGroupId.value) ?? filteredGroups.value[0] ?? null)
+const sameStringArray = (first: string[], second: string[]): boolean =>
+  first.length === second.length && first.every((value, index) => value === second[index])
+
+watch(
+  [() => adminGroups.value.map(group => group.id), preferenceScope],
+  ([currentIds, scope]) => {
+    if (scope === 'anonymous' || currentIds.length === 0) return
+    if (!preferences.value.groupOrder.some(id => currentIds.includes(id))) return
+    const mergedOrder = mergeConnectionHealthGroupOrder(preferences.value.groupOrder, currentIds)
+    if (sameStringArray(mergedOrder, preferences.value.groupOrder)) return
+    updatePreferences(current => ({ ...current, groupOrder: mergedOrder }))
+  },
+)
+
+const selectedGroup = computed(() => filteredGroups.value.find(group => group.id === selectedGroupId.value) ?? filteredGroups.value[0] ?? null)
 
 watch(filteredGroups, (nextGroups) => {
   if (nextGroups.some((group) => group.id === selectedGroupId.value)) return
   selectedGroupId.value = nextGroups[0]?.id ?? ''
 }, { immediate: true })
-
-const groupMonitoringEnabled = (group: AdminGroupHealth): boolean =>
-  group.hasEnabledProbePolicy ?? group.hasEnabledPolicy ?? group.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(group.hasAssignedPolicy)
 
 const monitoredGroupCount = computed(() => adminGroups.value.filter(groupMonitoringEnabled).length)
 const conflictCount = computed(() => adminGroups.value.reduce((sum, group) => sum + (group.priorityConflictCount ?? 0), 0))
@@ -94,12 +167,42 @@ const loadSiteNames = async () => {
   }
 }
 
-onMounted(() => {
+const moveGroup = (groupId: string, offset: -1 | 1) => {
+  const ids = orderedGroups.value.map(group => group.id)
+  const index = ids.indexOf(groupId)
+  const targetIndex = index + offset
+  if (index < 0 || targetIndex < 0 || targetIndex >= ids.length) return
+  const nextOrder = [...ids]
+  ;[nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]]
+  updatePreferences(current => ({ ...current, groupOrder: nextOrder }))
+}
+
+const toggleGroupVisibility = (groupId: string) => {
+  updatePreferences((current) => {
+    const hidden = new Set(current.hiddenGroupIds)
+    if (hidden.has(groupId)) hidden.delete(groupId)
+    else hidden.add(groupId)
+    return { ...current, hiddenGroupIds: Array.from(hidden) }
+  })
+}
+
+const setHideUnmonitoredAccounts = (value: boolean) => {
+  updatePreferences(current => ({ ...current, hideUnmonitoredAccounts: value }))
+}
+
+let lastEntryRefreshAt = 0
+const refreshOnEntry = () => {
+  const now = Date.now()
+  if (now - lastEntryRefreshAt < 500) return
+  lastEntryRefreshAt = now
   void loadAll()
   void loadEvents()
   void loadPolicies()
   void loadSiteNames()
-})
+}
+
+onMounted(refreshOnEntry)
+onActivated(refreshOnEntry)
 
 const documentVisibility = useDocumentVisibility()
 let autoRefreshInFlight = false
@@ -329,12 +432,64 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
               <option value="">{{ t('admin.connectionHealth.filters.allTypes') }}</option>
               <option v-for="type in groupTypes" :key="type" :value="type">{{ groupTypeLabel(type) }}</option>
             </select>
+            <button
+              type="button"
+              class="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :aria-expanded="groupManagerOpen"
+              @click="groupManagerOpen = !groupManagerOpen"
+            >
+              <Settings2 class="h-4 w-4" />
+              {{ t('admin.connectionHealth.groupDisplay.manage') }}
+            </button>
+            <div v-if="groupManagerOpen" class="space-y-2 rounded-lg border border-border/60 bg-background p-2">
+              <div class="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+                <span>{{ t('admin.connectionHealth.groupDisplay.title') }}</span>
+                <span>{{ orderedGroups.length }}</span>
+              </div>
+              <div v-if="orderedGroups.length === 0" class="px-1 py-3 text-xs text-muted-foreground">
+                {{ t('admin.connectionHealth.groupDisplay.empty') }}
+              </div>
+              <div
+                v-for="(group, index) in orderedGroups"
+                :key="`manage:${group.id}`"
+                class="flex items-center gap-2 rounded-md px-1 py-1.5 hover:bg-surface/60"
+              >
+                <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    :checked="!preferences.hiddenGroupIds.includes(group.id)"
+                    class="h-4 w-4 rounded border-border accent-primary"
+                    @change="toggleGroupVisibility(group.id)"
+                  >
+                  <span class="min-w-0 truncate text-xs text-foreground">{{ group.name }}</span>
+                </label>
+                <span class="h-2 w-2 shrink-0 rounded-full" :class="groupMonitoringEnabled(group) ? 'bg-emerald-500' : 'bg-muted-foreground/35'" />
+                <button
+                  type="button"
+                  class="rounded p-1 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground disabled:opacity-30"
+                  :aria-label="t('admin.connectionHealth.groupDisplay.moveUp')"
+                  :disabled="index === 0"
+                  @click="moveGroup(group.id, -1)"
+                >
+                  <ChevronUp class="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  class="rounded p-1 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground disabled:opacity-30"
+                  :aria-label="t('admin.connectionHealth.groupDisplay.moveDown')"
+                  :disabled="index === orderedGroups.length - 1"
+                  @click="moveGroup(group.id, 1)"
+                >
+                  <ChevronDown class="h-4 w-4" />
+                </button>
+              </div>
+            </div>
           </div>
 
           <nav class="max-h-[28rem] flex-1 overflow-y-auto p-2 lg:max-h-[calc(100dvh-20rem)]" :aria-label="t('admin.connectionHealth.groupListLabel')">
             <div v-if="filteredGroups.length === 0" class="flex min-h-48 flex-col items-center justify-center px-5 text-center">
               <Layers class="h-8 w-8 text-muted-foreground/40" />
-              <p class="mt-3 text-sm text-muted-foreground">{{ t('admin.connectionHealth.adminEmpty') }}</p>
+              <p class="mt-3 text-sm text-muted-foreground">{{ emptyGroupMessage }}</p>
             </div>
             <template v-else>
               <button
@@ -370,10 +525,13 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
         </div>
         <AdminGroupHealthDetail
           v-else
+          :key="selectedGroup.id"
           :group="selectedGroup"
+          :hide-unmonitored-accounts="preferences.hideUnmonitoredAccounts"
           @setup="openSetup"
           @probe="onProbeAccount"
           @view-events="onViewEventsAccount"
+          @update:hide-unmonitored-accounts="setHideUnmonitoredAccounts"
         />
       </div>
     </section>

@@ -906,6 +906,14 @@ export default {
       groupList: {
         monitored: 'Monitored {count}/{total}'
       },
+      groupDisplay: {
+        manage: 'Manage group display',
+        title: 'Group display order',
+        empty: 'No groups',
+        moveUp: 'Move up',
+        moveDown: 'Move down',
+        noVisibleGroups: 'No groups are visible. Restore one from display management.'
+      },
       groupDetail: {
         multiplierPriority: 'Multiplier priority',
         subtitle: '{monitored} of {total} accounts or channels monitored',
@@ -937,6 +945,13 @@ export default {
           notProbed: 'Awaiting First Probe',
           unprobeable: 'Unavailable Targets'
         },
+        filters: {
+          all: 'All',
+          active: 'Current filter: {label}',
+          clear: 'Clear filter',
+          noMatches: 'No items match the current filter.',
+          hideUnmonitored: 'Hide unmonitored'
+        },
         assignmentSources: {
           none: 'No policy source',
           target: 'Target-specific policy',
@@ -952,6 +967,7 @@ export default {
           multiplier: 'Effective Multiplier',
           strategyMultiplier: 'My Group Multiplier',
           upstreamMultiplier: 'Upstream API Key Multiplier',
+          latency: 'Latency',
           actions: 'Actions'
         },
         upstreamMultiplierPending: 'Shown after linking',

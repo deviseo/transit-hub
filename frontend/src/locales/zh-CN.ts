@@ -906,6 +906,14 @@ export default {
       groupList: {
         monitored: '已监控 {count}/{total}'
       },
+      groupDisplay: {
+        manage: '管理分组显示',
+        title: '分组显示顺序',
+        empty: '暂无分组',
+        moveUp: '上移',
+        moveDown: '下移',
+        noVisibleGroups: '没有可显示的分组，请在显示管理中恢复。'
+      },
       groupDetail: {
         multiplierPriority: '按倍率排序',
         subtitle: '已监控 {monitored}/{total} 个账号或渠道',
@@ -937,6 +945,13 @@ export default {
           notProbed: '待首次探活',
           unprobeable: '不可探活目标'
         },
+        filters: {
+          all: '全部',
+          active: '当前筛选：{label}',
+          clear: '清除筛选',
+          noMatches: '当前筛选没有匹配项。',
+          hideUnmonitored: '隐藏未监控'
+        },
         assignmentSources: {
           none: '无策略来源',
           target: '账号单独策略',
@@ -952,6 +967,7 @@ export default {
           multiplier: '有效倍率',
           strategyMultiplier: '我的分组倍率',
           upstreamMultiplier: '上游 API Key 倍率',
+          latency: '延迟',
           actions: '操作'
         },
         upstreamMultiplierPending: '关联后展示倍率',
