@@ -11,7 +11,9 @@ import (
 
 // fakeSessionStore 是 SessionStore 的内存实现，仅供测试使用。
 type fakeSessionStore struct {
-	records map[string]*AdminSession // key: userID+"|"+adminAccountID
+	records        map[string]*AdminSession // key: userID+"|"+adminAccountID
+	activeSessions []ActiveSessionRef
+	activeErr      error
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -45,7 +47,7 @@ func (f *fakeSessionStore) Delete(ctx context.Context, userID string, adminAccou
 }
 
 func (f *fakeSessionStore) ActiveSessions(ctx context.Context) ([]ActiveSessionRef, error) {
-	return nil, nil
+	return f.activeSessions, f.activeErr
 }
 
 // fakeAdminAccounts 是 AdminAccountService 的内存实现，按 userID 返回固定的当前工作区。
@@ -74,11 +76,20 @@ func (f *fakeAdminAccounts) UpsertAndSwitch(ctx context.Context, userID string, 
 // fakePlatformClient 是 PlatformClient 的桩实现，只有测试用到的方法有真实行为，
 // 其余方法返回零值以满足接口。
 type fakePlatformClient struct {
-	verifyAdminErr error
-	groups         []upstream.GroupInfo
-	groupsErr      error
-	dailyStats     []upstream.GroupDailyStat
-	dailyStatsErr  error
+	verifyAdminErr     error
+	usageStats         float64
+	usageStatsErr      error
+	siteBalance        upstream.AdminSiteBalance
+	siteBalanceErr     error
+	groups             []upstream.GroupInfo
+	groupsErr          error
+	adminGroups        []upstream.AdminGroupInfo
+	adminGroupsErr     error
+	dailyStats         []upstream.GroupDailyStat
+	dailyStatsErr      error
+	capturedUsageStart string
+	capturedUsageEnd   string
+	capturedGroupDate  string
 	// capturedSession 记录最后一次调用 FetchAdminGroupDailyStats 时传入的 session，
 	// 用于断言隔离性（不同工作区应使用不同 session）。
 	capturedSession upstream.Session
@@ -124,11 +135,13 @@ func (f *fakePlatformClient) RefreshSession(session upstream.Session) (upstream.
 }
 
 func (f *fakePlatformClient) FetchAdminUsageStats(session upstream.Session, startDate, endDate string) (float64, error) {
-	return 0, nil
+	f.capturedUsageStart = startDate
+	f.capturedUsageEnd = endDate
+	return f.usageStats, f.usageStatsErr
 }
 
 func (f *fakePlatformClient) FetchAdminSiteBalanceFiltered(session upstream.Session, filter upstream.BalanceFilter) (upstream.AdminSiteBalance, error) {
-	return upstream.AdminSiteBalance{}, nil
+	return f.siteBalance, f.siteBalanceErr
 }
 
 func (f *fakePlatformClient) FetchAdminGroups(session upstream.Session) ([]upstream.GroupInfo, error) {
@@ -136,11 +149,17 @@ func (f *fakePlatformClient) FetchAdminGroups(session upstream.Session) ([]upstr
 }
 
 func (f *fakePlatformClient) FetchAdminAllGroups(session upstream.Session) ([]upstream.AdminGroupInfo, error) {
-	return nil, nil
+	return f.adminGroups, f.adminGroupsErr
 }
 
 func (f *fakePlatformClient) FetchAdminGroupDailyStats(session upstream.Session, groups []upstream.GroupInfo) ([]upstream.GroupDailyStat, error) {
 	f.capturedSession = session
+	return f.dailyStats, f.dailyStatsErr
+}
+
+func (f *fakePlatformClient) FetchAdminGroupDailyStatsForDate(session upstream.Session, groups []upstream.GroupInfo, date string) ([]upstream.GroupDailyStat, error) {
+	f.capturedSession = session
+	f.capturedGroupDate = date
 	return f.dailyStats, f.dailyStatsErr
 }
 
@@ -289,6 +308,27 @@ func TestGroupUsageToday_TotalEqualsSumOfGroups(t *testing.T) {
 	}
 	if resp.Total != sum {
 		t.Fatalf("total (%.4f) != sum of groups (%.4f)", resp.Total, sum)
+	}
+}
+
+func TestGroupUsageTodayUsesOneExplicitBusinessDate(t *testing.T) {
+	store := newFakeSessionStore()
+	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
+	accounts := &fakeAdminAccounts{current: map[string]string{"user-1": "account-1"}}
+	platform := &fakePlatformClient{
+		dailyStats: []upstream.GroupDailyStat{{GroupName: "default", TodayActualCost: 12.34}},
+	}
+	service := NewMetricsService(store, platform, nil, nil, accounts)
+
+	response, err := service.GroupUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GroupUsageToday() error: %v", err)
+	}
+	if platform.capturedGroupDate == "" {
+		t.Fatal("group usage query did not receive an explicit business date")
+	}
+	if response.Date != platform.capturedGroupDate {
+		t.Fatalf("response date = %q, query date = %q", response.Date, platform.capturedGroupDate)
 	}
 }
 

@@ -12,19 +12,22 @@ import (
 type fakeUpstreamLister struct {
 	keyUsageItems []upstream.KeyUsageTodayItem
 	keyUsageErr   error
+	keyUsageCalls int
+	cachedSites   []upstream.Response
 	balanceItems  []upstream.BalanceBreakdownItem
 	balanceErr    error
 }
 
 func (f *fakeUpstreamLister) List(ctx context.Context, userID string) []upstream.Response {
-	return nil
+	return f.cachedSites
 }
 
 func (f *fakeUpstreamLister) ListForAccount(ctx context.Context, userID, adminAccountID string) []upstream.Response {
-	return nil
+	return f.cachedSites
 }
 
 func (f *fakeUpstreamLister) KeyUsageToday(ctx context.Context, userID string) ([]upstream.KeyUsageTodayItem, error) {
+	f.keyUsageCalls++
 	return f.keyUsageItems, f.keyUsageErr
 }
 
@@ -92,6 +95,42 @@ func TestUpstreamKeyUsageToday_ReturnsPartialSuccessMetadata(t *testing.T) {
 	}
 	if response.FailedSites != 1 || response.TotalSites != 2 {
 		t.Fatalf("unexpected partial metadata: %+v", response)
+	}
+}
+
+func TestUpstreamKeyUsageToday_ReturnsCachedCostSiteCounts(t *testing.T) {
+	todayConsume := 12.5
+	upstreams := &fakeUpstreamLister{
+		cachedSites: []upstream.Response{
+			{
+				ID:           "site-working",
+				RechargeRate: 1,
+				Status:       upstream.StatusConnected,
+				Metrics: upstream.Metrics{
+					TodayConsume: upstream.MetricValue{Value: &todayConsume},
+				},
+			},
+			{
+				ID:           "site-failed",
+				RechargeRate: 1,
+				Status:       upstream.StatusError,
+			},
+			{
+				ID:           "site-excluded",
+				RechargeRate: 0,
+				Status:       upstream.StatusError,
+			},
+		},
+		keyUsageItems: []upstream.KeyUsageTodayItem{{SiteID: "site-working", KeyID: "1", KeyName: "working", TodayAmount: 12.5}},
+	}
+	service := NewMetricsService(nil, nil, upstreams, nil, nil)
+
+	response, err := service.UpstreamKeyUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if response.TotalSites != 2 || response.FailedSites != 1 {
+		t.Fatalf("site counts = total %d, failed %d; want total 2, failed 1", response.TotalSites, response.FailedSites)
 	}
 }
 

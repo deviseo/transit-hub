@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"transithub/backend/internal/shared/businesstime"
 )
 
 // jsonUnmarshalString 将 JSON 字符串解析到目标结构。
@@ -387,15 +389,19 @@ func (s *PlatformService) FetchSub2APIGroupDailyStats(session Session, groups ..
 	if err == nil {
 		return stats, nil
 	}
-	stats, err = s.fetchSub2APIKeyGroupDailyStats(session)
+	return s.FetchSub2APIGroupDailyStatsForDate(session, businesstime.Today(), groups...)
+}
+
+// FetchSub2APIGroupDailyStatsForDate 跳过无日期参数的 usage-summary，按指定上海业务日查询。
+func (s *PlatformService) FetchSub2APIGroupDailyStatsForDate(session Session, date string, groups ...[]GroupInfo) ([]GroupDailyStat, error) {
+	stats, err := s.fetchSub2APIKeyGroupDailyStatsForDate(session, date)
 	if err == nil {
 		return stats, nil
 	}
 	if err := s.VerifySub2APIAdmin(session); err != nil {
 		return nil, err
 	}
-	today := time.Now().Format("2006-01-02")
-	statsURL := session.BaseURL + "/api/v1/admin/dashboard/groups?start_date=" + today + "&end_date=" + today
+	statsURL := session.BaseURL + "/api/v1/admin/dashboard/groups?start_date=" + date + "&end_date=" + date + "&timezone=" + url.QueryEscape(businesstime.Timezone)
 	response, err := s.httpClient.requestJSON(statsURL, adminAuthOptions(session))
 	if err != nil {
 		return nil, err
@@ -424,7 +430,7 @@ func (s *PlatformService) FetchSub2APIAdminUsageStats(session Session, startDate
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return 0, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	statsURL := session.BaseURL + "/api/v1/admin/usage/stats?start_date=" + startDate + "&end_date=" + endDate
+	statsURL := session.BaseURL + "/api/v1/admin/usage/stats?start_date=" + startDate + "&end_date=" + endDate + "&timezone=" + url.QueryEscape(businesstime.Timezone)
 	response, err := s.httpClient.requestJSON(statsURL, adminAuthOptions(session))
 	if err != nil {
 		return 0, err
@@ -846,7 +852,7 @@ func sub2APIUsageSummaryCost(item any) float64 {
 	return *cost
 }
 
-func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]GroupDailyStat, error) {
+func (s *PlatformService) fetchSub2APIKeyGroupDailyStatsForDate(session Session, date string) ([]GroupDailyStat, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
@@ -859,7 +865,6 @@ func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]Gro
 	if len(keys) == 0 {
 		return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
 	}
-	today := time.Now().Format("2006-01-02")
 	totals := map[string]float64{}
 	for _, item := range keys {
 		keyID := firstNumber(item, []string{"id"})
@@ -871,7 +876,7 @@ func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]Gro
 		// key carries its group object from /keys, so summing every key's actual cost
 		// by group gives a group-level total even when the admin dashboard endpoint is
 		// unavailable for ordinary upstream tokens.
-		statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + strconvInt(int64(*keyID)) + "&timezone=Asia%2FShanghai"
+		statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + date + "&end_date=" + date + "&api_key_id=" + strconvInt(int64(*keyID)) + "&timezone=" + url.QueryEscape(businesstime.Timezone)
 		statsResponse, err := s.httpClient.requestJSON(statsURL, authOptions)
 		if err != nil {
 			return nil, err
@@ -918,8 +923,17 @@ func sub2APIGroupDailyCost(item any) float64 {
 }
 
 func (s *PlatformService) FetchNewAPIGroupDailyStats(session Session, groups []GroupInfo) ([]GroupDailyStat, error) {
+	return s.FetchNewAPIGroupDailyStatsForDate(session, groups, businesstime.Today())
+}
+
+// FetchNewAPIGroupDailyStatsForDate 为所有分组复用同一个上海业务日起止时间戳。
+func (s *PlatformService) FetchNewAPIGroupDailyStatsForDate(session Session, groups []GroupInfo, date string) ([]GroupDailyStat, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	start, end, err := businessDayUnixBounds(date)
+	if err != nil {
+		return nil, err
 	}
 	cookieOptions := newAPIAuthOptions(session)
 	stats := make([]GroupDailyStat, 0, len(groups))
@@ -928,7 +942,7 @@ func (s *PlatformService) FetchNewAPIGroupDailyStats(session Session, groups []G
 		if name == "" || name == defaultDisplay {
 			continue
 		}
-		statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(todayStart()) + "&end_timestamp=" + strconvInt(todayEnd()) + "&group=" + url.QueryEscape(name)
+		statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(start) + "&end_timestamp=" + strconvInt(end) + "&group=" + url.QueryEscape(name)
 		payload, err := s.httpClient.requestJSON(statURL, cookieOptions)
 		if err != nil {
 			return nil, err
@@ -1350,6 +1364,14 @@ func newAPIUserID(loginData map[string]any) string {
 	return ""
 }
 
+func businessDayUnixBounds(date string) (int64, int64, error) {
+	start, end, err := businesstime.Bounds(date)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start.Unix(), end.Unix(), nil
+}
+
 func todayStart() int64 {
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -1505,16 +1527,16 @@ func (s *PlatformService) fetchNewAPIAdminUsageStats(session Session, startDate,
 	if !session.IsAuthenticated() {
 		return 0, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	start, err := time.Parse("2006-01-02", startDate)
+	start, _, err := businesstime.Bounds(startDate)
 	if err != nil {
 		return 0, err
 	}
-	end, err := time.Parse("2006-01-02", endDate)
+	_, end, err := businesstime.Bounds(endDate)
 	if err != nil {
 		return 0, err
 	}
 	startTS := start.Unix()
-	endTS := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, end.Location()).Unix()
+	endTS := end.Unix()
 	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS)
 	cookieOptions := newAPIAuthOptions(session)
 	response, err := s.httpClient.requestJSON(statURL, cookieOptions)
@@ -1687,6 +1709,16 @@ func (s *PlatformService) FetchAdminGroupDailyStats(session Session, groups []Gr
 		return s.FetchNewAPIGroupDailyStats(session, groups)
 	default:
 		return s.FetchSub2APIGroupDailyStats(session, groups)
+	}
+}
+
+// FetchAdminGroupDailyStatsForDate 按平台获取指定上海业务日的分组用量。
+func (s *PlatformService) FetchAdminGroupDailyStatsForDate(session Session, groups []GroupInfo, date string) ([]GroupDailyStat, error) {
+	switch session.Platform {
+	case PlatformNewAPI:
+		return s.FetchNewAPIGroupDailyStatsForDate(session, groups, date)
+	default:
+		return s.FetchSub2APIGroupDailyStatsForDate(session, date, groups)
 	}
 }
 

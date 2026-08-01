@@ -53,7 +53,7 @@ import type { DashboardColorToken, DashboardMetricData, DashboardMetricKey, Dash
 import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
 import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const router = useRouter()
 const { metrics, applyRawData } = useDashboardMetrics()
 const { theme: chartTheme } = useDashboardChartTheme()
@@ -266,6 +266,11 @@ const METRIC_META: Record<DashboardMetricKey, { icon: Component; labelKey: strin
 const metricMap = computed(() => new Map(metrics.value.map(metric => [metric.key, metric])))
 const metric = (key: DashboardMetricKey): DashboardMetricData | undefined => metricMap.value.get(key)
 const deltaCaption = computed(() => t('admin.dashboard.delta.vsPrev'))
+const metricErrorText = (reason: string | undefined) => {
+  if (!reason) return ''
+  const detail = te(reason) ? t(reason) : reason
+  return t('admin.dashboard.common.metricLoadError', { reason: detail })
+}
 
 const percentFormatter = computed(() => new Intl.NumberFormat(locale.value, {
   style: 'percent',
@@ -293,6 +298,7 @@ interface DashboardCoreCard {
   value: string
   deltaDirection: ReturnType<typeof computeDelta>['direction']
   deltaText: string
+  statusText: string
   clickable: boolean
   negativeWhenUp: boolean
 }
@@ -310,11 +316,13 @@ const cards = computed<DashboardCoreCard[]>(() => {
       value: formatCny(current.current),
       deltaDirection: delta.direction,
       deltaText: formatCny(Math.abs(delta.amount)),
+      statusText: metricErrorText(current.error),
       clickable: key === 'todayProfit' || key === 'todayPurchase',
       negativeWhenUp: key === 'todayPurchase',
     }]
   })
   const marginDelta = computeDelta(marginSeries.value)
+  const marginError = metric('netProfit')?.error || metric('todayProfit')?.error
   result.push({
     key: 'profitMargin',
     label: t('admin.dashboard.metrics.profitMargin'),
@@ -323,6 +331,7 @@ const cards = computed<DashboardCoreCard[]>(() => {
     value: percentFormatter.value.format(profitMargin.value / 100),
     deltaDirection: marginDelta.direction,
     deltaText: t('admin.dashboard.delta.percentagePoints', { value: numberFormatter.value.format(Math.abs(marginDelta.amount)) }),
+    statusText: metricErrorText(marginError),
     clickable: false,
     negativeWhenUp: false,
   })
@@ -682,6 +691,7 @@ const lastProbeLabel = computed(() => {
             :delta-direction="card.deltaDirection"
             :delta-text="card.deltaText"
             :delta-caption="deltaCaption"
+            :status-text="card.statusText"
             :clickable="card.clickable"
             :negative-when-up="card.negativeWhenUp"
             @click="handleMetricCardClick(card.key)"

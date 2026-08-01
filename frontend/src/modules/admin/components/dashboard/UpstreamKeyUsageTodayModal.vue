@@ -21,6 +21,7 @@ const keys = ref<UpstreamKeyUsageTodayItem[]>([])
 const total = ref(0)
 const failedSites = ref(0)
 const totalSites = ref(0)
+const successfulSites = computed(() => Math.max(totalSites.value - failedSites.value, 0))
 // 默认按金额从高到低排序；toggle 后按金额从低到高，金额相同时用 key 名排序，均不触发新的请求。
 const sortAsc = ref(false)
 
@@ -82,23 +83,23 @@ watch(() => props.open, (isOpen) => {
       >
         <div class="absolute left-0 right-0 top-0 h-1 bg-gradient-to-r from-primary via-accent to-primary" />
 
-        <div class="flex items-start justify-between gap-4 px-6 pt-6">
-          <div class="flex items-center gap-3">
-            <div class="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <div class="flex flex-col gap-4 px-6 pt-6 sm:flex-row sm:items-start sm:justify-between">
+          <div class="flex min-w-0 items-center gap-3">
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
               <ShoppingCart class="h-5 w-5" />
             </div>
-            <div>
+            <div class="min-w-0">
               <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.upstreamKeyUsage.title') }}</h2>
-              <p class="text-sm text-muted-foreground">
-                {{ t('admin.dashboard.upstreamKeyUsage.subtitle', { count: keys.length, total: formatCny(total) }) }}
+              <p class="break-words text-sm text-muted-foreground">
+                {{ t('admin.dashboard.upstreamKeyUsage.subtitle', { count: keys.length, total: formatCny(total), successful: successfulSites, failed: failedSites }) }}
               </p>
             </div>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center justify-end gap-2 sm:justify-start">
             <button
               type="button"
               :disabled="loading || !!error || keys.length === 0"
-              class="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+              class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border/60 px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
               @click="toggleSort"
             >
               <ArrowUpWideNarrow v-if="sortAsc" class="h-3.5 w-3.5" />

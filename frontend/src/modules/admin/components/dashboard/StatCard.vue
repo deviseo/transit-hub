@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from 'vue'
-import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-vue-next'
+import { ArrowDownRight, ArrowUpRight, Minus, TriangleAlert } from 'lucide-vue-next'
 import type { DashboardColorToken } from '../../types/dashboard'
 import { DELTA_TEXT_CLASSES, METRIC_ICON_CLASSES, type DeltaDirection } from '../../utils/dashboard'
 
@@ -12,6 +12,7 @@ const props = defineProps<{
   deltaDirection: DeltaDirection
   deltaText: string
   deltaCaption: string
+  statusText?: string
   clickable?: boolean
   negativeWhenUp?: boolean
 }>()
@@ -54,11 +55,17 @@ const deltaIcon = computed(() => {
       </div>
     </div>
     <div class="mt-3 flex min-h-5 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs sm:mt-4">
-      <span v-if="deltaText" :class="['inline-flex items-center gap-0.5 font-semibold', deltaClass]">
-        <component :is="deltaIcon" class="w-3.5 h-3.5" />
-        {{ deltaText }}
+      <span v-if="statusText" class="inline-flex min-w-0 items-center gap-1 font-medium text-warning">
+        <TriangleAlert class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span class="break-words">{{ statusText }}</span>
       </span>
-      <span class="text-muted-foreground">{{ deltaCaption }}</span>
+      <template v-else>
+        <span v-if="deltaText" :class="['inline-flex items-center gap-0.5 font-semibold', deltaClass]">
+          <component :is="deltaIcon" class="w-3.5 h-3.5" />
+          {{ deltaText }}
+        </span>
+        <span class="text-muted-foreground">{{ deltaCaption }}</span>
+      </template>
     </div>
   </component>
 </template>

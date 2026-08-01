@@ -1,4 +1,5 @@
 import type { DashboardAdminLoginForm, DashboardAdminStatus } from '../types/dashboardAdmin'
+import type { DashboardMetricKey } from '../types/dashboard'
 import {
   authUnauthorizedErrorKey,
   getAccessToken,
@@ -79,12 +80,15 @@ export const refreshDashboardAdminSession = async (): Promise<DashboardAdminStat
 
 /** 五项核心指标的实时数据。 */
 export interface DashboardMetricsResponse {
+  date: string
+  timezone: string
   todayProfit: number
   siteBalance: number
   todayPurchase: number
   netProfit: number
   upstreamBalance: number
   groupCount: number
+  metricErrors?: Partial<Record<DashboardMetricKey, string>>
 }
 
 /** 历史趋势单日数据点。 */

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/shared/businesstime"
 )
 
 // UpstreamLister 抽象上游站点列表读取，由 upstream.Service 实现。
@@ -27,13 +28,20 @@ type UpstreamLister interface {
 	BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error)
 }
 
+type metricsStore interface {
+	Upsert(ctx context.Context, snapshot DailySnapshot) error
+	ListRange(ctx context.Context, userID, adminAccountID string, days int, businessDate string) ([]DailySnapshot, error)
+	GetBalanceFilter(ctx context.Context, userID, adminAccountID string) (BalanceFilterConfig, error)
+	SaveBalanceFilter(ctx context.Context, config BalanceFilterConfig) error
+}
+
 // MetricsService 负责仪表盘指标的实时计算、历史快照存储与午夜调度。
 // 与同包的 Service（admin 会话管理）职责分离，共享 SessionStore 和 PlatformClient。
 type MetricsService struct {
 	store       SessionStore
 	platform    PlatformClient
 	upstreams   UpstreamLister
-	metricsRepo *MetricsRepository
+	metricsRepo metricsStore
 	accounts    AdminAccountService
 	sessionSync MySiteStateSync
 }
@@ -81,8 +89,55 @@ func (s *MetricsService) freshAdminSession(ctx context.Context, userID string, a
 	return refreshed, nil
 }
 
-func NewMetricsService(store SessionStore, platform PlatformClient, upstreams UpstreamLister, metricsRepo *MetricsRepository, accounts AdminAccountService) *MetricsService {
+func NewMetricsService(store SessionStore, platform PlatformClient, upstreams UpstreamLister, metricsRepo metricsStore, accounts AdminAccountService) *MetricsService {
 	return &MetricsService{store: store, platform: platform, upstreams: upstreams, metricsRepo: metricsRepo, accounts: accounts}
+}
+
+// summarizeCachedUpstreamCosts 汇总已同步的上游站点缓存。
+// failedOrUnavailable 为 true 时表示不能把结果当作完整日数据写入快照；
+// 只有全部目标站点都不可用时才返回 err，供首页将成本和净利润降为数字 0。
+func summarizeCachedUpstreamCosts(sites []upstream.Response) (total float64, complete bool, err error) {
+	targets := 0
+	available := 0
+	var firstErr error
+	for _, site := range sites {
+		if site.RechargeRate <= 0 {
+			continue
+		}
+		targets++
+		if site.Status == upstream.StatusError || site.Metrics.TodayConsume.Value == nil {
+			if firstErr == nil {
+				if site.ErrorKey != nil && strings.TrimSpace(*site.ErrorKey) != "" {
+					firstErr = errors.New(*site.ErrorKey)
+				} else {
+					firstErr = errors.New(upstream.ErrorRequest)
+				}
+			}
+			continue
+		}
+		available++
+		total += *site.Metrics.TodayConsume.Value * site.RechargeRate
+	}
+	if targets == 0 {
+		return total, true, nil
+	}
+	if available == 0 {
+		return 0, false, firstErr
+	}
+	return total, available == targets, nil
+}
+
+func cachedUpstreamCostSiteCounts(sites []upstream.Response) (totalSites, failedSites int) {
+	for _, site := range sites {
+		if site.RechargeRate <= 0 {
+			continue
+		}
+		totalSites++
+		if site.Status == upstream.StatusError || site.Metrics.TodayConsume.Value == nil {
+			failedSites++
+		}
+	}
+	return totalSites, failedSites
 }
 
 // LiveMetrics 实时计算五项核心指标并返回。
@@ -91,7 +146,7 @@ func NewMetricsService(store SessionStore, platform PlatformClient, upstreams Up
 // 计算逻辑：
 //   - todayProfit:     管理员站点今日总实际消费，通过 sub2api /api/v1/admin/usage/stats 获取
 //   - siteBalance:     管理员站点所有非 admin 用户余额之和，通过 sub2api /api/v1/admin/users 分页求和
-//   - todayPurchase:   所有上游站点今日消费 × 站点倍率之和（复用已同步的内存数据，无额外请求）
+//   - todayPurchase:   所有上游站点已同步的今日消费 × 站点倍率之和
 //   - upstreamBalance: 所有上游站点余额 × 站点倍率之和（复用已同步的内存数据）
 //   - netProfit:       todayProfit - todayPurchase
 func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (MetricsResponse, error) {
@@ -120,15 +175,19 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	}
 
 	// 并行获取四项独立数据：今日盈利、站点余额、分组数量、上游指标。
-	// 各 goroutine 出错只记日志、降级为零值，不阻塞整体返回。
-	today := time.Now().Format("2006-01-02")
+	// 营收或成本失败时保留其他指标，用 metricErrors 标注失败项且不写快照。
+	// 余额和分组数量保持原有零值降级行为。
+	today := businesstime.Today()
 	var (
-		todayProfit     float64
-		siteBalance     float64
-		groupCount      int
-		todayPurchase   float64
-		upstreamBalance float64
-		wg              sync.WaitGroup
+		todayProfit             float64
+		todayProfitErr          error
+		siteBalance             float64
+		groupCount              int
+		todayPurchase           float64
+		todayPurchaseErr        error
+		todayPurchaseIncomplete bool
+		upstreamBalance         float64
+		wg                      sync.WaitGroup
 	)
 
 	// goroutine 1: 今日盈利额度（平台中性）。
@@ -138,6 +197,7 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 		profit, err := s.platform.FetchAdminUsageStats(session, today, today)
 		if err != nil {
 			log.Printf("dashboard metrics: fetch usage stats failed user_id=%s err=%v", userID, err)
+			todayProfitErr = err
 			return
 		}
 		todayProfit = profit
@@ -175,17 +235,20 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 		groupCount = len(groups)
 	}()
 
-	// goroutine 4: 今日进货额度与上游总余额（读取 Redis 缓存，无外部 API 调用）。
+	// goroutine 4: 读取上游站点已同步缓存中的今日进货额度和总余额，不触发上游请求。
 	// 使用 List（用户请求路径，自动过滤当前工作区站点）。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for _, site := range s.upstreams.List(ctx, userID) {
+		sites := s.upstreams.List(ctx, userID)
+		var complete bool
+		todayPurchase, complete, todayPurchaseErr = summarizeCachedUpstreamCosts(sites)
+		if !complete && todayPurchaseErr == nil {
+			todayPurchaseIncomplete = true
+		}
+		for _, site := range sites {
 			if site.RechargeRate <= 0 {
 				continue
-			}
-			if site.Metrics.TodayConsume.Value != nil {
-				todayPurchase += *site.Metrics.TodayConsume.Value * site.RechargeRate
 			}
 			if site.Metrics.Balance.Value != nil {
 				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
@@ -194,21 +257,37 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	}()
 
 	wg.Wait()
-
-	netProfit := todayProfit - todayPurchase
-
 	result := MetricsResponse{
+		Date:            today,
+		Timezone:        businesstime.Timezone,
 		TodayProfit:     todayProfit,
 		SiteBalance:     siteBalance,
 		TodayPurchase:   todayPurchase,
-		NetProfit:       netProfit,
 		UpstreamBalance: upstreamBalance,
 		GroupCount:      groupCount,
 	}
 
-	// 将当天指标 upsert 到数据库，即使部分指标获取失败也保存已有数据，
-	// 后续调用会用更完整的数据覆盖。
-	s.upsertSnapshot(ctx, userID, adminAccountID, today, result)
+	if todayProfitErr != nil {
+		result.MetricErrors = map[string]string{
+			"todayProfit": todayProfitErr.Error(),
+		}
+	}
+	if todayPurchaseErr != nil {
+		if result.MetricErrors == nil {
+			result.MetricErrors = make(map[string]string)
+		}
+		result.MetricErrors["todayPurchase"] = todayPurchaseErr.Error()
+	}
+	if metricErr := errors.Join(todayProfitErr, todayPurchaseErr); metricErr != nil {
+		result.NetProfit = 0
+		result.MetricErrors["netProfit"] = metricErr.Error()
+	} else {
+		result.NetProfit = todayProfit - todayPurchase
+		// 仅在营收和成本都成功且没有部分站点缺失时写入。
+		if !todayPurchaseIncomplete {
+			s.upsertSnapshot(ctx, userID, adminAccountID, today, result)
+		}
+	}
 
 	return result, nil
 }
@@ -224,7 +303,8 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	if err != nil {
 		return TrendResponse{}, err
 	}
-	snapshots, err := s.metricsRepo.ListRange(ctx, userID, adminAccountID, days)
+	today := businesstime.Today()
+	snapshots, err := s.metricsRepo.ListRange(ctx, userID, adminAccountID, days, today)
 	if err != nil {
 		return TrendResponse{}, err
 	}
@@ -247,11 +327,7 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 // 确保即使用户当天未访问仪表盘，趋势图也不会出现空缺。
 func (s *MetricsService) StartScheduler(ctx context.Context) {
 	go func() {
-		loc, err := time.LoadLocation("Asia/Shanghai")
-		if err != nil {
-			log.Printf("dashboard scheduler: failed to load Asia/Shanghai timezone, using UTC: %v", err)
-			loc = time.UTC
-		}
+		loc := businesstime.Location()
 
 		for {
 			now := time.Now().In(loc)
@@ -289,26 +365,12 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 		return
 	}
 
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	if loc == nil {
-		loc = time.UTC
-	}
-	yesterday := time.Now().In(loc).AddDate(0, 0, -1).Format("2006-01-02")
+	loc := businesstime.Location()
+	yesterday := businesstime.DateAt(time.Now().In(loc).AddDate(0, 0, -1))
 
 	for _, ref := range refs {
 		userID := ref.UserID
 		adminAccountID := ref.AdminAccountID
-		yesterdayDate, _ := time.Parse("2006-01-02", yesterday)
-		exists, err := s.metricsRepo.Exists(ctx, userID, adminAccountID, yesterdayDate)
-		if err != nil {
-			log.Printf("dashboard scheduler: check exists failed user_id=%s err=%v", userID, err)
-			continue
-		}
-		// 如果昨天的快照已存在（由白天的 LiveMetrics 调用写入），跳过该用户。
-		if exists {
-			continue
-		}
-
 		record, err := s.store.Get(ctx, userID, adminAccountID)
 		if err != nil || record == nil || !record.Session.IsAuthenticated() {
 			continue
@@ -324,7 +386,7 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 		todayProfit, err := s.platform.FetchAdminUsageStats(session, yesterday, yesterday)
 		if err != nil {
 			log.Printf("dashboard scheduler: fetch usage stats failed user_id=%s err=%v", userID, err)
-			todayProfit = 0
+			continue
 		}
 
 		// 站点用户总余额（平台中性）。
@@ -337,15 +399,17 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 			siteBalance = result.Balance
 		}
 
-		// 上游指标：使用 ListForAccount 显式传入 adminAccountID，
-		// 确保后台调度路径不依赖当前工作区上下文。
-		var todayPurchase, upstreamBalance float64
-		for _, site := range s.upstreams.ListForAccount(ctx, userID, adminAccountID) {
+		// 上游余额和成本均使用已同步缓存；部分站点不可用时保留已有快照。
+		sites := s.upstreams.ListForAccount(ctx, userID, adminAccountID)
+		todayPurchase, complete, costErr := summarizeCachedUpstreamCosts(sites)
+		if !complete {
+			log.Printf("dashboard scheduler: cached upstream cost incomplete user_id=%s admin_account_id=%s date=%s err=%v", userID, adminAccountID, yesterday, costErr)
+			continue
+		}
+		var upstreamBalance float64
+		for _, site := range sites {
 			if site.RechargeRate <= 0 {
 				continue
-			}
-			if site.Metrics.TodayConsume.Value != nil {
-				todayPurchase += *site.Metrics.TodayConsume.Value * site.RechargeRate
 			}
 			if site.Metrics.Balance.Value != nil {
 				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
@@ -353,6 +417,8 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 		}
 
 		result := MetricsResponse{
+			Date:            yesterday,
+			Timezone:        businesstime.Timezone,
 			TodayProfit:     todayProfit,
 			SiteBalance:     siteBalance,
 			TodayPurchase:   todayPurchase,
@@ -367,7 +433,7 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 // upsertSnapshot 将指标写入 dashboard_daily_stats 表。
 // 冲突时更新已有行，保证同一天内多次调用始终保留最新数据。
 func (s *MetricsService) upsertSnapshot(ctx context.Context, userID, adminAccountID, date string, metrics MetricsResponse) {
-	parsedDate, err := time.Parse("2006-01-02", date)
+	parsedDate, err := time.ParseInLocation("2006-01-02", date, businesstime.Location())
 	if err != nil {
 		log.Printf("dashboard metrics: invalid date %s: %v", date, err)
 		return
@@ -458,12 +524,13 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 		return GroupUsageTodayResponse{}, requestError(ErrorAdminOnly)
 	}
 
+	date := businesstime.Today()
 	groups, err := s.platform.FetchAdminGroups(session)
 	if err != nil {
 		return GroupUsageTodayResponse{}, err
 	}
 
-	stats, err := s.platform.FetchAdminGroupDailyStats(session, groups)
+	stats, err := s.platform.FetchAdminGroupDailyStatsForDate(session, groups, date)
 	if err != nil {
 		return GroupUsageTodayResponse{}, err
 	}
@@ -491,7 +558,7 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 	}
 
 	return GroupUsageTodayResponse{
-		Date:   time.Now().Format("2006-01-02"),
+		Date:   date,
 		Total:  total,
 		Groups: items,
 	}, nil
@@ -499,20 +566,22 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 
 // UpstreamKeyUsageToday 获取当前工作区所有上游站点中，今天有消费的 key 明细（仪表盘「今日成本」下钻）。
 // 数据只在弹窗打开时按需请求，不参与 LiveMetrics 的批量指标计算。
-// 排序、总额与筛选逻辑全部由 upstream.Service.KeyUsageToday 保证与 todayPurchase 口径一致，
+// 排序、总额与筛选逻辑全部由 upstream.Service.KeyUsageToday 保证，
 // 这里只负责排序展示和响应封装。
 func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID string) (UpstreamKeyUsageTodayResponse, error) {
+	date := businesstime.Today()
+	totalSites, failedSites := cachedUpstreamCostSiteCounts(s.upstreams.List(ctx, userID))
 	items, err := s.upstreams.KeyUsageToday(ctx, userID)
-	failedSites := 0
-	totalSites := 0
 	if err != nil {
 		var collectionErr *upstream.KeyUsageCollectionError
 		if !errors.As(err, &collectionErr) || collectionErr.TotalSites <= 0 || collectionErr.FailedSites >= collectionErr.TotalSites {
 			return UpstreamKeyUsageTodayResponse{}, requestError(ErrorUpstreamKeyUsageUnavailable)
 		}
-		failedSites = collectionErr.FailedSites
-		totalSites = collectionErr.TotalSites
-		log.Printf("dashboard key usage: partial upstream failure user_id=%s failed_sites=%d total_sites=%d", userID, failedSites, totalSites)
+		if totalSites == 0 {
+			failedSites = collectionErr.FailedSites
+			totalSites = collectionErr.TotalSites
+		}
+		log.Printf("dashboard key usage: partial upstream failure user_id=%s failed_sites=%d total_sites=%d", userID, collectionErr.FailedSites, collectionErr.TotalSites)
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -537,7 +606,7 @@ func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID strin
 	}
 
 	return UpstreamKeyUsageTodayResponse{
-		Date:        time.Now().Format("2006-01-02"),
+		Date:        date,
 		Total:       total,
 		Keys:        responseItems,
 		FailedSites: failedSites,

@@ -26,14 +26,11 @@ const METRIC_CONFIGS: { key: DashboardMetricKey; color: DashboardColorToken }[] 
   { key: 'upstreamBalance', color: 'primary' },
 ]
 
-function dateLabel(dateStr: string): string {
-  const d = new Date(dateStr)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
-
-function todayLabel(): string {
-  const now = new Date()
-  return `${now.getMonth() + 1}/${now.getDate()}`
+function dateLabel(dateStr: string | undefined): string {
+  if (!dateStr) return ''
+  const [, month, day] = dateStr.split('-').map(Number)
+  if (!month || !day) return dateStr
+  return `${month}/${day}`
 }
 
 function buildMetricData(
@@ -43,18 +40,32 @@ function buildMetricData(
   trendPoints: DashboardTrendPoint[],
 ): DashboardMetricData {
   const current = live[key]
-  const label = todayLabel()
+  const pointsByDate = new Map<string, DashboardTrendPoint>()
+  for (const point of trendPoints) {
+    if (point.date) pointsByDate.set(point.date, point)
+  }
+  if (live.date) {
+    pointsByDate.set(live.date, {
+      date: live.date,
+      todayProfit: live.todayProfit,
+      siteBalance: live.siteBalance,
+      todayPurchase: live.todayPurchase,
+      netProfit: live.netProfit,
+      upstreamBalance: live.upstreamBalance,
+    })
+  }
 
-  const monthPoints: TrendPoint[] = trendPoints.map((p) => ({
-    label: dateLabel(p.date),
-    value: p[key],
-  }))
-  monthPoints.push({ label, value: current })
+  const monthPoints: TrendPoint[] = Array.from(pointsByDate.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((p) => ({
+      label: dateLabel(p.date),
+      value: p[key],
+    }))
 
   const week = monthPoints.slice(-7)
   const month = monthPoints.slice(-30)
 
-  return { key, color, current, series: { week, month } }
+  return { key, color, current, error: live.metricErrors?.[key], series: { week, month } }
 }
 
 export function useDashboardMetrics() {

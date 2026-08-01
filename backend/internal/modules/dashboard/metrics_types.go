@@ -5,12 +5,15 @@ import "time"
 // MetricsResponse 是 GET /api/dashboard/metrics 返回的实时指标数据。
 // 所有金额均以 CNY 计价，上游指标已乘以站点的 rechargeRate。
 type MetricsResponse struct {
-	TodayProfit     float64 `json:"todayProfit"`     // 今日盈利额度：管理员站点今日总实际消费
-	SiteBalance     float64 `json:"siteBalance"`     // 站点用户总余额：所有非 admin 用户余额之和
-	TodayPurchase   float64 `json:"todayPurchase"`   // 今日进货额度：所有上游站点今日消费（CNY）之和
-	NetProfit       float64 `json:"netProfit"`       // 今日净利润：todayProfit - todayPurchase
-	UpstreamBalance float64 `json:"upstreamBalance"` // 上游总余额：所有上游站点余额（CNY）之和
-	GroupCount      int     `json:"groupCount"`      // 管理员站点分组总数，省去前端单独请求
+	Date            string            `json:"date"`                   // 指标所属的固定上海业务日
+	Timezone        string            `json:"timezone"`               // 业务日时区，固定为 Asia/Shanghai
+	TodayProfit     float64           `json:"todayProfit"`            // 今日盈利额度：管理员站点今日总实际消费
+	SiteBalance     float64           `json:"siteBalance"`            // 站点用户总余额：所有非 admin 用户余额之和
+	TodayPurchase   float64           `json:"todayPurchase"`          // 今日进货额度：所有上游站点今日消费（CNY）之和
+	NetProfit       float64           `json:"netProfit"`              // 今日净利润：todayProfit - todayPurchase
+	UpstreamBalance float64           `json:"upstreamBalance"`        // 上游总余额：所有上游站点余额（CNY）之和
+	GroupCount      int               `json:"groupCount"`             // 管理员站点分组总数，省去前端单独请求
+	MetricErrors    map[string]string `json:"metricErrors,omitempty"` // 局部指标拉取失败原因，存在时对应金额为 0
 }
 
 // TrendResponse 是 GET /api/dashboard/trends 返回的历史趋势数据。
@@ -77,8 +80,8 @@ type UpstreamKeyUsageTodayResponse struct {
 	Date        string                      `json:"date"`
 	Total       float64                     `json:"total"`
 	Keys        []UpstreamKeyUsageTodayItem `json:"keys"`
-	FailedSites int                         `json:"failedSites,omitempty"`
-	TotalSites  int                         `json:"totalSites,omitempty"`
+	FailedSites int                         `json:"failedSites,omitempty"` // 按首页缓存成本口径统计的不可用站点数
+	TotalSites  int                         `json:"totalSites,omitempty"`  // 按首页缓存成本口径统计的目标站点数
 }
 
 // UpstreamKeyUsageTodayItem 是单个 key 的今日消费明细。
