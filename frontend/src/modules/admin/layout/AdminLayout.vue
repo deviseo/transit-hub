@@ -40,25 +40,13 @@ const loadVersionInfo = async () => {
 }
 
 // GitHub 仓库地址是本项目唯一来源，版本号链接和图标入口都从这里派生，避免散落硬编码。
-const githubRepoUrl = 'https://github.com/deviseo/transit-hub'
-const githubReleasesUrl = `${githubRepoUrl}/releases`
-
-// 非正式发布的占位版本号（本地预览/开发/未设置 APP_VERSION 时的默认值）不对应真实 tag，
-// 点击后退回 release 列表页，而不是跳到一个不存在的 tag 地址。
-const nonReleaseVersionPlaceholders = ['latest', 'local-preview', 'dev', '0.0.0']
+const githubRepoUrl = 'https://github.com/youdaowudao/transit-hub'
 
 const versionLabel = computed(() => {
   const version = versionInfo.value?.version.trim()
   if (!version) return ''
   const bareVersion = version.replace(/^v+/i, '')
   return bareVersion ? `v${bareVersion}` : ''
-})
-
-const releaseUrl = computed(() => {
-  const version = versionInfo.value?.version.trim()
-  if (!version) return githubReleasesUrl
-  if (nonReleaseVersionPlaceholders.includes(version)) return githubReleasesUrl
-  return versionLabel.value ? `${githubReleasesUrl}/tag/${versionLabel.value}` : githubReleasesUrl
 })
 
 // 工作区选择页不显示侧边栏和业务菜单
@@ -325,15 +313,15 @@ watch(
 
         <div class="flex min-w-0 shrink-0 items-center gap-1 sm:gap-4">
           <div class="flex items-center gap-1 sm:gap-2">
-            <!-- 版本号展示：点击跳转到对应 GitHub release（非正式发布占位版本号退回 releases 列表）。 -->
+            <!-- 版本号展示：点击只打开当前 GitHub 仓库，不根据版本号拼 release/tag。 -->
             <a
               v-if="versionInfo"
-              :href="releaseUrl"
+              :href="githubRepoUrl"
               target="_blank"
               rel="noopener noreferrer"
               class="hidden sm:flex items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground hover:bg-surface-elevated hover:text-foreground transition-colors"
-              :title="t('admin.system.openRelease')"
-              :aria-label="t('admin.system.openRelease')"
+              :title="t('admin.system.openGithubRepository')"
+              :aria-label="t('admin.system.openGithubRepository')"
             >
               {{ versionLabel }}
             </a>
