@@ -425,7 +425,8 @@ export default {
         percentagePoints: '{value} pts'
       },
       common: {
-        unavailable: 'N/A'
+        unavailable: 'N/A',
+        metricLoadError: 'Fetch failed: {reason}'
       },
       performance: {
         title: 'Business Performance',
@@ -511,7 +512,7 @@ export default {
       },
       upstreamKeyUsage: {
         title: 'Today\'s Cost Breakdown',
-        subtitle: '{count} keys, {total} total',
+        subtitle: '{count} keys, {total} total, {successful} sites succeeded, {failed} failed',
         close: 'Close',
         empty: 'No keys with usage today.',
         loadError: 'Failed to load today\'s cost breakdown. Check upstream site connections and retry.',

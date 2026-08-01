@@ -41,6 +41,7 @@ type PlatformClient interface {
 	FetchAdminGroups(session upstream.Session) ([]upstream.GroupInfo, error)
 	FetchAdminAllGroups(session upstream.Session) ([]upstream.AdminGroupInfo, error)
 	FetchAdminGroupDailyStats(session upstream.Session, groups []upstream.GroupInfo) ([]upstream.GroupDailyStat, error)
+	FetchAdminGroupDailyStatsForDate(session upstream.Session, groups []upstream.GroupInfo, date string) ([]upstream.GroupDailyStat, error)
 	// sub2api 专用方法（token 登录和旧接口保留）
 	LoginSub2APIAdmin(baseURL string, email string, password string) (upstream.Session, error)
 	LoginWithToken(baseURL string, platform upstream.Platform, account string, accessToken string, refreshToken string, tokenType string) (upstream.LoginResult, error)

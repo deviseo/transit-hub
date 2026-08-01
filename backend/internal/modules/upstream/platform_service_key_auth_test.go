@@ -122,6 +122,9 @@ func TestFetchSub2APIAdminUsageStatsUsesAdminAPIKey(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Fatalf("unexpected Authorization header: %q", got)
 		}
+		if got := r.URL.Query().Get("timezone"); got != "Asia/Shanghai" {
+			t.Fatalf("timezone = %q, want Asia/Shanghai", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":{"total_actual_cost":12.5}}`))
 	}))
@@ -132,6 +135,35 @@ func TestFetchSub2APIAdminUsageStatsUsesAdminAPIKey(t *testing.T) {
 		Platform: PlatformSub2API, BaseURL: server.URL, AdminAPIKey: "admin-key",
 	}, "2026-07-14", "2026-07-14")
 	if err != nil || value != 12.5 {
+		t.Fatalf("unexpected result value=%v err=%v", value, err)
+	}
+}
+
+func TestFetchNewAPIAdminUsageStatsUsesShanghaiBusinessDayBounds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/log/self/stat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("start_timestamp"); got != "1785427200" {
+			t.Fatalf("start_timestamp = %q, want Shanghai 2026-07-31 00:00:00", got)
+		}
+		if got := r.URL.Query().Get("end_timestamp"); got != "1785513599" {
+			t.Fatalf("end_timestamp = %q, want Shanghai 2026-07-31 23:59:59", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"quota":250000}}`))
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	value, err := service.FetchAdminUsageStats(Session{
+		Platform:     PlatformNewAPI,
+		BaseURL:      server.URL,
+		Cookie:       "session=abc",
+		UserID:       "7",
+		QuotaPerUnit: 100000,
+	}, "2026-07-31", "2026-07-31")
+	if err != nil || value != 2.5 {
 		t.Fatalf("unexpected result value=%v err=%v", value, err)
 	}
 }

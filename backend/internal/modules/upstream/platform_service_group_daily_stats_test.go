@@ -87,6 +87,74 @@ func TestFetchAdminGroupDailyStats_DispatchesByPlatform(t *testing.T) {
 	})
 }
 
+func TestFetchAdminGroupDailyStatsForDate_Sub2APIUsesRequestedBusinessDate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			writeJSON(w, map[string]any{"data": []map[string]any{{
+				"id":    1,
+				"group": map[string]any{"name": "vip"},
+			}}})
+		case "/api/v1/usage/stats":
+			if got := r.URL.Query().Get("start_date"); got != "2026-07-31" {
+				t.Errorf("start_date = %q, want 2026-07-31", got)
+			}
+			if got := r.URL.Query().Get("end_date"); got != "2026-07-31" {
+				t.Errorf("end_date = %q, want 2026-07-31", got)
+			}
+			if got := r.URL.Query().Get("timezone"); got != "Asia/Shanghai" {
+				t.Errorf("timezone = %q, want Asia/Shanghai", got)
+			}
+			writeJSON(w, map[string]any{"data": map[string]any{"total_actual_cost": 12.5}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	stats, err := service.FetchAdminGroupDailyStatsForDate(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"},
+		nil,
+		"2026-07-31",
+	)
+	if err != nil {
+		t.Fatalf("FetchAdminGroupDailyStatsForDate() error: %v", err)
+	}
+	if len(stats) != 1 || stats[0].GroupName != "vip" || stats[0].TodayActualCost != 12.5 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestFetchAdminGroupDailyStatsForDate_NewAPIUsesOneRequestedBusinessDay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/log/self/stat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("start_timestamp"); got != "1785427200" {
+			t.Errorf("start_timestamp = %q, want Shanghai 2026-07-31 00:00:00", got)
+		}
+		if got := r.URL.Query().Get("end_timestamp"); got != "1785513599" {
+			t.Errorf("end_timestamp = %q, want Shanghai 2026-07-31 23:59:59", got)
+		}
+		writeJSON(w, map[string]any{"data": map[string]any{"quota": 250000}})
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	stats, err := service.FetchAdminGroupDailyStatsForDate(
+		Session{Platform: PlatformNewAPI, BaseURL: server.URL, Cookie: "session=abc", UserID: "1", QuotaPerUnit: 100000},
+		[]GroupInfo{{Name: "vip"}},
+		"2026-07-31",
+	)
+	if err != nil {
+		t.Fatalf("FetchAdminGroupDailyStatsForDate() error: %v", err)
+	}
+	if len(stats) != 1 || stats[0].GroupName != "vip" || stats[0].TodayActualCost != 2.5 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
 // TestSub2APICostParsers 验证 sub2api 各降级路径的字段解析覆盖文档要求的
 // today_actual_cost / total_actual_cost / actual_cost 语义。
 func TestSub2APICostParsers(t *testing.T) {

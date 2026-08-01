@@ -34,5 +34,7 @@ export interface DashboardMetricData {
   color: DashboardColorToken
   /** 当前值（“今天”的数值），即月序列最后一个点。 */
   current: number
+  /** 局部拉取失败原因；存在时 current 为显式的 0 占位。 */
+  error?: string
   series: MetricSeries
 }

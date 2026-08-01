@@ -425,7 +425,8 @@ export default {
         percentagePoints: '{value} 个百分点'
       },
       common: {
-        unavailable: '暂无'
+        unavailable: '暂无',
+        metricLoadError: '拉取失败：{reason}'
       },
       performance: {
         title: '经营表现',
@@ -511,7 +512,7 @@ export default {
       },
       upstreamKeyUsage: {
         title: '今日成本明细',
-        subtitle: '共 {count} 个 key，合计 {total}',
+        subtitle: '共 {count} 个 Key，合计 {total}，成功站点 {successful} 个，失败站点 {failed} 个',
         close: '关闭',
         empty: '暂无今日消费的 key。',
         loadError: '加载今日成本明细失败，请检查上游站点连接后重试。',

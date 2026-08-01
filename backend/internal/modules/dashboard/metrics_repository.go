@@ -7,16 +7,27 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type metricsDB interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // MetricsRepository 负责 dashboard_daily_stats 表的持久化操作。
 // 与 Redis 的 SessionStore 独立，专门用于存储每日统计快照。
 type MetricsRepository struct {
-	db *pgxpool.Pool
+	db metricsDB
 }
 
 func NewMetricsRepository(db *pgxpool.Pool) *MetricsRepository {
+	return newMetricsRepository(db)
+}
+
+func newMetricsRepository(db metricsDB) *MetricsRepository {
 	return &MetricsRepository{db: db}
 }
 
@@ -103,15 +114,15 @@ func (r *MetricsRepository) Upsert(ctx context.Context, snapshot DailySnapshot) 
 	return err
 }
 
-// ListRange 查询指定用户指定工作区最近 days 天的快照记录，按日期升序返回。
-// 不包含当天（当天的数据由 LiveMetrics 实时提供），仅返回已保存的历史日期。
-func (r *MetricsRepository) ListRange(ctx context.Context, userID, adminAccountID string, days int) ([]DailySnapshot, error) {
+// ListRange 查询指定用户指定工作区相对固定上海业务日最近 days 天的快照记录，按日期升序返回。
+// 不包含 businessDate（当天的数据由 LiveMetrics 实时提供），仅返回已保存的历史日期。
+func (r *MetricsRepository) ListRange(ctx context.Context, userID, adminAccountID string, days int, businessDate string) ([]DailySnapshot, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, date, today_profit, site_balance, today_purchase, net_profit, upstream_balance, created_at
 		FROM dashboard_daily_stats
-		WHERE user_id = $1 AND admin_account_id = $2 AND date >= (CURRENT_DATE - $3::int) AND date < CURRENT_DATE
+		WHERE user_id = $1 AND admin_account_id = $2 AND date >= ($3::date - $4::int) AND date < $3::date
 		ORDER BY date ASC
-	`, userID, adminAccountID, days)
+	`, userID, adminAccountID, businessDate, days)
 	if err != nil {
 		return nil, err
 	}
