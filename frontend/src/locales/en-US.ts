@@ -656,10 +656,47 @@ export default {
         all: 'All', associated: 'Configured', unassociated: 'Not configured', stale: 'Stale'
       },
       listAria: 'My group list',
+      groupDisplay: {
+        manage: 'Manage group display',
+        title: 'Group display order',
+        empty: 'No groups to manage',
+        noVisibleGroups: 'No groups are visible. Restore one in Manage group display.',
+        moveUp: 'Move up',
+        moveDown: 'Move down'
+      },
       targetCount: '{count} pricing sources',
-      detailSubtitle: '{count} upstream groups used as pricing sources',
+      connectionSummary: '{included} included in pricing · {excluded} not included',
       staleOwnGroup: 'The admin site no longer returns this group. Its configuration is preserved until you confirm cleanup.',
       staleTarget: 'Upstream stale',
+      associationTable: {
+        showExcluded: 'Show not-included ({count})',
+        hideExcluded: 'Hide not-included',
+        excludedLabel: 'Not included in pricing',
+        recentChange: 'Recent change',
+        columns: {
+          name: 'Upstream group / site',
+          sourceStatus: 'Source status',
+          healthStatus: 'Health status',
+          upstreamMultiplier: 'Upstream multiplier / change',
+          effectiveCost: 'Converted cost multiplier',
+          profitMargin: 'Budget gross margin'
+        }
+      },
+      statuses: {
+        source: {
+          available: 'Available',
+          notFound: 'Not found',
+          syncError: 'Sync error',
+          unknown: 'Unknown'
+        },
+        health: {
+          healthy: 'Healthy',
+          partial: 'Partially disabled',
+          autoStopped: 'Health automation stopped',
+          unmonitored: 'Not in health automation',
+          unknown: 'Unknown'
+        }
+      },
       metrics: {
         ownMultiplier: 'My group multiplier',
         targets: 'Pricing sources',
@@ -699,6 +736,9 @@ export default {
       noTargets: {
         title: 'No pricing sources', description: 'Add an upstream source before configuring auto-pricing.'
       },
+      noConnections: {
+        title: 'No real connections to show', description: 'There are no real connections or pricing mappings available for this group.'
+      },
       targetsDrawer: {
         titleWithGroup: '{group} · Edit pricing sources', selectedCount: '{count} upstream groups selected',
         searchLabel: 'Search upstream groups', searchPlaceholder: 'Search site, platform, or group...',
@@ -713,6 +753,12 @@ export default {
       },
       errors: {
         primaryTargetRequired: 'The current primary upstream is used by auto-pricing. Change or disable auto-pricing before removing it.'
+      },
+      dataWarnings: {
+        realConnections: 'Real connections could not be loaded; this list may be incomplete.',
+        groupRates: 'Group rate snapshots could not be loaded; multipliers and recent changes are shown as unknown.',
+        health: 'Health data could not be loaded; health status is shown as unknown.',
+        upstreamSites: 'Upstream site cache could not be loaded; source status and site names may be unknown.'
       },
       close: 'Close',
       empty: 'No group mappings found.',

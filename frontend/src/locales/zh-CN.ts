@@ -656,10 +656,47 @@ export default {
         all: '全部', associated: '已配置', unassociated: '未配置', stale: '失效'
       },
       listAria: '我的分组列表',
+      groupDisplay: {
+        manage: '管理分组显示',
+        title: '分组显示顺序',
+        empty: '暂无可管理分组',
+        noVisibleGroups: '暂无可显示分组，请在管理分组显示中恢复。',
+        moveUp: '上移',
+        moveDown: '下移'
+      },
       targetCount: '{count} 个数据源',
-      detailSubtitle: '当前使用 {count} 个上游分组作为调价数据源',
+      connectionSummary: '已纳入调价 {included} 个 · 未纳入调价 {excluded} 个',
       staleOwnGroup: '管理员站点已不再返回此分组。配置仍被保留，请确认后再清理。',
       staleTarget: '上游已失效',
+      associationTable: {
+        showExcluded: '显示未纳入调价（{count}）',
+        hideExcluded: '收起未纳入调价',
+        excludedLabel: '未纳入调价',
+        recentChange: '最近变动',
+        columns: {
+          name: '上游分组 / 站点',
+          sourceStatus: '源站状态',
+          healthStatus: '健康状态',
+          upstreamMultiplier: '上游倍率 / 最近变动',
+          effectiveCost: '换算成本倍率',
+          profitMargin: '预算毛利率'
+        }
+      },
+      statuses: {
+        source: {
+          available: '可用',
+          notFound: '未发现',
+          syncError: '同步异常',
+          unknown: '未知'
+        },
+        health: {
+          healthy: '健康可用',
+          partial: '部分停用',
+          autoStopped: '健康自动停用',
+          unmonitored: '未纳入健康自动化',
+          unknown: '状态未知'
+        }
+      },
       metrics: {
         ownMultiplier: '我的分组倍率',
         targets: '调价数据源',
@@ -699,6 +736,9 @@ export default {
       noTargets: {
         title: '尚未配置调价数据源', description: '添加上游数据源后，可为该分组配置自动调价。'
       },
+      noConnections: {
+        title: '暂无可展示的真实接入', description: '当前没有可用于展示的真实接入或调价映射。'
+      },
       targetsDrawer: {
         titleWithGroup: '{group} · 编辑调价数据源', selectedCount: '已选择 {count} 个上游分组',
         searchLabel: '搜索上游分组', searchPlaceholder: '搜索站点、平台或分组...',
@@ -713,6 +753,12 @@ export default {
       },
       errors: {
         primaryTargetRequired: '当前主上游正在用于自动调价。请先修改或关闭自动调价，再移除此关联。'
+      },
+      dataWarnings: {
+        realConnections: '真实接入数据加载失败，当前列表可能不完整。',
+        groupRates: '倍率快照加载失败，倍率和最近变动显示为未知。',
+        health: '健康数据加载失败，健康状态显示为未知。',
+        upstreamSites: '上游站点缓存加载失败，源站状态和站点名称可能显示为未知。'
       },
       close: '关闭',
       empty: '暂无分组映射数据。',

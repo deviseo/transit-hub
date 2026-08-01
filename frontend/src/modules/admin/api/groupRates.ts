@@ -64,6 +64,19 @@ export const listGroupRates = async (query: GroupRatesQuery): Promise<PaginatedG
   return requestJson<PaginatedGroupRatesResponse>(`/group-rates?${params.toString()}`)
 }
 
+export const listAllGroupRates = async (query: Omit<GroupRatesQuery, 'page'>): Promise<PaginatedGroupRatesResponse['items']> => {
+  const firstPage = await listGroupRates({ ...query, page: 1 })
+  const items = [...firstPage.items]
+  const totalPages = Math.max(1, firstPage.totalPages || 1)
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const response = await listGroupRates({ ...query, page })
+    items.push(...response.items)
+  }
+
+  return items
+}
+
 export const listGroupRateHistory = async (query: GroupRateHistoryQuery): Promise<GroupRateHistoryRow[]> => {
   const params = new URLSearchParams({
     siteId: query.siteId,
