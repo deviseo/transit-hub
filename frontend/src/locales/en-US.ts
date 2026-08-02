@@ -676,6 +676,7 @@ export default {
         columns: {
           name: 'Upstream group / site',
           sourceStatus: 'Source status',
+          mainSiteStatus: 'Admin site status',
           healthStatus: 'Health status',
           upstreamMultiplier: 'Upstream multiplier / change',
           effectiveCost: 'Converted cost multiplier',
@@ -687,6 +688,17 @@ export default {
           available: 'Available',
           notFound: 'Not found',
           syncError: 'Sync error',
+          unknown: 'Unknown'
+        },
+        mainSite: {
+          available: 'Schedulable',
+          partial: 'Partially schedulable',
+          unavailable: 'Not schedulable',
+          accountDisabled: 'Account disabled',
+          schedulingDisabled: 'Scheduling off',
+          groupDisabled: 'Group disabled',
+          notConnected: 'Not connected',
+          notFound: 'Resource not found',
           unknown: 'Unknown'
         },
         health: {
@@ -757,7 +769,7 @@ export default {
       dataWarnings: {
         realConnections: 'Real connections could not be loaded; this list may be incomplete.',
         groupRates: 'Group rate snapshots could not be loaded; multipliers and recent changes are shown as unknown.',
-        health: 'Health data could not be loaded; health status is shown as unknown.',
+        health: 'Admin account and health data could not be loaded; admin site and health statuses are shown as unknown.',
         upstreamSites: 'Upstream site cache could not be loaded; source status and site names may be unknown.'
       },
       close: 'Close',

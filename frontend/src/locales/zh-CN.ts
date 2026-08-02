@@ -676,6 +676,7 @@ export default {
         columns: {
           name: '上游分组 / 站点',
           sourceStatus: '源站状态',
+          mainSiteStatus: '主站状态',
           healthStatus: '健康状态',
           upstreamMultiplier: '上游倍率 / 最近变动',
           effectiveCost: '换算成本倍率',
@@ -687,6 +688,17 @@ export default {
           available: '可用',
           notFound: '未发现',
           syncError: '同步异常',
+          unknown: '未知'
+        },
+        mainSite: {
+          available: '可调度',
+          partial: '部分可调度',
+          unavailable: '不可调度',
+          accountDisabled: '账号停用',
+          schedulingDisabled: '调度关闭',
+          groupDisabled: '分组停用',
+          notConnected: '未接入',
+          notFound: '资源未发现',
           unknown: '未知'
         },
         health: {
@@ -757,7 +769,7 @@ export default {
       dataWarnings: {
         realConnections: '真实接入数据加载失败，当前列表可能不完整。',
         groupRates: '倍率快照加载失败，倍率和最近变动显示为未知。',
-        health: '健康数据加载失败，健康状态显示为未知。',
+        health: '主站账号与健康数据加载失败，主站状态和健康状态显示为未知。',
         upstreamSites: '上游站点缓存加载失败，源站状态和站点名称可能显示为未知。'
       },
       close: '关闭',

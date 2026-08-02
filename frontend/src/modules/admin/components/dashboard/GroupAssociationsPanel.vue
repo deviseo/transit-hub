@@ -50,9 +50,10 @@ import GroupAssociationTargetsDrawer from './GroupAssociationTargetsDrawer.vue'
 
 type AssociationFilter = 'all' | 'associated' | 'unassociated' | 'stale'
 type ProfitCalculatorMode = 'group' | 'custom'
-type AssociationSortKey = 'name' | 'sourceStatus' | 'healthStatus' | 'upstreamMultiplier' | 'delta' | 'effectiveCostMultiplier' | 'profitMargin'
+type AssociationSortKey = 'name' | 'sourceStatus' | 'mainSiteStatus' | 'healthStatus' | 'upstreamMultiplier' | 'delta' | 'effectiveCostMultiplier' | 'profitMargin'
 type AssociationSortDirection = 'asc' | 'desc'
 type SourceStatus = 'available' | 'notFound' | 'syncError' | 'unknown'
+type MainSiteStatus = 'available' | 'partial' | 'unavailable' | 'accountDisabled' | 'schedulingDisabled' | 'groupDisabled' | 'notConnected' | 'notFound' | 'unknown'
 type HealthStatus = 'healthy' | 'partial' | 'autoStopped' | 'unmonitored' | 'unknown'
 
 interface AssociationRow {
@@ -80,6 +81,7 @@ interface AssociationTargetRow {
   effectiveCostMultiplier: number | null
   profitMargin: number | null
   sourceStatus: SourceStatus
+  mainSiteStatus: MainSiteStatus
   healthStatus: HealthStatus
 }
 
@@ -376,6 +378,40 @@ const healthGroupFor = (row: AssociationRow): AdminGroupHealth | null => {
   )) ?? null
 }
 
+const ACTIVE_MAIN_RESOURCE_STATUSES = new Set(['1', 'active', 'enabled'])
+const INACTIVE_MAIN_RESOURCE_STATUSES = new Set(['2', '3', 'inactive', 'disabled', 'suspended'])
+
+const mainResourceStatus = (account: AdminGroupHealth['accounts'][number]): MainSiteStatus => {
+  const status = account.status.trim().toLowerCase()
+  if (INACTIVE_MAIN_RESOURCE_STATUSES.has(status)) return 'accountDisabled'
+  if (account.schedulable === false) return 'schedulingDisabled'
+  if (ACTIVE_MAIN_RESOURCE_STATUSES.has(status)) return 'available'
+  return 'unknown'
+}
+
+const mainSiteStatusFor = (connections: RealConnection[], row: AssociationRow): MainSiteStatus => {
+  if (connections.length === 0) return 'notConnected'
+  const group = healthGroupFor(row)
+  if (!group || group.accountsError) return 'unknown'
+  if (INACTIVE_MAIN_RESOURCE_STATUSES.has(group.status.trim().toLowerCase())) return 'groupDisabled'
+
+  const accountIds = [...new Set(connections.map(connection => connection.adminAccountId).filter(Boolean))]
+  if (accountIds.length === 0) return 'notConnected'
+  const accountsById = new Map(group.accounts.map(account => [account.id, account]))
+  const statuses = accountIds.map((accountId): MainSiteStatus => {
+    const account = accountsById.get(accountId)
+    return account ? mainResourceStatus(account) : 'notFound'
+  })
+
+  if (statuses.every(status => status === 'available')) return 'available'
+  if (statuses.some(status => status === 'unknown')) return 'unknown'
+  if (statuses.some(status => status === 'available')) return 'partial'
+  if (statuses.every(status => status === 'accountDisabled')) return 'accountDisabled'
+  if (statuses.every(status => status === 'schedulingDisabled')) return 'schedulingDisabled'
+  if (statuses.every(status => status === 'notFound')) return 'notFound'
+  return 'unavailable'
+}
+
 const healthAccountManaged = (account: AdminGroupHealth['accounts'][number], group: AdminGroupHealth): boolean => {
   const accountEnabledPolicy = account.hasEnabledProbePolicy ?? account.hasEnabledPolicy
   if (accountEnabledPolicy != null) return accountEnabledPolicy
@@ -503,6 +539,7 @@ const associationRows = computed<AssociationTargetRow[]>(() => {
       effectiveCostMultiplier,
       profitMargin: calculateProfitMargin(row.ownGroupInfo?.multiplier, effectiveCostMultiplier),
       sourceStatus: sourceStatusFor(entry.siteId, entry.groupId, entry.groupName),
+      mainSiteStatus: mainSiteStatusFor(entry.connections, row),
       healthStatus: healthStatusFor(entry.connections, row),
     }
   })
@@ -522,6 +559,18 @@ const sourceStatusOrder: Record<SourceStatus, number> = {
   syncError: 1,
   notFound: 2,
   unknown: 3,
+}
+
+const mainSiteStatusOrder: Record<MainSiteStatus, number> = {
+  available: 0,
+  partial: 1,
+  schedulingDisabled: 2,
+  accountDisabled: 3,
+  groupDisabled: 4,
+  unavailable: 5,
+  notConnected: 6,
+  notFound: 7,
+  unknown: 8,
 }
 
 const healthStatusOrder: Record<HealthStatus, number> = {
@@ -544,6 +593,11 @@ const compareAssociationRows = (first: AssociationTargetRow, second: Association
       firstMissing = first.sourceStatus === 'unknown'
       secondMissing = second.sourceStatus === 'unknown'
       comparison = sourceStatusOrder[first.sourceStatus] - sourceStatusOrder[second.sourceStatus]
+      break
+    case 'mainSiteStatus':
+      firstMissing = first.mainSiteStatus === 'unknown'
+      secondMissing = second.mainSiteStatus === 'unknown'
+      comparison = mainSiteStatusOrder[first.mainSiteStatus] - mainSiteStatusOrder[second.mainSiteStatus]
       break
     case 'healthStatus':
       firstMissing = first.healthStatus === 'unknown'
@@ -608,6 +662,7 @@ const formatRecentDelta = (value: number | null): string => {
 }
 
 const sourceStatusLabel = (status: SourceStatus): string => t(`admin.groupAssociations.statuses.source.${status}`)
+const mainSiteStatusLabel = (status: MainSiteStatus): string => t(`admin.groupAssociations.statuses.mainSite.${status}`)
 const healthStatusLabel = (status: HealthStatus): string => t(`admin.groupAssociations.statuses.health.${status}`)
 
 const sourceStatusClass = (status: SourceStatus): string => {
@@ -615,6 +670,13 @@ const sourceStatusClass = (status: SourceStatus): string => {
   if (status === 'syncError') return 'bg-warning/10 text-warning'
   if (status === 'notFound') return 'bg-surface-elevated text-muted-foreground'
   return 'bg-surface text-muted-foreground'
+}
+
+const mainSiteStatusClass = (status: MainSiteStatus): string => {
+  if (status === 'available') return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+  if (status === 'partial' || status === 'schedulingDisabled') return 'bg-warning/10 text-warning'
+  if (status === 'unavailable' || status === 'accountDisabled' || status === 'groupDisabled') return 'bg-destructive/10 text-destructive'
+  return 'bg-surface-elevated text-muted-foreground'
 }
 
 const healthStatusClass = (status: HealthStatus): string => {
@@ -1280,10 +1342,10 @@ onBeforeUnmount(() => {
 
               <template v-else>
                 <div class="mt-3 hidden overflow-x-auto rounded-lg border border-border/60 md:block">
-                  <table class="w-full min-w-[760px] table-fixed text-left">
+                  <table class="w-full min-w-[900px] table-fixed text-left">
                     <thead class="border-b border-border/60 bg-surface/50 text-xs text-muted-foreground">
                       <tr>
-                        <th class="w-[28%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('name')">
+                        <th class="w-[24%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('name')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('name')">
                             {{ t('admin.groupAssociations.associationTable.columns.name') }}
                             <ChevronUp v-if="associationSortKey === 'name' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1291,7 +1353,7 @@ onBeforeUnmount(() => {
                             <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
                           </button>
                         </th>
-                        <th class="w-[14%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('sourceStatus')">
+                        <th class="w-[12%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('sourceStatus')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('sourceStatus')">
                             {{ t('admin.groupAssociations.associationTable.columns.sourceStatus') }}
                             <ChevronUp v-if="associationSortKey === 'sourceStatus' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1299,7 +1361,15 @@ onBeforeUnmount(() => {
                             <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
                           </button>
                         </th>
-                        <th class="w-[16%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('healthStatus')">
+                        <th class="w-[13%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('mainSiteStatus')">
+                          <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('mainSiteStatus')">
+                            {{ t('admin.groupAssociations.associationTable.columns.mainSiteStatus') }}
+                            <ChevronUp v-if="associationSortKey === 'mainSiteStatus' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
+                            <ChevronDown v-else-if="associationSortKey === 'mainSiteStatus'" class="h-3.5 w-3.5" />
+                            <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
+                          </button>
+                        </th>
+                        <th class="w-[14%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('healthStatus')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('healthStatus')">
                             {{ t('admin.groupAssociations.associationTable.columns.healthStatus') }}
                             <ChevronUp v-if="associationSortKey === 'healthStatus' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1307,7 +1377,7 @@ onBeforeUnmount(() => {
                             <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
                           </button>
                         </th>
-                        <th class="w-[16%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('upstreamMultiplier')">
+                        <th class="w-[15%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('upstreamMultiplier')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('upstreamMultiplier')">
                             {{ t('admin.groupAssociations.associationTable.columns.upstreamMultiplier') }}
                             <ChevronUp v-if="associationSortKey === 'upstreamMultiplier' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1315,7 +1385,7 @@ onBeforeUnmount(() => {
                             <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
                           </button>
                         </th>
-                        <th class="w-[13%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('effectiveCostMultiplier')">
+                        <th class="w-[11%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('effectiveCostMultiplier')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('effectiveCostMultiplier')">
                             {{ t('admin.groupAssociations.associationTable.columns.effectiveCost') }}
                             <ChevronUp v-if="associationSortKey === 'effectiveCostMultiplier' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1323,7 +1393,7 @@ onBeforeUnmount(() => {
                             <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-60" />
                           </button>
                         </th>
-                        <th class="w-[13%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('profitMargin')">
+                        <th class="w-[11%] px-4 py-3 font-medium" scope="col" :aria-sort="associationSortAria('profitMargin')">
                           <button type="button" class="inline-flex items-center gap-1.5 font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="toggleAssociationSort('profitMargin')">
                             {{ t('admin.groupAssociations.associationTable.columns.profitMargin') }}
                             <ChevronUp v-if="associationSortKey === 'profitMargin' && associationSortDirection === 'asc'" class="h-3.5 w-3.5" />
@@ -1359,6 +1429,9 @@ onBeforeUnmount(() => {
                         </td>
                         <td class="px-4 py-3">
                           <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="sourceStatusClass(target.sourceStatus)">{{ sourceStatusLabel(target.sourceStatus) }}</span>
+                        </td>
+                        <td class="px-4 py-3">
+                          <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="mainSiteStatusClass(target.mainSiteStatus)">{{ mainSiteStatusLabel(target.mainSiteStatus) }}</span>
                         </td>
                         <td class="px-4 py-3">
                           <span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="healthStatusClass(target.healthStatus)">{{ healthStatusLabel(target.healthStatus) }}</span>
@@ -1398,6 +1471,10 @@ onBeforeUnmount(() => {
                       <div>
                         <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.associationTable.columns.sourceStatus') }}</div>
                         <div class="mt-1"><span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="sourceStatusClass(target.sourceStatus)">{{ sourceStatusLabel(target.sourceStatus) }}</span></div>
+                      </div>
+                      <div>
+                        <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.associationTable.columns.mainSiteStatus') }}</div>
+                        <div class="mt-1"><span class="inline-flex rounded-md px-2 py-1 text-xs font-medium" :class="mainSiteStatusClass(target.mainSiteStatus)">{{ mainSiteStatusLabel(target.mainSiteStatus) }}</span></div>
                       </div>
                       <div>
                         <div class="text-[11px] text-muted-foreground">{{ t('admin.groupAssociations.associationTable.columns.healthStatus') }}</div>
