@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -906,12 +907,19 @@ func sub2APIKeyGroupName(item any) string {
 	return ""
 }
 
+// sub2APIUsageStatsCostPtr 返回 nil 表示字段不存在（区分"字段缺失"与"真实零成本"）。
+// 调用方收到 nil 时应触发回退路径，而不是把字段缺失误判为零成本。
+func sub2APIUsageStatsCostPtr(item any) *float64 {
+	return firstNumber(item, []string{"total_actual_cost", "totalActualCost", "actual_cost", "actualCost", "cost"})
+}
+
+// sub2APIUsageStatsCost 供 Group/Key 级别统计使用，字段缺失返回 0（该场景无需区分）。
 func sub2APIUsageStatsCost(item any) float64 {
-	cost := firstNumber(item, []string{"total_actual_cost", "totalActualCost", "actual_cost", "actualCost", "cost"})
-	if cost == nil {
+	v := sub2APIUsageStatsCostPtr(item)
+	if v == nil {
 		return 0
 	}
-	return *cost
+	return *v
 }
 
 func sub2APIGroupDailyCost(item any) float64 {
@@ -1020,7 +1028,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 		return nil, nil
 	}
 
-	today := time.Now().Format("2006-01-02")
+	today := businesstime.Today()
 	const maxKeyConcurrency = 4
 	sem := make(chan struct{}, maxKeyConcurrency)
 	var wg sync.WaitGroup
@@ -1141,7 +1149,16 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(todayStart()) + "&end_timestamp=" + strconvInt(todayEnd()) + "&token_name=" + url.QueryEscape(record.name)
+			startTS, endTS, err := businessDayUnixBounds(businesstime.Today())
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS) + "&token_name=" + url.QueryEscape(record.name)
 			if record.groupName != "" {
 				statURL += "&group=" + url.QueryEscape(record.groupName)
 			}
@@ -1251,10 +1268,18 @@ func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[stri
 	if err != nil {
 		return Metrics{}, err
 	}
-	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(todayStart()) + "&end_timestamp=" + strconvInt(todayEnd())
-	stat, err := s.httpClient.requestJSON(statURL, cookieOptions)
-	if err != nil {
-		log.Printf("new-api stat request failed base_url=%s err=%v", session.BaseURL, err)
+	// 使用上海业务日时区边界查询今日成本，修复 todayStart/todayEnd 使用进程本地时区的问题。
+	var stat jsonResponse
+	if startTS, endTS, boundsErr := businessDayUnixBounds(businesstime.Today()); boundsErr == nil {
+		statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS)
+		if r, statErr := s.httpClient.requestJSON(statURL, cookieOptions); statErr == nil {
+			stat = r
+		} else {
+			log.Printf("new-api stat request failed base_url=%s err=%v", session.BaseURL, statErr)
+			stat = jsonResponse{Payload: map[string]any{}}
+		}
+	} else {
+		log.Printf("new-api businessDayUnixBounds failed base_url=%s err=%v", session.BaseURL, boundsErr)
 		stat = jsonResponse{Payload: map[string]any{}}
 	}
 	groupsPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self/groups", cookieOptions)
@@ -2672,4 +2697,161 @@ func parseSub2APIBalanceHistoryItem(value any) Sub2APIBalanceHistoryItem {
 	}
 	item.CreatedAt = parseFlexibleTime(firstAny(value, sub2APIBalanceHistoryTimeKeys))
 	return item
+}
+
+// FetchCostForDate 查询上游站点指定上海业务日期的原始成本（未乘 rechargeRate）。
+// date 格式 "2006-01-02"，由调用方传入；内部禁止调用 time.Now() 推导业务日期。
+// sub2api 主路径：账号级汇总接口；回退路径：逐 key 求和（结果标 key_sum_best_effort）。
+// new-api 路径：/api/log/self/stat，使用 businessDayUnixBounds(date)。
+func (s *PlatformService) FetchCostForDate(session Session, date string) (rawCost float64, meta CostFetchMeta, err error) {
+	meta.ObservedAt = time.Now()
+	switch session.Platform {
+	case PlatformSub2API:
+		return s.fetchSub2APICostForDate(session, date)
+	case PlatformNewAPI:
+		return s.fetchNewAPICostForDate(session, date)
+	default:
+		// 尝试 new-api，失败再尝试 sub2api。
+		cost, m, err := s.fetchNewAPICostForDate(session, date)
+		if err == nil {
+			return cost, m, nil
+		}
+		return s.fetchSub2APICostForDate(session, date)
+	}
+}
+
+func (s *PlatformService) fetchNewAPICostForDate(session Session, date string) (float64, CostFetchMeta, error) {
+	meta := CostFetchMeta{Source: "account_level", ObservedAt: time.Now()}
+	startTS, endTS, err := businessDayUnixBounds(date)
+	if err != nil {
+		return 0, meta, err
+	}
+	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS)
+	response, err := s.httpClient.requestJSON(statURL, newAPIAuthOptions(session))
+	if err != nil {
+		return 0, meta, err
+	}
+	qpu := session.QuotaPerUnit
+	cost := quotaToUSDValueWithUnit(firstNumber(dataRecord(response.Payload), []string{"quota"}), qpu)
+	return cost, meta, nil
+}
+
+func (s *PlatformService) fetchSub2APICostForDate(session Session, date string) (float64, CostFetchMeta, error) {
+	meta := CostFetchMeta{Source: "account_level", ObservedAt: time.Now()}
+	authOpts := adminAuthOptions(session)
+	statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + url.QueryEscape(date) + "&end_date=" + url.QueryEscape(date) + "&timezone=Asia%2FShanghai"
+	response, err := s.httpClient.requestJSON(statsURL, authOpts)
+	if err == nil {
+		// 用 *float64：nil 表示字段不存在（字段缺失不等于零成本），触发逐 key 回退。
+		costPtr := sub2APIUsageStatsCostPtr(dataRecord(response.Payload))
+		if costPtr != nil {
+			return *costPtr, meta, nil
+		}
+		log.Printf("sub2api FetchCostForDate: account-level response missing cost field date=%s base_url=%s, falling back to key sum", date, session.BaseURL)
+	} else {
+		log.Printf("sub2api FetchCostForDate: account-level failed date=%s base_url=%s err=%v, falling back to key sum", date, session.BaseURL, err)
+	}
+	meta.Source = "key_sum_best_effort"
+	cost, keyCount, keyErr := s.fetchSub2APIKeysCostForDate(session, date)
+	if keyErr != nil {
+		return 0, meta, keyErr
+	}
+	meta.KeyCount = keyCount
+	return cost, meta, nil
+}
+
+// fetchSub2APIKeysCostForDate 通过逐 key 汇总方式查询指定日期成本（回退路径）。
+// 返回 (total, keyCount, err)：单个 key 失败不丢弃已成功结果，以 best_effort 方式汇总。
+// 仅当所有 key 均失败时才返回 err。
+func (s *PlatformService) fetchSub2APIKeysCostForDate(session Session, date string) (float64, int, error) {
+	authOptions := adminAuthOptions(session)
+	pageSize := 100
+	page := 1
+	type sub2APIKeyRecord struct {
+		id        string
+		name      string
+		groupName string
+	}
+	var records []sub2APIKeyRecord
+	var keyListFailed bool
+	for {
+		keysURL := session.BaseURL + "/api/v1/admin/keys?page=" + strconv.Itoa(page) + "&page_size=" + strconv.Itoa(pageSize)
+		response, err := s.httpClient.requestJSON(keysURL, authOptions)
+		if err != nil {
+			if len(records) == 0 {
+				// 第一页就失败，无任何记录可用，应向上传播错误而非返回零成本。
+				keyListFailed = true
+			}
+			break
+		}
+		items := dataArray(response.Payload)
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			record, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			id := groupID2(record)
+			if id == "" {
+				continue
+			}
+			records = append(records, sub2APIKeyRecord{
+				id:        id,
+				name:      safeString(record, "name"),
+				groupName: sub2APIKeyGroupName(record),
+			})
+		}
+		total, hasTotal := paginationTotal(response.Payload)
+		if hasTotal && page*pageSize >= total {
+			break
+		}
+		if !hasTotal && len(items) < pageSize {
+			break
+		}
+		page++
+	}
+	if keyListFailed {
+		return 0, 0, errors.New(ErrorRequest)
+	}
+	if len(records) == 0 {
+		return 0, 0, nil
+	}
+
+	const maxKeyConcurrency = 4
+	sem := make(chan struct{}, maxKeyConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var totalCost float64
+	var successCount, failCount int
+
+	for _, record := range records {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(record sub2APIKeyRecord) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + url.QueryEscape(date) + "&end_date=" + url.QueryEscape(date) + "&api_key_id=" + record.id + "&timezone=Asia%2FShanghai"
+			response, err := s.httpClient.requestJSON(statsURL, authOptions)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failCount++
+				return
+			}
+			cost := sub2APIUsageStatsCost(dataRecord(response.Payload))
+			if cost > 0 {
+				totalCost += cost
+			}
+			successCount++
+		}(record)
+	}
+	wg.Wait()
+
+	// 只有所有 key 均失败时才返回 error；部分失败按 best_effort 汇总已成功结果。
+	if successCount == 0 && failCount > 0 {
+		return 0, 0, errors.New(ErrorRequest)
+	}
+	return totalCost, successCount, nil
 }

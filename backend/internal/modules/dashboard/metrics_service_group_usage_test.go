@@ -189,6 +189,10 @@ func (f *fakePlatformClient) FetchSub2APIAdminAllGroups(session upstream.Session
 	return nil, nil
 }
 
+func (f *fakePlatformClient) FetchCostForDate(session upstream.Session, date string) (float64, upstream.CostFetchMeta, error) {
+	return 0, upstream.CostFetchMeta{}, nil
+}
+
 func authenticatedSession() upstream.Session {
 	return upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: "https://example.com", AccessToken: "token"}
 }

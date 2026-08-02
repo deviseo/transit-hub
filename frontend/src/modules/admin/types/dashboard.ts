@@ -19,7 +19,9 @@ export type DashboardColorToken = 'primary' | 'accent' | 'signal' | 'warning'
 export interface TrendPoint {
   /** X 轴标签，使用与语言无关的日期格式，如 "6/27"。 */
   label: string
-  value: number
+  /** 指标数值；null 表示该天指标不可用，图表渲染时显示断点而非伪零。 */
+  value: number | null
+  date?: string  // 用于 computeDelta 日期相邻校验
 }
 
 /** 同一指标在不同周期下的连续序列。 */
@@ -32,9 +34,9 @@ export interface MetricSeries {
 export interface DashboardMetricData {
   key: DashboardMetricKey
   color: DashboardColorToken
-  /** 当前值（“今天”的数值），即月序列最后一个点。 */
-  current: number
-  /** 局部拉取失败原因；存在时 current 为显式的 0 占位。 */
+  /** 当前值（”今天”的数值），nil 表示该指标不可用（非零）。 */
+  current: number | null
+  /** 局部拉取失败原因；存在时 current 为 null 或显式的 0 占位。 */
   error?: string
   series: MetricSeries
 }

@@ -5,9 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/shared/businesstime"
 )
+
+// todayCachedMetrics 返回一个带有今日日期标记的有效 Metrics，用于测试成本路径。
+func todayCachedMetrics(cost float64) upstream.Metrics {
+	now := time.Now()
+	return upstream.Metrics{
+		TodayConsume:     upstream.MetricValue{Value: ptrFloat64(cost)},
+		TodayConsumeDate: businesstime.Today(),
+		TodayConsumeAt:   &now,
+	}
+}
 
 type fakeMetricsRepository struct {
 	snapshots            []DailySnapshot
@@ -36,6 +48,18 @@ func (f *fakeMetricsRepository) GetBalanceFilter(ctx context.Context, userID, ad
 
 func (f *fakeMetricsRepository) SaveBalanceFilter(ctx context.Context, config BalanceFilterConfig) error {
 	return f.saveBalanceFilterErr
+}
+
+func (f *fakeMetricsRepository) UpsertSiteCost(ctx context.Context, cost SiteDailyCost) error {
+	return nil
+}
+
+func (f *fakeMetricsRepository) ListSiteCosts(ctx context.Context, userID, adminAccountID string, date string) ([]SiteDailyCost, error) {
+	return nil, nil
+}
+
+func (f *fakeMetricsRepository) ListDailyStats(ctx context.Context, userID, adminAccountID string, from, to string) ([]DailySnapshot, error) {
+	return nil, nil
 }
 
 func newLiveMetricsTestService(platform *fakePlatformClient, upstreams *fakeUpstreamLister, metricsRepo *fakeMetricsRepository) *MetricsService {
@@ -83,12 +107,13 @@ func TestLiveMetricsCostFailureDoesNotPersistSnapshot(t *testing.T) {
 	if decoded["todayProfit"] != 30.0 {
 		t.Fatalf("todayProfit = %#v, want 30", decoded["todayProfit"])
 	}
-	if decoded["todayPurchase"] != 0.0 || decoded["netProfit"] != 0.0 {
+	// 成本全部失败：todayPurchase 和 netProfit 均为 null（不是 0.0）
+	if decoded["todayPurchase"] != nil || decoded["netProfit"] != nil {
 		t.Fatalf("cost failure fallback amounts: todayPurchase=%#v netProfit=%#v", decoded["todayPurchase"], decoded["netProfit"])
 	}
-	metricErrors, ok := decoded["metricErrors"].(map[string]any)
-	if !ok || metricErrors["todayPurchase"] != upstream.ErrorAuth || metricErrors["netProfit"] != upstream.ErrorAuth {
-		t.Fatalf("metricErrors = %#v, want cached cost reason on cost and net profit", decoded["metricErrors"])
+	// 新实现：成本质量通过 costQuality 字段暴露，不再写入 metricErrors
+	if cq, hasCq := decoded["costQuality"].(map[string]any); !hasCq || cq["complete"] != false {
+		t.Fatalf("costQuality.complete should be false, got %#v", decoded["costQuality"])
 	}
 	if len(repo.snapshots) != 0 {
 		t.Fatalf("cost failure persisted %d snapshot(s): %+v", len(repo.snapshots), repo.snapshots)
@@ -116,8 +141,8 @@ func TestLiveMetricsUsesCachedCostsAndKeepsPartialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LiveMetrics() error = %v, want partial response", err)
 	}
-	if response.TodayPurchase != 6 || response.NetProfit != 24 {
-		t.Fatalf("partial cached cost = %.2f, net profit = %.2f, want 6.00 and 24.00", response.TodayPurchase, response.NetProfit)
+	if response.TodayPurchase != nil || response.NetProfit != nil {
+		t.Fatalf("partial cached cost: todayPurchase=%v netProfit=%v, want both nil (incomplete)", response.TodayPurchase, response.NetProfit)
 	}
 	if upstreams.keyUsageCalls != 0 {
 		t.Fatalf("LiveMetrics() called active upstream cost query %d time(s)", upstreams.keyUsageCalls)
@@ -144,12 +169,13 @@ func TestLiveMetricsAllCachedCostsUnavailableReturnsZeroAndError(t *testing.T) {
 		t.Fatalf("LiveMetrics() error = %v, want partial response", err)
 	}
 	decoded := metricsResponseJSON(t, response)
-	if decoded["todayPurchase"] != 0.0 || decoded["netProfit"] != 0.0 {
+	// 全部成本不可用：todayPurchase 和 netProfit 为 null
+	if decoded["todayPurchase"] != nil || decoded["netProfit"] != nil {
 		t.Fatalf("all cached costs unavailable: todayPurchase=%#v netProfit=%#v", decoded["todayPurchase"], decoded["netProfit"])
 	}
-	metricErrors, ok := decoded["metricErrors"].(map[string]any)
-	if !ok || metricErrors["todayPurchase"] != upstream.ErrorAuth || metricErrors["netProfit"] != upstream.ErrorAuth {
-		t.Fatalf("metricErrors = %#v, want cached cost error on cost and net profit", decoded["metricErrors"])
+	// costQuality 标记不完整
+	if cq, hasCq := decoded["costQuality"].(map[string]any); !hasCq || cq["complete"] != false {
+		t.Fatalf("costQuality.complete should be false, got %#v", decoded["costQuality"])
 	}
 	if len(repo.snapshots) != 0 {
 		t.Fatalf("all cached costs unavailable persisted %d snapshot(s): %+v", len(repo.snapshots), repo.snapshots)
@@ -163,7 +189,7 @@ func TestLiveMetricsRevenueFailureDoesNotPersistSnapshot(t *testing.T) {
 		&fakePlatformClient{usageStatsErr: revenueErr},
 		&fakeUpstreamLister{cachedSites: []upstream.Response{{
 			Status: upstream.StatusConnected, RechargeRate: 1,
-			Metrics: upstream.Metrics{TodayConsume: upstream.MetricValue{Value: ptrFloat64(2.5)}},
+			Metrics: todayCachedMetrics(2.5),
 		}}},
 		repo,
 	)
@@ -176,12 +202,13 @@ func TestLiveMetricsRevenueFailureDoesNotPersistSnapshot(t *testing.T) {
 	if decoded["todayPurchase"] != 2.5 {
 		t.Fatalf("todayPurchase = %#v, want 2.5", decoded["todayPurchase"])
 	}
-	if decoded["todayProfit"] != 0.0 || decoded["netProfit"] != 0.0 {
+	// 营收失败：todayProfit=nil，netProfit=nil；成本完整时 todayPurchase 有值
+	if decoded["todayProfit"] != nil || decoded["netProfit"] != nil {
 		t.Fatalf("revenue failure fallback amounts: todayProfit=%#v netProfit=%#v", decoded["todayProfit"], decoded["netProfit"])
 	}
 	metricErrors, ok := decoded["metricErrors"].(map[string]any)
-	if !ok || metricErrors["todayProfit"] != revenueErr.Error() || metricErrors["netProfit"] != revenueErr.Error() {
-		t.Fatalf("metricErrors = %#v, want revenue reason on revenue and net profit", decoded["metricErrors"])
+	if !ok || metricErrors["todayProfit"] != revenueErr.Error() {
+		t.Fatalf("metricErrors = %#v, want revenue reason on todayProfit", decoded["metricErrors"])
 	}
 	if len(repo.snapshots) != 0 {
 		t.Fatalf("revenue failure persisted %d snapshot(s): %+v", len(repo.snapshots), repo.snapshots)
@@ -192,7 +219,7 @@ func TestLiveMetricsSuccessPersistsSameDayAmounts(t *testing.T) {
 	repo := &fakeMetricsRepository{}
 	upstreams := &fakeUpstreamLister{cachedSites: []upstream.Response{{
 		Status: upstream.StatusConnected, RechargeRate: 1,
-		Metrics: upstream.Metrics{TodayConsume: upstream.MetricValue{Value: ptrFloat64(2.5)}},
+		Metrics: todayCachedMetrics(2.5),
 	}}}
 	platform := &fakePlatformClient{usageStats: 30}
 	service := newLiveMetricsTestService(platform, upstreams, repo)
@@ -215,8 +242,11 @@ func TestLiveMetricsSuccessPersistsSameDayAmounts(t *testing.T) {
 		t.Fatalf("date/query mismatch: response=%q revenue=%q..%q keyUsageCalls=%d", response.Date, platform.capturedUsageStart, platform.capturedUsageEnd, upstreams.keyUsageCalls)
 	}
 	persisted := repo.snapshots[0]
-	if persisted.TodayProfit != 30 || persisted.TodayPurchase != 2.5 || persisted.NetProfit != 27.5 {
-		t.Fatalf("unexpected persisted snapshot: %+v", persisted)
+	if persisted.TodayProfit == nil || *persisted.TodayProfit != 30 ||
+		persisted.TodayPurchase == nil || *persisted.TodayPurchase != 2.5 ||
+		persisted.NetProfit == nil || *persisted.NetProfit != 27.5 {
+		t.Fatalf("unexpected persisted snapshot: profit=%v purchase=%v net=%v",
+			persisted.TodayProfit, persisted.TodayPurchase, persisted.NetProfit)
 	}
 }
 

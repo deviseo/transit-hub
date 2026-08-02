@@ -10,12 +10,14 @@ import (
 
 // fakeUpstreamLister 是 UpstreamLister 的桩实现，只有测试用到的方法有真实行为。
 type fakeUpstreamLister struct {
-	keyUsageItems []upstream.KeyUsageTodayItem
-	keyUsageErr   error
-	keyUsageCalls int
-	cachedSites   []upstream.Response
-	balanceItems  []upstream.BalanceBreakdownItem
-	balanceErr    error
+	keyUsageItems    []upstream.KeyUsageTodayItem
+	keyUsageErr      error
+	keyUsageCalls    int
+	cachedSites      []upstream.Response
+	balanceItems     []upstream.BalanceBreakdownItem
+	balanceErr       error
+	siteCostResults  []upstream.SiteCostForDateResult
+	siteCostErr      error
 }
 
 func (f *fakeUpstreamLister) List(ctx context.Context, userID string) []upstream.Response {
@@ -33,6 +35,10 @@ func (f *fakeUpstreamLister) KeyUsageToday(ctx context.Context, userID string) (
 
 func (f *fakeUpstreamLister) BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error) {
 	return f.balanceItems, f.balanceErr
+}
+
+func (f *fakeUpstreamLister) FetchSiteCostsForDate(ctx context.Context, userID, adminAccountID, date string) ([]upstream.SiteCostForDateResult, error) {
+	return f.siteCostResults, f.siteCostErr
 }
 
 // TestUpstreamKeyUsageToday_SortsDescendingAndSumsTotal 覆盖测试要求 7、8：
@@ -99,16 +105,13 @@ func TestUpstreamKeyUsageToday_ReturnsPartialSuccessMetadata(t *testing.T) {
 }
 
 func TestUpstreamKeyUsageToday_ReturnsCachedCostSiteCounts(t *testing.T) {
-	todayConsume := 12.5
 	upstreams := &fakeUpstreamLister{
 		cachedSites: []upstream.Response{
 			{
 				ID:           "site-working",
 				RechargeRate: 1,
 				Status:       upstream.StatusConnected,
-				Metrics: upstream.Metrics{
-					TodayConsume: upstream.MetricValue{Value: &todayConsume},
-				},
+				Metrics:      todayCachedMetrics(12.5),
 			},
 			{
 				ID:           "site-failed",

@@ -105,11 +105,23 @@ type SnapshotWriter interface {
 }
 
 type Metrics struct {
-	Balance         MetricValue `json:"balance"`
-	TodayConsume    MetricValue `json:"todayConsume"`
-	HistoryRecharge MetricValue `json:"historyRecharge"`
-	Group           GroupInfo   `json:"group"`
-	Groups          []GroupInfo `json:"groups"`
+	Balance          MetricValue `json:"balance"`
+	TodayConsume     MetricValue `json:"todayConsume"`
+	HistoryRecharge  MetricValue `json:"historyRecharge"`
+	Group            GroupInfo   `json:"group"`
+	Groups           []GroupInfo `json:"groups"`
+	// TodayConsumeDate 是 TodayConsume 对应的上海业务日期（"2006-01-02"）。
+	// 同步时由上游同步入口统一写入，用于日期归属校验。空字符串表示尚未记录。
+	TodayConsumeDate string     `json:"-"`
+	// TodayConsumeAt 是 TodayConsume 的实际采集时间，用于缓存时效校验。
+	TodayConsumeAt   *time.Time `json:"-"`
+}
+
+// CostFetchMeta 是 FetchCostForDate 的返回元数据，定义在 upstream 包中以避免循环依赖。
+type CostFetchMeta struct {
+	Source     string    // "account_level" 或 "key_sum_best_effort"
+	KeyCount   int       // 仅 key_sum_best_effort 时有值
+	ObservedAt time.Time
 }
 
 type CreateRequest struct {
@@ -397,4 +409,15 @@ type BalanceBreakdownItem struct {
 	RechargeRate float64
 	LastSyncedAt *int64
 	Status       Status
+}
+
+// SiteCostForDateResult 是单个上游站点按日成本查询的结果，由 FetchSiteCostsForDate 返回。
+type SiteCostForDateResult struct {
+	SiteID       string
+	SiteName     string
+	Platform     Platform
+	RechargeRate float64
+	RawCost      float64
+	Meta         CostFetchMeta
+	Err          error
 }

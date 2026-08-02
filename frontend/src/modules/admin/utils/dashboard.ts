@@ -57,12 +57,55 @@ export function formatDateTime(ms: number | null | undefined, locale = 'zh-CN'):
 export interface DeltaResult {
   amount: number
   direction: DeltaDirection
+  unavailable?: boolean // true 时不显示数值（非相邻、成本不完整等）
+  reason?: 'non_adjacent' | 'partial_cost' | 'missing_data'
 }
 
-/** 计算序列最后一个点相对前一个点的变化（今日 vs 昨日）。 */
-export function computeDelta(values: number[]): DeltaResult {
-  if (values.length < 2) return { amount: 0, direction: 'flat' }
-  const amount = values[values.length - 1] - values[values.length - 2]
+/** 计算序列最后一个点相对前一个点的变化（今日 vs 昨日）。
+ * 新版本接收带日期和状态的点，校验日期相邻性后再计算环比。 */
+export function computeDelta(
+  values: { value: number | null; date?: string; status?: string }[] | number[],
+): DeltaResult {
+  if (!values || values.length < 2) return { amount: 0, direction: 'flat' }
+
+  // 兼容旧版 number[] 调用。
+  if (typeof values[0] === 'number') {
+    const nums = values as number[]
+    const amount = nums[nums.length - 1] - nums[nums.length - 2]
+    const direction: DeltaDirection = amount > 0 ? 'up' : amount < 0 ? 'down' : 'flat'
+    return { amount, direction }
+  }
+
+  const pts = values as { value: number | null; date?: string; status?: string }[]
+  const last = pts[pts.length - 1]
+  const prev = pts[pts.length - 2]
+
+  // 任一点为 null（指标不可用）时不计算环比。
+  if (last.value === null || prev.value === null) {
+    return { amount: 0, direction: 'flat', unavailable: true, reason: 'missing_data' }
+  }
+
+  // 日期相邻性校验：date 差恰好 1 天才计算环比。
+  if (last.date && prev.date) {
+    const lastDate = new Date(last.date).getTime()
+    const prevDate = new Date(prev.date).getTime()
+    const diffDays = Math.round((lastDate - prevDate) / (1000 * 60 * 60 * 24))
+    if (diffDays !== 1) {
+      return { amount: 0, direction: 'flat', unavailable: true, reason: 'non_adjacent' }
+    }
+  }
+
+  // 成本未完整时不显示环比。
+  if (last.status === 'partial' || prev.status === 'partial') {
+    return { amount: 0, direction: 'flat', unavailable: true, reason: 'partial_cost' }
+  }
+
+  // 昨日未结算。
+  if (prev.status === 'missing' || prev.status === 'provisional') {
+    return { amount: 0, direction: 'flat', unavailable: true, reason: 'missing_data' }
+  }
+
+  const amount = last.value - prev.value
   const direction: DeltaDirection = amount > 0 ? 'up' : amount < 0 ? 'down' : 'flat'
   return { amount, direction }
 }

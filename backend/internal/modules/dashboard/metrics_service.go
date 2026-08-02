@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,9 @@ type UpstreamLister interface {
 	// 由 upstream.Service 实现（持有 session/cache，能校验站点归属和当前工作区）。
 	KeyUsageToday(ctx context.Context, userID string) ([]upstream.KeyUsageTodayItem, error)
 	BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error)
+	// FetchSiteCostsForDate 用各站点自己的 session 查询指定日期的原始成本，
+	// 不依赖仪表盘 admin 账户 session，与 KeyUsageToday 同一模式。
+	FetchSiteCostsForDate(ctx context.Context, userID, adminAccountID, date string) ([]upstream.SiteCostForDateResult, error)
 }
 
 type metricsStore interface {
@@ -33,17 +37,39 @@ type metricsStore interface {
 	ListRange(ctx context.Context, userID, adminAccountID string, days int, businessDate string) ([]DailySnapshot, error)
 	GetBalanceFilter(ctx context.Context, userID, adminAccountID string) (BalanceFilterConfig, error)
 	SaveBalanceFilter(ctx context.Context, config BalanceFilterConfig) error
+	UpsertSiteCost(ctx context.Context, cost SiteDailyCost) error
+	ListSiteCosts(ctx context.Context, userID, adminAccountID string, date string) ([]SiteDailyCost, error)
+	ListDailyStats(ctx context.Context, userID, adminAccountID string, from, to string) ([]DailySnapshot, error)
 }
 
 // MetricsService 负责仪表盘指标的实时计算、历史快照存储与午夜调度。
 // 与同包的 Service（admin 会话管理）职责分离，共享 SessionStore 和 PlatformClient。
 type MetricsService struct {
-	store       SessionStore
-	platform    PlatformClient
-	upstreams   UpstreamLister
-	metricsRepo metricsStore
-	accounts    AdminAccountService
-	sessionSync MySiteStateSync
+	store           SessionStore
+	platform        PlatformClient
+	upstreams       UpstreamLister
+	metricsRepo     metricsStore
+	accounts        AdminAccountService
+	sessionSync     MySiteStateSync
+	refreshInterval time.Duration // 用于推导 maxStaleness；0 表示使用默认值 2h
+}
+
+// SetRefreshInterval 注入上游站点同步间隔，用于推导缓存时效阈值。
+// 由 httpserver 装配层在初始化后调用；未调用时 maxStaleness 使用默认值 2h。
+func (s *MetricsService) SetRefreshInterval(d time.Duration) {
+	s.refreshInterval = d
+}
+
+// maxStaleness 返回缓存时效阈值：refreshInterval × 3，最小 2h。
+func (s *MetricsService) maxStaleness() time.Duration {
+	if s.refreshInterval > 0 {
+		v := s.refreshInterval * 3
+		if v < 2*time.Hour {
+			return 2 * time.Hour
+		}
+		return v
+	}
+	return 2 * time.Hour
 }
 
 func (s *MetricsService) SetMySiteSync(sync MySiteStateSync) {
@@ -93,9 +119,9 @@ func NewMetricsService(store SessionStore, platform PlatformClient, upstreams Up
 	return &MetricsService{store: store, platform: platform, upstreams: upstreams, metricsRepo: metricsRepo, accounts: accounts}
 }
 
-// summarizeCachedUpstreamCosts 汇总已同步的上游站点缓存。
+// summarizeCachedUpstreamCosts 汇总已同步的上游站点缓存（简化版，供日结路径使用）。
 // failedOrUnavailable 为 true 时表示不能把结果当作完整日数据写入快照；
-// 只有全部目标站点都不可用时才返回 err，供首页将成本和净利润降为数字 0。
+// 只有全部目标站点都不可用时才返回 err。
 func summarizeCachedUpstreamCosts(sites []upstream.Response) (total float64, complete bool, err error) {
 	targets := 0
 	available := 0
@@ -127,6 +153,65 @@ func summarizeCachedUpstreamCosts(sites []upstream.Response) (total float64, com
 	return total, available == targets, nil
 }
 
+// summarizeCachedUpstreamCostsWithQuality 汇总缓存成本并返回 CostQuality 结构。
+// businessDate：当次请求的上海业务日期（"2006-01-02"）。
+// maxStaleness：缓存最大有效时长；0 表示不检查时效。
+func summarizeCachedUpstreamCostsWithQuality(sites []upstream.Response, businessDate string, maxStaleness time.Duration) (total float64, quality *CostQuality) {
+	now := time.Now()
+	quality = &CostQuality{
+		BusinessDate: businessDate,
+		ObservedAt:   &now,
+	}
+
+	for _, site := range sites {
+		if site.RechargeRate <= 0 {
+			continue
+		}
+		quality.ExpectedSites++
+
+		// 日期归属校验：仅当日期字段有值且与当次业务日不匹配时才拒绝。
+		// TodayConsumeDate=="" 表示 V0.1.16 上线前的旧缓存，放行（等下次同步自然补上日期）；
+		// 已知日期与今天不符才是真正的日期错配。
+		if site.Metrics.TodayConsumeDate != "" && site.Metrics.TodayConsumeDate != businessDate {
+			quality.FailedSites++
+			quality.Failures = append(quality.Failures, SiteCostFault{
+				SiteName: site.Name,
+				Reason:   "date_mismatch",
+			})
+			continue
+		}
+
+		// 时效校验：只有采集时间有值且超过阈值时才拒绝；nil 表示旧缓存，放行。
+		if maxStaleness > 0 && site.Metrics.TodayConsumeAt != nil &&
+			now.Sub(*site.Metrics.TodayConsumeAt) > maxStaleness {
+			quality.FailedSites++
+			quality.Failures = append(quality.Failures, SiteCostFault{
+				SiteName: site.Name,
+				Reason:   "stale",
+			})
+			continue
+		}
+
+		if site.Status == upstream.StatusError || site.Metrics.TodayConsume.Value == nil {
+			quality.FailedSites++
+			quality.Failures = append(quality.Failures, SiteCostFault{
+				SiteName: site.Name,
+				Reason:   "fetch_error",
+			})
+			continue
+		}
+		quality.CollectedSites++
+		quality.ConfirmedCost += *site.Metrics.TodayConsume.Value * site.RechargeRate
+	}
+
+	if quality.ExpectedSites == 0 {
+		quality.Complete = true
+	} else {
+		quality.Complete = quality.FailedSites == 0
+	}
+	return quality.ConfirmedCost, quality
+}
+
 func cachedUpstreamCostSiteCounts(sites []upstream.Response) (totalSites, failedSites int) {
 	for _, site := range sites {
 		if site.RechargeRate <= 0 {
@@ -146,9 +231,9 @@ func cachedUpstreamCostSiteCounts(sites []upstream.Response) (totalSites, failed
 // 计算逻辑：
 //   - todayProfit:     管理员站点今日总实际消费，通过 sub2api /api/v1/admin/usage/stats 获取
 //   - siteBalance:     管理员站点所有非 admin 用户余额之和，通过 sub2api /api/v1/admin/users 分页求和
-//   - todayPurchase:   所有上游站点已同步的今日消费 × 站点倍率之和
+//   - todayPurchase:   所有上游站点已同步的今日消费 × 站点倍率之和（成本不完整时为 nil）
 //   - upstreamBalance: 所有上游站点余额 × 站点倍率之和（复用已同步的内存数据）
-//   - netProfit:       todayProfit - todayPurchase
+//   - netProfit:       todayProfit - todayPurchase；任一为 nil 时 netProfit 为 nil
 func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (MetricsResponse, error) {
 	// 获取并校验 admin 会话（平台感知：sub2api 检查 AccessToken，new-api 检查 Cookie+UserID）。
 	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
@@ -179,14 +264,12 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	// 余额和分组数量保持原有零值降级行为。
 	today := businesstime.Today()
 	var (
-		todayProfit             float64
+		todayProfitVal          float64
 		todayProfitErr          error
 		siteBalance             float64
 		groupCount              int
-		todayPurchase           float64
-		todayPurchaseErr        error
-		todayPurchaseIncomplete bool
 		upstreamBalance         float64
+		costQuality             *CostQuality
 		wg                      sync.WaitGroup
 	)
 
@@ -200,7 +283,7 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 			todayProfitErr = err
 			return
 		}
-		todayProfit = profit
+		todayProfitVal = profit
 	}()
 
 	// goroutine 2: 站点用户总余额（平台中性）。
@@ -241,11 +324,8 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	go func() {
 		defer wg.Done()
 		sites := s.upstreams.List(ctx, userID)
-		var complete bool
-		todayPurchase, complete, todayPurchaseErr = summarizeCachedUpstreamCosts(sites)
-		if !complete && todayPurchaseErr == nil {
-			todayPurchaseIncomplete = true
-		}
+		total, cq := summarizeCachedUpstreamCostsWithQuality(sites, today, s.maxStaleness())
+		costQuality = cq
 		for _, site := range sites {
 			if site.RechargeRate <= 0 {
 				continue
@@ -254,17 +334,39 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
 			}
 		}
+		_ = total // total 在 costQuality.ConfirmedCost 中
 	}()
 
 	wg.Wait()
+
+	// 构建响应：使用指针类型区分"不可用"和"0"。
+	var todayProfit *float64
+	if todayProfitErr == nil {
+		todayProfit = ptrF64(todayProfitVal)
+	}
+	var todayPurchase *float64
+	if costQuality != nil && costQuality.Complete {
+		todayPurchase = ptrF64(costQuality.ConfirmedCost)
+	} else if costQuality != nil {
+		// 部分成本：todayPurchase = nil（不能作为完整值），但 confirmedCost 是下限
+		todayPurchase = nil
+	}
+	var netProfit *float64
+	if todayProfit != nil && costQuality != nil && costQuality.Complete {
+		np := *todayProfit - costQuality.ConfirmedCost
+		netProfit = &np
+	}
+
 	result := MetricsResponse{
 		Date:            today,
 		Timezone:        businesstime.Timezone,
 		TodayProfit:     todayProfit,
 		SiteBalance:     siteBalance,
 		TodayPurchase:   todayPurchase,
+		NetProfit:       netProfit,
 		UpstreamBalance: upstreamBalance,
 		GroupCount:      groupCount,
+		CostQuality:     costQuality,
 	}
 
 	if todayProfitErr != nil {
@@ -272,21 +374,10 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 			"todayProfit": todayProfitErr.Error(),
 		}
 	}
-	if todayPurchaseErr != nil {
-		if result.MetricErrors == nil {
-			result.MetricErrors = make(map[string]string)
-		}
-		result.MetricErrors["todayPurchase"] = todayPurchaseErr.Error()
-	}
-	if metricErr := errors.Join(todayProfitErr, todayPurchaseErr); metricErr != nil {
-		result.NetProfit = 0
-		result.MetricErrors["netProfit"] = metricErr.Error()
-	} else {
-		result.NetProfit = todayProfit - todayPurchase
-		// 仅在营收和成本都成功且没有部分站点缺失时写入。
-		if !todayPurchaseIncomplete {
-			s.upsertSnapshot(ctx, userID, adminAccountID, today, result)
-		}
+
+	// 仅在营收和成本都完整时写入快照（live_cache 来源，不覆盖 final 行）。
+	if todayProfit != nil && costQuality != nil && costQuality.Complete {
+		s.upsertSnapshot(ctx, userID, adminAccountID, today, result)
 	}
 
 	return result, nil
@@ -312,46 +403,48 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	for _, snap := range snapshots {
 		points = append(points, TrendPoint{
 			Date:            snap.Date.Format("2006-01-02"),
-			TodayProfit:     snap.TodayProfit,
-			SiteBalance:     snap.SiteBalance,
-			TodayPurchase:   snap.TodayPurchase,
-			NetProfit:       snap.NetProfit,
-			UpstreamBalance: snap.UpstreamBalance,
+			TodayProfit:     snap.TodayProfit,  // 保留 *float64，NULL 表示该天未采集
+			SiteBalance:     derefF64(snap.SiteBalance),
+			TodayPurchase:   snap.TodayPurchase, // 保留 *float64
+			NetProfit:       snap.NetProfit,     // 保留 *float64
+			UpstreamBalance: derefF64(snap.UpstreamBalance),
 		})
 	}
 	return TrendResponse{Points: points}, nil
 }
 
-// StartScheduler 启动午夜快照调度协程。
-// 每天午夜（Asia/Shanghai 时区）为所有活跃 admin 用户保存当天的指标快照，
-// 确保即使用户当天未访问仪表盘，趋势图也不会出现空缺。
+// StartScheduler 启动午夜快照调度协程（00:05/00:15/00:30 三次触发）和启动补结扫描。
+// 每天三次触发确保即使用户当天未访问仪表盘，趋势图也不会出现空缺。
 func (s *MetricsService) StartScheduler(ctx context.Context) {
+	// 启动时执行一次恢复扫描（补结 SETTLEMENT_BASELINE_DATE 到昨日的缺口）。
+	go s.startupRecovery(ctx)
+
 	go func() {
 		loc := businesstime.Location()
+		// 每天午夜后依次触发：00:05、00:15、00:30。
+		retryMinutes := []int{5, 15, 30}
 
 		for {
 			now := time.Now().In(loc)
-			nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
-			timer := time.NewTimer(time.Until(nextMidnight))
+			nextDay := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
 
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-				s.snapshotAll(ctx)
+			for _, minute := range retryMinutes {
+				fireAt := nextDay.Add(time.Duration(minute) * time.Minute)
+				timer := time.NewTimer(time.Until(fireAt))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+					s.snapshotAll(ctx)
+				}
 			}
 		}
 	}()
 }
 
-// snapshotAll 遍历所有活跃 admin 用户，为昨天的日期保存指标快照。
-// 午夜执行时，"今天"已经翻到新的一天，因此用昨天的日期查询 sub2api 的 usage stats，
-// 而上游站点的余额取当前值（余额不按天重置）。
-// 单用户出错只记日志，不影响其他用户和调度循环（与 refreshDueSessions 相同的容错模式）。
-//
-// 注意：此方法是后台调度路径，使用 ListForAccount 显式传入 adminAccountID，
-// 不依赖当前工作区上下文（避免 fail-closed 的 List 在无 workspace 上下文时返回空）。
+// snapshotAll 遍历所有活跃 admin 用户，对昨天的日期执行精确日结。
+// 按 SPEC 4.3：调用 finalizeBusinessDate，营收和成本都精确按日期查询，不再读取缓存。
 func (s *MetricsService) snapshotAll(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -369,69 +462,15 @@ func (s *MetricsService) snapshotAll(ctx context.Context) {
 	yesterday := businesstime.DateAt(time.Now().In(loc).AddDate(0, 0, -1))
 
 	for _, ref := range refs {
-		userID := ref.UserID
-		adminAccountID := ref.AdminAccountID
-		record, err := s.store.Get(ctx, userID, adminAccountID)
-		if err != nil || record == nil || !record.Session.IsAuthenticated() {
-			continue
+		if err := s.finalizeBusinessDate(ctx, ref, yesterday, SnapshotSourceDatedQuery); err != nil {
+			log.Printf("dashboard scheduler: finalize failed user_id=%s date=%s err=%v",
+				ref.UserID, yesterday, err)
 		}
-
-		session, err := s.freshAdminSession(ctx, userID, adminAccountID, record)
-		if err != nil {
-			log.Printf("dashboard scheduler: refresh session failed user_id=%s err=%v", userID, err)
-			continue
-		}
-
-		// 昨日盈利（平台中性）。
-		todayProfit, err := s.platform.FetchAdminUsageStats(session, yesterday, yesterday)
-		if err != nil {
-			log.Printf("dashboard scheduler: fetch usage stats failed user_id=%s err=%v", userID, err)
-			continue
-		}
-
-		// 站点用户总余额（平台中性）。
-		var siteBalance float64
-		filterCfg, _ := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
-		if result, err := s.platform.FetchAdminSiteBalanceFiltered(session, upstream.BalanceFilter{
-			ExcludeAdmin:    filterCfg.ExcludeAdmin,
-			ExcludeBalances: filterCfg.ExcludeBalances,
-		}); err == nil {
-			siteBalance = result.Balance
-		}
-
-		// 上游余额和成本均使用已同步缓存；部分站点不可用时保留已有快照。
-		sites := s.upstreams.ListForAccount(ctx, userID, adminAccountID)
-		todayPurchase, complete, costErr := summarizeCachedUpstreamCosts(sites)
-		if !complete {
-			log.Printf("dashboard scheduler: cached upstream cost incomplete user_id=%s admin_account_id=%s date=%s err=%v", userID, adminAccountID, yesterday, costErr)
-			continue
-		}
-		var upstreamBalance float64
-		for _, site := range sites {
-			if site.RechargeRate <= 0 {
-				continue
-			}
-			if site.Metrics.Balance.Value != nil {
-				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
-			}
-		}
-
-		result := MetricsResponse{
-			Date:            yesterday,
-			Timezone:        businesstime.Timezone,
-			TodayProfit:     todayProfit,
-			SiteBalance:     siteBalance,
-			TodayPurchase:   todayPurchase,
-			NetProfit:       todayProfit - todayPurchase,
-			UpstreamBalance: upstreamBalance,
-		}
-		s.upsertSnapshot(ctx, userID, adminAccountID, yesterday, result)
-		log.Printf("dashboard scheduler: snapshot saved user_id=%s admin_account_id=%s date=%s", userID, adminAccountID, yesterday)
 	}
 }
 
-// upsertSnapshot 将指标写入 dashboard_daily_stats 表。
-// 冲突时更新已有行，保证同一天内多次调用始终保留最新数据。
+// upsertSnapshot 将实时指标写入 dashboard_daily_stats 表（live_cache 来源）。
+// 冲突时更新已有行，但不覆盖 final 行（由 repository 层的 Upsert 保护）。
 func (s *MetricsService) upsertSnapshot(ctx context.Context, userID, adminAccountID, date string, metrics MetricsResponse) {
 	parsedDate, err := time.ParseInLocation("2006-01-02", date, businesstime.Location())
 	if err != nil {
@@ -443,17 +482,21 @@ func (s *MetricsService) upsertSnapshot(ctx context.Context, userID, adminAccoun
 		log.Printf("dashboard metrics: generate id failed: %v", err)
 		return
 	}
+	now := time.Now()
 	snapshot := DailySnapshot{
-		ID:              id,
-		UserID:          userID,
-		AdminAccountID:  adminAccountID,
-		Date:            parsedDate,
-		TodayProfit:     metrics.TodayProfit,
-		SiteBalance:     metrics.SiteBalance,
-		TodayPurchase:   metrics.TodayPurchase,
-		NetProfit:       metrics.NetProfit,
-		UpstreamBalance: metrics.UpstreamBalance,
-		CreatedAt:       time.Now(),
+		ID:               id,
+		UserID:           userID,
+		AdminAccountID:   adminAccountID,
+		Date:             parsedDate,
+		TodayProfit:      metrics.TodayProfit,
+		SiteBalance:      ptrF64(metrics.SiteBalance),
+		TodayPurchase:    metrics.TodayPurchase,
+		NetProfit:        metrics.NetProfit,
+		UpstreamBalance:  ptrF64(metrics.UpstreamBalance),
+		CreatedAt:        now,
+		SettlementStatus: SettlementStatusProvisional,
+		SnapshotSource:   SnapshotSourceLiveCache,
+		ObservedAt:       &now,
 	}
 	if err := s.metricsRepo.Upsert(ctx, snapshot); err != nil {
 		log.Printf("dashboard metrics: upsert snapshot failed user_id=%s date=%s err=%v", userID, date, err)
@@ -570,7 +613,11 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 // 这里只负责排序展示和响应封装。
 func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID string) (UpstreamKeyUsageTodayResponse, error) {
 	date := businesstime.Today()
-	totalSites, failedSites := cachedUpstreamCostSiteCounts(s.upstreams.List(ctx, userID))
+	// 复用日期和时效校验逻辑，与首页成本卡片口径一致。
+	sites := s.upstreams.List(ctx, userID)
+	_, quality := summarizeCachedUpstreamCostsWithQuality(sites, date, s.maxStaleness())
+	totalSites := quality.ExpectedSites
+	failedSites := quality.FailedSites
 	items, err := s.upstreams.KeyUsageToday(ctx, userID)
 	if err != nil {
 		var collectionErr *upstream.KeyUsageCollectionError
@@ -692,4 +739,500 @@ func metricsRandomID() (string, error) {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 	encoded := hex.EncodeToString(bytes)
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+// derefF64 安全解引用 *float64，nil 时返回 0。
+func derefF64(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
+// ptrF64 将 float64 转为 *float64。
+func ptrF64(v float64) *float64 {
+	return &v
+}
+
+// finalizeBusinessDate 对指定 SessionRef 的指定上海业务日期执行精确日结。
+// date 由调用方传入（"2006-01-02"），函数内部禁止用 time.Now() 推导业务日期。
+// 记录 finalized_at、observed_at 使用 time.Now() 是合法的。
+func (s *MetricsService) finalizeBusinessDate(ctx context.Context, ref ActiveSessionRef, date string, snapshotSource string) error {
+	userID := ref.UserID
+	adminAccountID := ref.AdminAccountID
+	record, err := s.store.Get(ctx, userID, adminAccountID)
+	if err != nil || record == nil || !record.Session.IsAuthenticated() {
+		return errors.New("no authenticated session")
+	}
+	session, err := s.freshAdminSession(ctx, userID, adminAccountID, record)
+	if err != nil {
+		return err
+	}
+
+	parsedDate, err := time.ParseInLocation("2006-01-02", date, businesstime.Location())
+	if err != nil {
+		return err
+	}
+
+	// 营收查询（精确按日期查询，不使用 TodayConsume 缓存）。
+	revenue, revenueErr := s.platform.FetchAdminUsageStats(session, date, date)
+
+	// 逐站点成本查询：用各站点自己的 session（不使用仪表盘 admin 账户 session）。
+	siteCostResults, fetchErr := s.upstreams.FetchSiteCostsForDate(ctx, userID, adminAccountID, date)
+	if fetchErr != nil {
+		log.Printf("dashboard finalize: fetch site costs failed user_id=%s date=%s err=%v", userID, date, fetchErr)
+		return fetchErr
+	}
+	expectedCount := len(siteCostResults)
+	collectedCount := 0
+	now := time.Now()
+
+	for _, r := range siteCostResults {
+		siteCostID, idErr := metricsRandomID()
+		if idErr != nil {
+			log.Printf("dashboard finalize: generate site cost id failed err=%v, skipping site %s", idErr, r.SiteID)
+			continue
+		}
+		siteCost := SiteDailyCost{
+			ID:             siteCostID,
+			UserID:         userID,
+			AdminAccountID: adminAccountID,
+			Date:           parsedDate,
+			SiteID:         r.SiteID,
+			SiteName:       r.SiteName,
+			Platform:       string(r.Platform),
+			RechargeRate:   r.RechargeRate,
+			ObservedAt:     r.Meta.ObservedAt,
+			Source:         snapshotSource,
+		}
+		if r.Err != nil {
+			siteCost.Status = "failed"
+			siteCost.ErrorReason = r.Err.Error()
+			if upsertErr := s.metricsRepo.UpsertSiteCost(ctx, siteCost); upsertErr != nil {
+				log.Printf("dashboard finalize: upsert site cost failed user_id=%s site_id=%s date=%s err=%v",
+					userID, r.SiteID, date, upsertErr)
+			}
+		} else {
+			adjusted := r.RawCost * r.RechargeRate
+			siteCost.RawCost = &r.RawCost
+			siteCost.AdjustedCost = &adjusted
+			if r.Meta.Source == "key_sum_best_effort" {
+				siteCost.Status = "partial"
+				siteCost.Source = "best_effort"
+			} else {
+				siteCost.Status = "ok"
+			}
+			// 只有站点成本记录写入成功时，才计入 collectedCount；
+			// 写入失败则降级处理（不计入），避免 final 汇总缺少明细行。
+			if upsertErr := s.metricsRepo.UpsertSiteCost(ctx, siteCost); upsertErr != nil {
+				log.Printf("dashboard finalize: upsert site cost failed user_id=%s site_id=%s date=%s err=%v",
+					userID, r.SiteID, date, upsertErr)
+			} else {
+				collectedCount++
+			}
+		}
+	}
+
+	// 营收失败或全部站点失败：不写快照，等待重试。
+	if revenueErr != nil {
+		log.Printf("dashboard finalize: revenue failed user_id=%s date=%s err=%v", userID, date, revenueErr)
+		return revenueErr
+	}
+	if expectedCount > 0 && collectedCount == 0 {
+		log.Printf("dashboard finalize: all sites failed user_id=%s date=%s", userID, date)
+		return errors.New("all upstream sites failed")
+	}
+
+	// 汇总成本直接从本次采集结果计算，不读取DB已有数据，
+	// 避免重试时把旧站点成本混入本次结果。
+	var totalCost float64
+	allAccountLevel := true
+	for _, r := range siteCostResults {
+		if r.Err == nil {
+			totalCost += r.RawCost * r.RechargeRate
+			if r.Meta.Source == "key_sum_best_effort" {
+				allAccountLevel = false
+			}
+		}
+	}
+	var status string
+	var finalizedAt *time.Time
+	if collectedCount == expectedCount && expectedCount > 0 && allAccountLevel {
+		status = SettlementStatusFinal
+		finalizedAt = &now
+	} else {
+		status = SettlementStatusPartial
+	}
+
+	snapshotID, idErr := metricsRandomID()
+	if idErr != nil {
+		log.Printf("dashboard finalize: generate snapshot id failed err=%v", idErr)
+		return idErr
+	}
+	np := revenue - totalCost
+	snapshot := DailySnapshot{
+		ID:                 snapshotID,
+		UserID:             userID,
+		AdminAccountID:     adminAccountID,
+		Date:               parsedDate,
+		TodayProfit:        ptrF64(revenue),
+		SiteBalance:        nil,
+		TodayPurchase:      ptrF64(totalCost),
+		NetProfit:          &np,
+		UpstreamBalance:    nil,
+		CreatedAt:          now,
+		SettlementStatus:   status,
+		SnapshotSource:     snapshotSource,
+		ObservedAt:         &now,
+		FinalizedAt:        finalizedAt,
+		CostExpectedCount:  &expectedCount,
+		CostCollectedCount: &collectedCount,
+	}
+	if upsertErr := s.metricsRepo.Upsert(ctx, snapshot); upsertErr != nil {
+		log.Printf("dashboard finalize: upsert snapshot failed user_id=%s date=%s err=%v", userID, date, upsertErr)
+		return upsertErr
+	}
+	log.Printf("dashboard finalize: done user_id=%s date=%s status=%s", userID, date, status)
+	return nil
+}
+
+// startupRecovery 扫描从 SETTLEMENT_BASELINE_DATE 到昨日的缺口，逐日补结算。
+// 不处理 SETTLEMENT_BASELINE_DATE 之前的日期。
+func (s *MetricsService) startupRecovery(ctx context.Context) {
+	loc := businesstime.Location()
+	yesterday := businesstime.DateAt(time.Now().In(loc).AddDate(0, 0, -1))
+
+	baselineStr := os.Getenv("SETTLEMENT_BASELINE_DATE")
+	if baselineStr == "" {
+		baselineStr = yesterday
+	}
+	baseline, err := time.ParseInLocation("2006-01-02", baselineStr, loc)
+	if err != nil {
+		log.Printf("dashboard startup recovery: invalid SETTLEMENT_BASELINE_DATE=%s", baselineStr)
+		return
+	}
+	yesterdayTime, _ := time.ParseInLocation("2006-01-02", yesterday, loc)
+
+	if baseline.After(yesterdayTime) {
+		log.Printf("dashboard startup recovery: baseline=%s is after yesterday=%s, skipping", baselineStr, yesterday)
+		return
+	}
+
+	refs, err := s.store.ActiveSessions(ctx)
+	if err != nil {
+		log.Printf("dashboard startup recovery: list sessions failed: %v", err)
+		return
+	}
+
+	log.Printf("dashboard startup recovery: scanning %s to %s for %d sessions", baselineStr, yesterday, len(refs))
+
+	for _, ref := range refs {
+		// 获取该 session 的现有快照，找出缺口。
+		existing, err := s.metricsRepo.ListDailyStats(ctx, ref.UserID, ref.AdminAccountID, baselineStr, yesterday)
+		if err != nil {
+			log.Printf("dashboard startup recovery: list stats failed user_id=%s err=%v", ref.UserID, err)
+			continue
+		}
+		existingMap := make(map[string]string)
+		for _, snap := range existing {
+			existingMap[snap.Date.Format("2006-01-02")] = snap.SettlementStatus
+		}
+
+		// 逐日检查，补结未 final 的日期。
+		current := baseline
+		for !current.After(yesterdayTime) {
+			d := current.Format("2006-01-02")
+			current = current.AddDate(0, 0, 1)
+			if status, ok := existingMap[d]; ok && status == SettlementStatusFinal {
+				continue // 已结算，跳过
+			}
+			if err := s.finalizeBusinessDate(ctx, ref, d, SnapshotSourceDatedQuery); err != nil {
+				log.Printf("dashboard startup recovery: finalize failed user_id=%s date=%s err=%v", ref.UserID, d, err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+	log.Printf("dashboard startup recovery: completed")
+}
+
+// DailyStats 查询指定日期范围内每天的结算状态，缺失日期返回 missing 占位。
+// page 从 1 开始，pageSize 默认 31，最大 90。
+func (s *MetricsService) DailyStats(ctx context.Context, userID string, from, to string, page, pageSize int, expand bool) ([]DailyStatItem, error) {
+	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	loc := businesstime.Location()
+	fromTime, err := time.ParseInLocation("2006-01-02", from, loc)
+	if err != nil {
+		return nil, requestError("dashboard.errors.invalidDate")
+	}
+	toTime, err := time.ParseInLocation("2006-01-02", to, loc)
+	if err != nil {
+		return nil, requestError("dashboard.errors.invalidDate")
+	}
+	if fromTime.After(toTime) {
+		return nil, requestError("dashboard.errors.fromAfterTo")
+	}
+	totalDays := int(toTime.Sub(fromTime).Hours()/24) + 1
+	if totalDays > 90 {
+		return nil, requestError("dashboard.errors.rangeTooLarge")
+	}
+
+	if pageSize <= 0 || pageSize > 90 {
+		pageSize = 31
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	snapshots, err := s.metricsRepo.ListDailyStats(ctx, userID, adminAccountID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	snapMap := make(map[string]DailySnapshot)
+	for _, snap := range snapshots {
+		snapMap[snap.Date.Format("2006-01-02")] = snap
+	}
+
+	// 生成完整日期序列。
+	items := make([]DailyStatItem, 0, totalDays)
+	for d := fromTime; !d.After(toTime); d = d.AddDate(0, 0, 1) {
+		dateStr := d.Format("2006-01-02")
+		if snap, ok := snapMap[dateStr]; ok {
+			item := DailyStatItem{
+				Date:             dateStr,
+				SettlementStatus: snap.SettlementStatus,
+				SnapshotSource:   snap.SnapshotSource,
+				TodayProfit:      snap.TodayProfit,
+				CostExpectedCount:  snap.CostExpectedCount,
+				CostCollectedCount: snap.CostCollectedCount,
+			}
+			if snap.TodayPurchase != nil {
+				item.ConfirmedCost = snap.TodayPurchase
+			}
+			if snap.TodayProfit != nil && snap.TodayPurchase != nil {
+				ceiling := *snap.TodayProfit - *snap.TodayPurchase
+				item.NetProfitCeiling = &ceiling
+				if *snap.TodayProfit > 0 {
+					margin := ceiling / *snap.TodayProfit * 100
+					item.MarginCeiling = &margin
+				}
+			}
+			if snap.FinalizedAt != nil {
+				ts := snap.FinalizedAt.Format(time.RFC3339)
+				item.FinalizedAt = &ts
+			}
+			if expand {
+				siteCosts, scErr := s.metricsRepo.ListSiteCosts(ctx, userID, adminAccountID, dateStr)
+				if scErr != nil {
+					log.Printf("dashboard daily-stats: list site costs failed date=%s err=%v", dateStr, scErr)
+					item.SiteCostsLoadError = true
+				} else {
+					item.SiteCosts = make([]SiteCostDetail, 0, len(siteCosts))
+					for _, sc := range siteCosts {
+						item.SiteCosts = append(item.SiteCosts, SiteCostDetail{
+							SiteID:       sc.SiteID,
+							SiteName:     sc.SiteName,
+							Platform:     sc.Platform,
+							RawCost:      sc.RawCost,
+							RechargeRate: sc.RechargeRate,
+							AdjustedCost: sc.AdjustedCost,
+							Status:       sc.Status,
+							Source:       sc.Source,
+							ErrorReason:  sc.ErrorReason,
+							ObservedAt:   sc.ObservedAt.Format(time.RFC3339),
+						})
+					}
+				}
+			}
+			items = append(items, item)
+		} else {
+			items = append(items, DailyStatItem{
+				Date:             dateStr,
+				SettlementStatus: SettlementStatusMissing,
+			})
+		}
+	}
+
+	// 分页。
+	start := (page - 1) * pageSize
+	if start >= len(items) {
+		return []DailyStatItem{}, nil
+	}
+	end := start + pageSize
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end], nil
+}
+
+// BackfillRequest 是 POST /api/dashboard/backfill 的请求体。
+type BackfillRequest struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	DryRun bool   `json:"dryRun"`
+	Force  bool   `json:"force"`
+}
+
+// BackfillDayResult 是回填操作单天的结果。
+type BackfillDayResult struct {
+	Date      string   `json:"date"`
+	Status    string   `json:"status"` // "updated"/"skipped"/"failed"
+	Reason    string   `json:"reason,omitempty"`
+	OldProfit *float64 `json:"oldProfit,omitempty"`
+	NewProfit *float64 `json:"newProfit,omitempty"`
+	OldCost   *float64 `json:"oldCost,omitempty"`
+	NewCost   *float64 `json:"newCost,omitempty"`
+}
+
+// BackfillResponse 是 POST /api/dashboard/backfill 的响应体。
+type BackfillResponse struct {
+	DryRun  bool                `json:"dryRun"`
+	Results []BackfillDayResult `json:"results"`
+}
+
+// Backfill 受控回填指定日期范围的历史数据（仅管理员可调用）。
+// dryRun=true 时只返回预览，不写库；force=true 时允许覆盖 final 行并写审计日志。
+func (s *MetricsService) Backfill(ctx context.Context, userID string, req BackfillRequest) (BackfillResponse, error) {
+	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
+	if err != nil {
+		return BackfillResponse{}, err
+	}
+
+	// 显式校验 admin 角色，不仅仅检查 session 是否存在。
+	record, err := s.store.Get(ctx, userID, adminAccountID)
+	if err != nil || record == nil || !record.Session.IsAuthenticated() {
+		return BackfillResponse{}, requestError(ErrorAdminOnly)
+	}
+	session, err := s.freshAdminSession(ctx, userID, adminAccountID, record)
+	if err != nil {
+		return BackfillResponse{}, requestError(ErrorAdminOnly)
+	}
+	if err := s.platform.VerifyAdmin(session); err != nil {
+		return BackfillResponse{}, requestError(ErrorAdminOnly)
+	}
+
+	loc := businesstime.Location()
+	fromTime, err := time.ParseInLocation("2006-01-02", req.From, loc)
+	if err != nil {
+		return BackfillResponse{}, requestError("dashboard.errors.invalidDate")
+	}
+	toTime, err := time.ParseInLocation("2006-01-02", req.To, loc)
+	if err != nil {
+		return BackfillResponse{}, requestError("dashboard.errors.invalidDate")
+	}
+	if fromTime.After(toTime) {
+		return BackfillResponse{}, requestError("dashboard.errors.fromAfterTo")
+	}
+	totalDays := int(toTime.Sub(fromTime).Hours()/24) + 1
+	if totalDays > 90 {
+		return BackfillResponse{}, requestError("dashboard.errors.rangeTooLarge")
+	}
+
+	results := make([]BackfillDayResult, 0)
+
+	for d := fromTime; !d.After(toTime); d = d.AddDate(0, 0, 1) {
+		dateStr := d.Format("2006-01-02")
+		result := BackfillDayResult{Date: dateStr}
+
+		// 检查现有快照。
+		existing, _ := s.metricsRepo.ListDailyStats(ctx, userID, adminAccountID, dateStr, dateStr)
+		var existingSnap *DailySnapshot
+		if len(existing) > 0 {
+			snap := existing[0]
+			existingSnap = &snap
+		}
+
+		// 处理保护规则：force=false 时跳过已 final 且非 backfill 的行。
+		if !req.Force && existingSnap != nil &&
+			existingSnap.SettlementStatus == SettlementStatusFinal &&
+			existingSnap.SnapshotSource != SnapshotSourceBackfill {
+			result.Status = "skipped"
+			result.Reason = "final_row_protected"
+			if existingSnap.TodayProfit != nil {
+				result.OldProfit = existingSnap.TodayProfit
+			}
+			if existingSnap.TodayPurchase != nil {
+				result.OldCost = existingSnap.TodayPurchase
+			}
+			results = append(results, result)
+			continue
+		}
+
+		if req.DryRun {
+			// dryRun：查询上游数据以计算预览值，不写库。
+			// 错误必须传播：查询失败不能返回伪造的零值预览。
+			rec, recErr := s.store.Get(ctx, userID, adminAccountID)
+			if recErr != nil || rec == nil || !rec.Session.IsAuthenticated() {
+				result.Status = "failed"
+				result.Reason = "no_admin_session"
+			} else if sess, sessErr := s.freshAdminSession(ctx, userID, adminAccountID, rec); sessErr != nil {
+				result.Status = "failed"
+				result.Reason = "session_error: " + sessErr.Error()
+			} else {
+				newRevenue, revErr := s.platform.FetchAdminUsageStats(sess, dateStr, dateStr)
+				siteCostResults, costErr := s.upstreams.FetchSiteCostsForDate(ctx, userID, adminAccountID, dateStr)
+				if revErr != nil {
+					result.Status = "failed"
+					result.Reason = "revenue_query_failed: " + revErr.Error()
+				} else if costErr != nil {
+					result.Status = "failed"
+					result.Reason = "cost_query_failed: " + costErr.Error()
+				} else {
+					var newCost float64
+					for _, r := range siteCostResults {
+						if r.Err == nil {
+							newCost += r.RawCost * r.RechargeRate
+						}
+					}
+					result.NewProfit = ptrF64(newRevenue)
+					result.NewCost = ptrF64(newCost)
+				}
+			}
+		} else {
+			// 写审计日志（force=true 覆盖 final 行时）。
+			if req.Force && existingSnap != nil && existingSnap.SettlementStatus == SettlementStatusFinal {
+				log.Printf("dashboard backfill force-overwrite: date=%s old_profit=%v old_cost=%v user_id=%s",
+					dateStr, existingSnap.TodayProfit, existingSnap.TodayPurchase, userID)
+			}
+			ref := ActiveSessionRef{UserID: userID, AdminAccountID: adminAccountID}
+			if err := s.finalizeBusinessDate(ctx, ref, dateStr, SnapshotSourceBackfill); err != nil {
+				result.Status = "failed"
+				result.Reason = err.Error()
+				results = append(results, result)
+				// 限流：支持取消，避免请求取消后仍阻塞。
+				select {
+				case <-ctx.Done():
+					return BackfillResponse{DryRun: req.DryRun, Results: results}, ctx.Err()
+				case <-time.After(500 * time.Millisecond):
+				}
+				continue
+			}
+		}
+
+		// 读取最新结果（dryRun 时读取预期值）。
+		result.Status = "updated"
+		if existingSnap != nil {
+			result.OldProfit = existingSnap.TodayProfit
+			result.OldCost = existingSnap.TodayPurchase
+		}
+		results = append(results, result)
+
+		// 限流：每次间隔 500ms。
+		if !req.DryRun {
+			select {
+			case <-ctx.Done():
+				return BackfillResponse{DryRun: req.DryRun, Results: results}, nil
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+
+	return BackfillResponse{DryRun: req.DryRun, Results: results}, nil
 }

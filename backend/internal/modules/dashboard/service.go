@@ -42,6 +42,10 @@ type PlatformClient interface {
 	FetchAdminAllGroups(session upstream.Session) ([]upstream.AdminGroupInfo, error)
 	FetchAdminGroupDailyStats(session upstream.Session, groups []upstream.GroupInfo) ([]upstream.GroupDailyStat, error)
 	FetchAdminGroupDailyStatsForDate(session upstream.Session, groups []upstream.GroupInfo, date string) ([]upstream.GroupDailyStat, error)
+	// FetchCostForDate 查询上游站点指定上海业务日期的成本（按日精确查询，不使用缓存）。
+	// date 格式 "2006-01-02"，由调用方传入；函数内部禁止调用 time.Now() 推导业务日期。
+	// 返回原始成本（未乘 rechargeRate）、采集元数据和错误。
+	FetchCostForDate(session upstream.Session, date string) (rawCost float64, meta upstream.CostFetchMeta, err error)
 	// sub2api 专用方法（token 登录和旧接口保留）
 	LoginSub2APIAdmin(baseURL string, email string, password string) (upstream.Session, error)
 	LoginWithToken(baseURL string, platform upstream.Platform, account string, accessToken string, refreshToken string, tokenType string) (upstream.LoginResult, error)

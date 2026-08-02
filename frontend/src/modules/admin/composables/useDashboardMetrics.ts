@@ -39,12 +39,32 @@ function buildMetricData(
   live: DashboardMetricsResponse,
   trendPoints: DashboardTrendPoint[],
 ): DashboardMetricData {
-  const current = live[key]
-  const pointsByDate = new Map<string, DashboardTrendPoint>()
+  // 对于 nullable 指标，取值时需区分 null（不可用）和 0（真实零值）。
+  const rawValue = live[key]
+  const current = typeof rawValue === 'number' ? rawValue : (rawValue ?? null)
+
+  // 使用本地类型，允许 nullable 字段携带 null（live 数据来源可能为 null）
+  type LivePoint = {
+    date: string
+    todayProfit: number | null
+    siteBalance: number
+    todayPurchase: number | null
+    netProfit: number | null
+    upstreamBalance: number
+  }
+  const pointsByDate = new Map<string, LivePoint>()
   for (const point of trendPoints) {
-    if (point.date) pointsByDate.set(point.date, point)
+    if (point.date) pointsByDate.set(point.date, {
+      date: point.date,
+      todayProfit: point.todayProfit,
+      siteBalance: point.siteBalance,
+      todayPurchase: point.todayPurchase,
+      netProfit: point.netProfit,
+      upstreamBalance: point.upstreamBalance,
+    })
   }
   if (live.date) {
+    // 保留 null，不再用 coerceNumeric 强转，与历史趋势点的处理保持一致。
     pointsByDate.set(live.date, {
       date: live.date,
       todayProfit: live.todayProfit,
@@ -59,17 +79,26 @@ function buildMetricData(
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((p) => ({
       label: dateLabel(p.date),
-      value: p[key],
+      // 保留 null：指标不可用时图表显示断点，而不是伪零值。
+      value: (p[key] as number | null | undefined) ?? null,
+      date: p.date,
     }))
 
   const week = monthPoints.slice(-7)
   const month = monthPoints.slice(-30)
 
-  return { key, color, current, error: live.metricErrors?.[key], series: { week, month } }
+  return {
+    key,
+    color,
+    current: typeof current === 'number' ? current : null,  // 保留 null，不强转成 0
+    error: live.metricErrors?.[key],
+    series: { week, month },
+  }
 }
 
 export function useDashboardMetrics() {
   const metrics = ref<DashboardMetricData[]>([])
+  const liveData = ref<DashboardMetricsResponse | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -81,7 +110,7 @@ export function useDashboardMetrics() {
         getDashboardMetrics(),
         getDashboardTrends(30),
       ])
-
+      liveData.value = live
       metrics.value = METRIC_CONFIGS.map(({ key, color }) =>
         buildMetricData(key, color, live, trends.points),
       )
@@ -93,10 +122,11 @@ export function useDashboardMetrics() {
   }
 
   const applyRawData = (live: DashboardMetricsResponse, trends: DashboardTrendsResponse) => {
+    liveData.value = live
     metrics.value = METRIC_CONFIGS.map(({ key, color }) =>
       buildMetricData(key, color, live, trends.points),
     )
   }
 
-  return { metrics, loading, error, fetchMetrics, applyRawData }
+  return { metrics, liveData, loading, error, fetchMetrics, applyRawData }
 }

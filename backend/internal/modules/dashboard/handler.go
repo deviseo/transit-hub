@@ -3,6 +3,7 @@ package dashboard
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
@@ -30,6 +31,8 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, metricsService *Metric
 	mux.HandleFunc("GET /api/dashboard/upstream-balance-breakdown", handler.upstreamBalanceBreakdown)
 	mux.HandleFunc("GET /api/dashboard/balance-filter", handler.getBalanceFilter)
 	mux.HandleFunc("PUT /api/dashboard/balance-filter", handler.saveBalanceFilter)
+	mux.HandleFunc("GET /api/dashboard/daily-stats", handler.dailyStats)
+	mux.HandleFunc("POST /api/dashboard/backfill", handler.backfill)
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -242,4 +245,72 @@ func writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	httpjson.WriteError(w, http.StatusInternalServerError, ErrorUnknown)
+}
+
+// dailyStats 返回指定日期范围内每天的结算状态（缺失日期返回 missing 占位）。
+func (h *Handler) dailyStats(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	q := r.URL.Query()
+	from := q.Get("from")
+	to := q.Get("to")
+	if from == "" || to == "" {
+		httpjson.WriteError(w, http.StatusBadRequest, "dashboard.errors.invalidDate")
+		return
+	}
+
+	page := 1
+	pageSize := 31
+	if v := q.Get("page"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			httpjson.WriteError(w, http.StatusBadRequest, "dashboard.errors.invalidPage")
+			return
+		}
+		page = n
+	}
+	if v := q.Get("pageSize"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 90 {
+			httpjson.WriteError(w, http.StatusBadRequest, "dashboard.errors.invalidPageSize")
+			return
+		}
+		pageSize = n
+	}
+	expandStr := q.Get("expand")
+	if expandStr != "" && expandStr != "true" && expandStr != "false" {
+		httpjson.WriteError(w, http.StatusBadRequest, "dashboard.errors.invalidExpand")
+		return
+	}
+	expand := expandStr == "true"
+
+	items, err := h.metricsService.DailyStats(r.Context(), userID, from, to, page, pageSize, expand)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// backfill 受控回填指定日期范围的历史数据（需要 admin 权限）。
+func (h *Handler) backfill(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req BackfillRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, ErrorRequest)
+		return
+	}
+	result, err := h.metricsService.Backfill(r.Context(), userID, req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
 }

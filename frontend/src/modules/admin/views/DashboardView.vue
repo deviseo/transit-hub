@@ -29,6 +29,7 @@ import GroupUsageTodayModal from '../components/dashboard/GroupUsageTodayModal.v
 import StatCard from '../components/dashboard/StatCard.vue'
 import UpstreamBalanceBreakdownModal from '../components/dashboard/UpstreamBalanceBreakdownModal.vue'
 import UpstreamKeyUsageTodayModal from '../components/dashboard/UpstreamKeyUsageTodayModal.vue'
+import DailyStatsPanel from '../components/dashboard/DailyStatsPanel.vue'
 import {
   getDashboardMetrics,
   getDashboardTrends,
@@ -55,7 +56,7 @@ import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
 
 const { t, te, locale } = useI18n()
 const router = useRouter()
-const { metrics, applyRawData } = useDashboardMetrics()
+const { metrics, liveData, applyRawData } = useDashboardMetrics()
 const { theme: chartTheme } = useDashboardChartTheme()
 const isNarrowScreen = useMediaQuery('(max-width: 639px)')
 const { currentAccount } = useAdminAccounts()
@@ -89,6 +90,7 @@ const balanceFilterOpen = ref(false)
 const groupUsageTodayOpen = ref(false)
 const upstreamKeyUsageTodayOpen = ref(false)
 const upstreamBalanceBreakdownOpen = ref(false)
+const dailyStatsPanelOpen = ref(false)
 
 const openBalanceFilter = () => { balanceFilterOpen.value = true }
 const closeBalanceFilter = () => { balanceFilterOpen.value = false }
@@ -99,6 +101,8 @@ const openUpstreamKeyUsageToday = () => { upstreamKeyUsageTodayOpen.value = true
 const closeUpstreamKeyUsageToday = () => { upstreamKeyUsageTodayOpen.value = false }
 const openUpstreamBalanceBreakdown = () => { upstreamBalanceBreakdownOpen.value = true }
 const closeUpstreamBalanceBreakdown = () => { upstreamBalanceBreakdownOpen.value = false }
+const openDailyStatsPanel = () => { dailyStatsPanelOpen.value = true }
+const closeDailyStatsPanel = () => { dailyStatsPanelOpen.value = false }
 const openGroupList = () => { void router.push({ name: 'AdminGroupAssociations' }) }
 
 const handleMetricCardClick = (key: string) => {
@@ -280,6 +284,11 @@ const numberFormatter = computed(() => new Intl.NumberFormat(locale.value, { max
 
 const profitMargin = computed(() => {
   const revenue = metric('todayProfit')?.current ?? 0
+  const cq = liveData.value?.costQuality
+  if (cq && !cq.complete && revenue > 0) {
+    // 成本不完整：利润率暂估上限 = (营收 - 已确认成本) / 营收
+    return (revenue - cq.confirmedCost) / revenue * 100
+  }
   const profit = metric('netProfit')?.current ?? 0
   return revenue > 0 ? (profit / revenue) * 100 : 0
 })
@@ -287,7 +296,7 @@ const profitMargin = computed(() => {
 const marginSeries = computed(() => {
   const revenue = metric('todayProfit')?.series.month ?? []
   const profit = metric('netProfit')?.series.month ?? []
-  return revenue.map((point, index) => point.value > 0 ? ((profit[index]?.value ?? 0) / point.value) * 100 : 0)
+  return revenue.map((point, index) => (point.value ?? 0) > 0 ? ((profit[index]?.value ?? 0) / (point.value as number)) * 100 : 0)
 })
 
 interface DashboardCoreCard {
@@ -304,10 +313,51 @@ interface DashboardCoreCard {
 }
 
 const cards = computed<DashboardCoreCard[]>(() => {
+  const cq = liveData.value?.costQuality
+  const costIncomplete = cq && !cq.complete
   const result: DashboardCoreCard[] = (['todayProfit', 'todayPurchase', 'netProfit'] as DashboardMetricKey[]).flatMap((key) => {
     const current = metric(key)
     if (!current) return []
-    const delta = computeDelta(current.series.month.map(point => point.value))
+    const delta = computeDelta(current.series.month.map(point => ({ value: point.value, date: point.date })))
+
+    // todayPurchase：成本不完整时展示已确认成本 + 站点覆盖数
+    if (key === 'todayPurchase' && costIncomplete) {
+      return [{
+        key,
+        label: t('admin.dashboard.metrics.todayPurchase'),
+        icon: METRIC_META[key].icon,
+        color: METRIC_META[key].color,
+        value: formatCny(cq!.confirmedCost),
+        deltaDirection: delta.direction,
+        deltaText: formatCny(Math.abs(delta.amount)),
+        statusText: t('admin.dashboard.costQuality.partial', {
+          cost: formatCny(cq!.confirmedCost),
+          collected: cq!.collectedSites,
+          expected: cq!.expectedSites,
+        }),
+        clickable: true,
+        negativeWhenUp: true,
+      }]
+    }
+
+    // netProfit：成本不完整时展示暂估上限
+    if (key === 'netProfit' && costIncomplete) {
+      const revenue = metric('todayProfit')?.current
+      const ceiling = revenue != null ? revenue - cq!.confirmedCost : null
+      return [{
+        key,
+        label: t('admin.dashboard.metrics.netProfit'),
+        icon: METRIC_META[key].icon,
+        color: METRIC_META[key].color,
+        value: formatCny(ceiling),
+        deltaDirection: 'flat',
+        deltaText: '',
+        statusText: t('admin.dashboard.costQuality.netProfitCeiling', { value: formatCny(ceiling) }),
+        clickable: false,
+        negativeWhenUp: false,
+      }]
+    }
+
     return [{
       key,
       label: t(METRIC_META[key].labelKey),
@@ -341,7 +391,7 @@ const cards = computed<DashboardCoreCard[]>(() => {
 const period = ref<DashboardPeriod>('week')
 const periods: DashboardPeriod[] = ['week', 'month']
 const selectedSeries = (key: DashboardMetricKey) => metric(key)?.series[period.value] ?? []
-const sumSeries = (key: DashboardMetricKey) => selectedSeries(key).reduce((total, point) => total + point.value, 0)
+const sumSeries = (key: DashboardMetricKey) => selectedSeries(key).reduce((total, point) => total + (point.value ?? 0), 0)
 
 const periodTotals = computed(() => ({
   revenue: sumSeries('todayProfit'),
@@ -361,11 +411,11 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
   const cost = selectedSeries('todayPurchase')
   const profit = selectedSeries('netProfit')
   const theme = chartTheme.value
-  const commonSeries = (name: string, data: number[], color: string) => ({
+  const commonSeries = (name: string, data: (number | null)[], color: string) => ({
     name,
     data,
     itemStyle: { color },
-    tooltip: { valueFormatter: (value: number) => formatCny(value) },
+    tooltip: { valueFormatter: (value: number | null) => formatCny(value) },
   })
   return {
     animationDuration: 350,
@@ -485,7 +535,9 @@ const siteBalance = computed(() => metric('siteBalance')?.current ?? 0)
 const upstreamBalance = computed(() => metric('upstreamBalance')?.current ?? 0)
 const coverageRatio = computed(() => siteBalance.value > 0 ? (upstreamBalance.value / siteBalance.value) * 100 : null)
 const averageDailyCost = computed(() => {
-  const values = selectedSeries('todayPurchase').map(point => point.value)
+  const values = selectedSeries('todayPurchase')
+    .map(point => point.value)
+    .filter((v): v is number => v !== null)
   return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
 })
 const runwayDays = computed(() => averageDailyCost.value > 0 ? upstreamBalance.value / averageDailyCost.value : null)
@@ -603,6 +655,14 @@ const lastProbeLabel = computed(() => {
         >
           <ShieldCheck class="h-3.5 w-3.5" />
           {{ adminRefreshingCredentials ? t('admin.dashboard.adminAuth.updatingCredentials') : t('admin.dashboard.adminAuth.updateCredentials') }}
+        </button>
+        <button
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          @click="openDailyStatsPanel"
+        >
+          <Activity class="h-3.5 w-3.5" />
+          {{ t('admin.dashboard.dailyStats.title') }}
         </button>
       </div>
     </div>
@@ -942,5 +1002,21 @@ const lastProbeLabel = computed(() => {
     <GroupUsageTodayModal :open="groupUsageTodayOpen" @close="closeGroupUsageToday" />
     <UpstreamKeyUsageTodayModal :open="upstreamKeyUsageTodayOpen" @close="closeUpstreamKeyUsageToday" />
     <UpstreamBalanceBreakdownModal :open="upstreamBalanceBreakdownOpen" @close="closeUpstreamBalanceBreakdown" />
+    <!-- 每日明细面板 -->
+    <div
+      v-if="dailyStatsPanelOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      @click.self="closeDailyStatsPanel"
+    >
+      <div class="bg-background rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col mx-4">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 class="text-base font-semibold">{{ t('admin.dashboard.dailyStats.title') }}</h2>
+          <button class="text-muted-foreground hover:text-foreground" aria-label="关闭" @click="closeDailyStatsPanel">✕</button>
+        </div>
+        <div class="p-5 overflow-y-auto flex-1">
+          <DailyStatsPanel />
+        </div>
+      </div>
+    </div>
   </div>
 </template>

@@ -78,26 +78,46 @@ export const refreshDashboardAdminSession = async (): Promise<DashboardAdminStat
 
 // ─── 仪表盘指标数据 ────────────────────────────────────────
 
-/** 五项核心指标的实时数据。 */
+/** 五项核心指标的实时数据。
+ * todayProfit/todayPurchase/netProfit 为 null 表示该指标不可用（非零）。 */
 export interface DashboardMetricsResponse {
   date: string
   timezone: string
-  todayProfit: number
+  todayProfit: number | null
   siteBalance: number
-  todayPurchase: number
-  netProfit: number
+  todayPurchase: number | null
+  netProfit: number | null
   upstreamBalance: number
   groupCount: number
   metricErrors?: Partial<Record<DashboardMetricKey, string>>
+  costQuality?: CostQuality
 }
 
-/** 历史趋势单日数据点。 */
+/** 成本质量信息，描述缓存成本的完整性。 */
+export interface CostQuality {
+  businessDate: string
+  confirmedCost: number   // 已确认站点成本之和（真实下限）
+  complete: boolean       // 所有目标站点均成功采集时为 true
+  expectedSites: number
+  collectedSites: number
+  failedSites: number
+  observedAt?: string
+  failures?: SiteCostFault[]
+}
+
+/** 单个站点成本采集失败记录。 */
+export interface SiteCostFault {
+  siteName: string
+  reason: 'date_mismatch' | 'stale' | 'fetch_error'
+}
+
+/** 历史趋势单日数据点。nullable 字段为 null 表示该天数据未采集，前端显示断点。 */
 export interface DashboardTrendPoint {
   date: string
-  todayProfit: number
+  todayProfit: number | null
   siteBalance: number
-  todayPurchase: number
-  netProfit: number
+  todayPurchase: number | null
+  netProfit: number | null
   upstreamBalance: number
 }
 
@@ -213,3 +233,87 @@ export interface UpstreamBalanceBreakdownResponse {
 /** 获取当前工作区所有上游站点的缓存余额明细（不触发外部平台请求）。仅在弹窗打开时按需调用。 */
 export const getUpstreamBalanceBreakdown = async (): Promise<UpstreamBalanceBreakdownResponse> =>
   requestJson<UpstreamBalanceBreakdownResponse>('/dashboard/upstream-balance-breakdown')
+
+// ─── 每日明细 API ────────────────────────────────────────
+
+/** 单个站点成本明细（expand=true 时返回）。 */
+export interface SiteCostDetail {
+  siteId: string
+  siteName: string
+  platform: string
+  rawCost?: number | null
+  rechargeRate: number
+  adjustedCost?: number | null
+  status: string
+  source: string
+  errorReason?: string
+  observedAt: string
+}
+
+/** 单日结算数据。settlementStatus 为 "missing" 表示该日期无记录。 */
+export interface DailyStatItem {
+  date: string
+  settlementStatus: 'missing' | 'provisional' | 'partial' | 'final'
+  snapshotSource?: string
+  todayProfit?: number | null
+  confirmedCost?: number | null
+  netProfitCeiling?: number | null
+  marginCeiling?: number | null
+  costExpectedCount?: number | null
+  costCollectedCount?: number | null
+  finalizedAt?: string | null
+  siteCosts?: SiteCostDetail[]
+  siteCostsLoadError?: boolean  // expand=true 但站点明细查询失败时为 true
+}
+
+/** 每日明细响应。 */
+export interface DailyStatsResponse {
+  items: DailyStatItem[]
+}
+
+/** 获取指定日期范围内每天的结算状态。缺失日期返回 missing 占位。 */
+export const getDailyStats = async (
+  from: string,
+  to: string,
+  options?: { page?: number; pageSize?: number; expand?: boolean },
+): Promise<DailyStatsResponse> => {
+  const params = new URLSearchParams({ from, to })
+  if (options?.page) params.set('page', String(options.page))
+  if (options?.pageSize) params.set('pageSize', String(options.pageSize))
+  if (options?.expand) params.set('expand', 'true')
+  return requestJson<DailyStatsResponse>(`/dashboard/daily-stats?${params.toString()}`)
+}
+
+// ─── 受控回填 API ────────────────────────────────────────
+
+/** 回填请求。dryRun 默认 true（安全优先）。 */
+export interface BackfillRequest {
+  from: string
+  to: string
+  dryRun?: boolean
+  force?: boolean
+}
+
+/** 单天回填结果。 */
+export interface BackfillDayResult {
+  date: string
+  status: 'updated' | 'skipped' | 'failed'
+  reason?: string
+  oldProfit?: number | null
+  newProfit?: number | null
+  oldCost?: number | null
+  newCost?: number | null
+}
+
+/** 回填响应。 */
+export interface BackfillResponse {
+  dryRun: boolean
+  results: BackfillDayResult[]
+}
+
+/** 执行受控回填。dryRun=true（默认）时只返回预览，不写库。 */
+export const postBackfill = async (req: BackfillRequest): Promise<BackfillResponse> =>
+  requestJson<BackfillResponse>('/dashboard/backfill', {
+    method: 'POST',
+    body: JSON.stringify({ dryRun: true, force: false, ...req }),
+  })

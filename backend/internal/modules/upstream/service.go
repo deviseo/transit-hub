@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"transithub/backend/internal/shared/businesstime"
 )
 
 const (
@@ -768,10 +770,14 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 	session := *site.Session
 
 	// 刷新会话并拉取指标（无锁操作，可能耗时较长）。
+	syncDate := businesstime.Today() // 同步开始时生成一次上海业务日期，所有指标复用。
 	refreshedSession, refreshErr := s.platformService.RefreshSession(session)
 	metrics := Metrics{}
 	if refreshErr == nil {
 		metrics, refreshErr = s.platformService.FetchMetrics(refreshedSession)
+		if refreshErr == nil {
+			metrics = metrics.WithSyncDate(syncDate, time.Now())
+		}
 	}
 
 	// 重新读取站点确认仍存在（可能在同步期间被删除）。
@@ -1141,4 +1147,61 @@ func randomID() (string, error) {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 	encoded := hex.EncodeToString(bytes)
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+// FetchSiteCostsForDate 用各上游站点自己的 session 查询指定日期的原始成本。
+// 与 KeyUsageToday 模式一致：session 取自每个站点自身的缓存，不依赖仪表盘 admin 账户 session。
+// 使用 semaphore 并发查询，上限 4 个并发，避免串行等待导致调度超时。
+func (s *Service) FetchSiteCostsForDate(ctx context.Context, userID, adminAccountID, date string) ([]SiteCostForDateResult, error) {
+	sites, err := s.cache.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 先过滤出需要查询的站点，避免对无效站点发起请求。
+	type targetSite struct{ site Site }
+	var targets []targetSite
+	for _, site := range sites {
+		if site.AdminAccountID != adminAccountID || site.RechargeRate <= 0 {
+			continue
+		}
+		targets = append(targets, targetSite{*site})
+	}
+
+	if len(targets) == 0 {
+		return []SiteCostForDateResult{}, nil
+	}
+
+	const maxConcurrency = 4
+	sem := make(chan struct{}, maxConcurrency)
+	results := make([]SiteCostForDateResult, len(targets))
+	var wg sync.WaitGroup
+
+	for i, t := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, site Site) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			r := SiteCostForDateResult{
+				SiteID:       site.ID,
+				SiteName:     site.Name,
+				Platform:     site.Platform,
+				RechargeRate: site.RechargeRate,
+			}
+			if site.Session == nil || !site.Session.IsAuthenticated() {
+				r.Err = errors.New(ErrorAuth)
+				results[idx] = r
+				return
+			}
+			rawCost, meta, fetchErr := s.platformService.FetchCostForDate(*site.Session, date)
+			r.RawCost = rawCost
+			r.Meta = meta
+			r.Err = fetchErr
+			results[idx] = r
+		}(i, t.site)
+	}
+	wg.Wait()
+	return results, nil
 }
