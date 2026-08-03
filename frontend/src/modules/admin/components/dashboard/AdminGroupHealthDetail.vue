@@ -197,7 +197,7 @@ const matchesFilter = (account: AdminGroupAccount): boolean => {
 }
 
 const shouldHideUnmonitored = (account: AdminGroupAccount): boolean =>
-  props.hideUnmonitoredAccounts && !monitoringEnabled(account) && !isNotProbed(account) && account.probeAvailable
+  props.hideUnmonitoredAccounts && !monitoringEnabled(account)
 
 const accountLatency = (account: AdminGroupAccount): number | null => {
   const values = account.modelHealth
@@ -563,9 +563,10 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                     {{ account.upstreamKeyGroupName }}
                   </span>
                 </td>
-                <td class="px-3 py-3 tabular-nums text-foreground">
-                  <span v-if="accountLatency(account) == null" class="text-muted-foreground">-</span>
-                  <span v-else>{{ accountLatency(account) }} ms</span>
+                <td class="px-3 py-3 tabular-nums">
+                  <span v-if="aggregateState(account) === 'suspended'" class="text-destructive">-</span>
+                  <span v-else-if="accountLatency(account) == null" class="text-muted-foreground">-</span>
+                  <span v-else class="text-foreground">{{ accountLatency(account) }} ms</span>
                 </td>
                 <td class="px-3 py-3">
                   <div class="flex items-center justify-end gap-1">
@@ -604,7 +605,7 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                         <span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="connectionHealthStateBadgeClass(model.state)">{{ t(`${prefix}.stateLabels.${model.state}`) }}</span>
                       </div>
                       <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>{{ t(`${detailPrefix}.models.latency`, { value: model.lastLatencyMs ?? '-' }) }}</span>
+                        <span :class="model.state === 'suspended' ? 'text-destructive' : ''">{{ t(`${detailPrefix}.models.latency`, { value: model.state === 'suspended' ? '-' : (model.lastLatencyMs ?? '-') }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.lastProbe`, { value: formatConnectionHealthTime(model.lastProbeAt) }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.weight`, { value: model.currentWeight }) }}</span>
                       </div>
