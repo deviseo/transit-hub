@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ImageOff, Loader2 } from 'lucide-vue-next'
 import { fetchEmbedAttachmentBlob } from '../api/tickets'
 import type { EmbedTicketAttachment } from '../types'
@@ -9,8 +8,7 @@ const props = defineProps<{
   attachment: EmbedTicketAttachment
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const objectUrl = ref<string | null>(null)
 const isLoading = ref(true)
 const hasError = ref(false)

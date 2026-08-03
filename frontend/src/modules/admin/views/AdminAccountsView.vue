@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { useDark, useToggle } from '@vueuse/core'
 import { Globe, User, Clock, Check, Loader2, Plus, Moon, Sun, LogOut, Trash2, AlertTriangle } from 'lucide-vue-next'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -13,7 +12,7 @@ import type { DashboardAdminLoginForm } from '../types/dashboardAdmin'
 import { WORKSPACE_DELETE_CONFIRMATION, type AdminAccount } from '../types/adminAccounts'
 import logoUrl from '@/assets/logo.png'
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const router = useRouter()
 
 const isDark = useDark({
@@ -23,9 +22,6 @@ const isDark = useDark({
   valueLight: '',
 })
 const toggleDark = useToggle(isDark)
-const toggleLocale = () => {
-  locale.value = locale.value === 'zh-CN' ? 'en-US' : 'zh-CN'
-}
 
 const {
   accounts,
@@ -64,7 +60,7 @@ const formatTime = (value: string | null): string => {
   if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 const handleLogout = () => {
@@ -228,9 +224,6 @@ const handleAddSubmit = async (form: DashboardAdminLoginForm) => {
       </div>
 
       <div class="flex items-center gap-2">
-        <button @click="toggleLocale" class="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" :title="t('admin.layout.toggleLanguage')" :aria-label="t('admin.layout.toggleLanguage')">
-          <Globe class="h-4 w-4" />
-        </button>
         <button @click="toggleDark()" class="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" :title="t('admin.layout.toggleTheme')" :aria-label="t('admin.layout.toggleTheme')">
           <Moon v-if="!isDark" class="h-4 w-4" />
           <Sun v-else class="h-4 w-4" />

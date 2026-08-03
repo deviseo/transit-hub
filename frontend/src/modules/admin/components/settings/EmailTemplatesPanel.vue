@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { CheckCircle2, Code2, Eye, FilePlus2, Loader2, MailCheck, Save, Send, Sparkles, Trash2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,8 +12,7 @@ import {
 } from '../../api/settings'
 import type { EmailTemplate, SaveEmailTemplatePayload } from '../../types/settings'
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const templates = ref<EmailTemplate[]>([])
 const selectedId = ref('')
 const name = ref('')

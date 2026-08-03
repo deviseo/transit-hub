@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
-import { useI18n } from 'vue-i18n'
 import {
   Activity,
   AlertTriangle,
@@ -44,7 +43,7 @@ import {
   writeConnectionHealthPreferences,
 } from '../utils/connectionHealthPreferences'
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const {
   overview,
   groups,

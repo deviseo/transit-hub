@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertTriangle, ArrowDownUp, Ban, CheckCircle2, Loader2, Plus, Settings2, ShieldCheck, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -22,7 +21,7 @@ const emit = defineEmits<{
   (event: 'toggle', policy: ConnectionHealthPolicy): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.connectionHealth.policies'
 const deleteCandidate = ref<ConnectionHealthPolicy | null>(null)
 const visibleDeleteError = ref('')

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import {
   AlertCircle,
   CalendarClock,
@@ -57,8 +56,7 @@ import type {
   LotterySubscriptionGroup,
 } from './types'
 
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 const campaigns = ref<LotteryCampaign[]>([])
 const selectedCampaign = ref<LotteryCampaign | null>(null)
 const entries = ref<LotteryEntry[]>([])
@@ -156,7 +154,7 @@ const formatDateTime = (value?: string): string => {
   if (!value) return t('admin.lottery.common.empty')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.lottery.common.empty')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

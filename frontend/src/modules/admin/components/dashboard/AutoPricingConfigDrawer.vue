@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { X, Zap, ZapOff, Calculator, CircleHelp, Bell, BellOff, Copy, Check, Loader2 } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
 import type { MySiteMapping, MySiteGroupRef, AutoPricingSource, AutoPricingStrategy } from '../../types/mySites'
@@ -25,8 +24,7 @@ const emit = defineEmits<{
   (event: 'save', config: Partial<MySiteMapping>): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const enableAutoPricing = ref(false)
 const autoPricingSource = ref<AutoPricingSource>('primary_upstream')
 const primaryUpstreamSiteId = ref('')

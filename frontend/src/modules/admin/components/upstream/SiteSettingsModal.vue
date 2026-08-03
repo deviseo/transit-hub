@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Settings2, X, Save, Loader2, CheckCircle2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,8 +16,7 @@ const emit = defineEmits<{
   (event: 'saved', siteId: string, settings: { balanceThreshold: number | null }): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const useCustomThreshold = ref(false)
 const balanceThreshold = ref('')
 const isSaving = ref(false)

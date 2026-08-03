@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, useId } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Crown, Medal, RefreshCw, Trophy, Users } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import type { LeaderboardPeriod, LeaderboardRow } from '../types'
@@ -19,18 +18,18 @@ const emit = defineEmits<{
   'update:period': [period: LeaderboardPeriod]
 }>()
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const titleId = useId()
 const key = (suffix: string): string => `${props.i18nPrefix}.${suffix}`
 
 const periods: LeaderboardPeriod[] = ['today', '7d', '30d']
 const podiumRows = computed(() => props.rows.slice(0, 3))
 
-const numberFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+const numberFormatter = computed(() => new Intl.NumberFormat(locale, {
   notation: 'compact',
   maximumFractionDigits: 1,
 }))
-const currencyFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+const currencyFormatter = computed(() => new Intl.NumberFormat(locale, {
   style: 'currency',
   currency: 'USD',
   maximumFractionDigits: 2,
@@ -94,7 +93,7 @@ const podiumTableAvatarClass = (rank: number): string => {
 
 const formatUpdatedAt = (): string => {
   if (!props.updatedAt) return ''
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     timeZone: 'Asia/Shanghai',
     hour: '2-digit',
     minute: '2-digit',

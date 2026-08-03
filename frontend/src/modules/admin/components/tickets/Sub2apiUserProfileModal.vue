@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Loader2, User, X } from 'lucide-vue-next'
 import { getSub2apiUserProfile } from '../../api/tickets'
 import type { Sub2apiUserProfile } from '../../types/tickets'
@@ -14,7 +13,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const prefix = 'admin.tickets.sub2apiProfile'
 
 const profile = ref<Sub2apiUserProfile | null>(null)
@@ -43,7 +42,7 @@ const formatDateTime = (value: string | null | undefined): string => {
   if (!value) return t('admin.tickets.common.placeholder')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.tickets.common.placeholder')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

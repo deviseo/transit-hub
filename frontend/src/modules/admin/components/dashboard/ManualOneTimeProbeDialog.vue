@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, X, XCircle, Zap } from 'lucide-vue-next'
 import {
   connectionHealthMessageKey,
@@ -28,7 +27,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth.manualProbeDialog'
 const { discoverModels, runManualProbeOnce } = useConnectionHealth()
 

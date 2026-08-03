@@ -139,12 +139,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { getDailyStats, type DailyStatItem } from '../../api/dashboardAdmin'
 import { formatCny } from '../../utils/dashboard'
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 // Shanghai 固定 UTC+8，无 DST。用加偏移量的方式获取上海业务日期。
 function shanghaiDateStr(offsetDays = 0): string {
   const shanghaiMs = Date.now() + 8 * 60 * 60 * 1000

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
 import { LogOut, AlertTriangle } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 
@@ -14,7 +13,7 @@ const emit = defineEmits<{
   (event: 'cancel'): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 </script>
 
 <template>

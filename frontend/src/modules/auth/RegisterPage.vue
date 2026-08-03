@@ -3,11 +3,10 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useI18n } from 'vue-i18n'
 import { ArrowLeft, Mail, KeyRound, ShieldCheck } from 'lucide-vue-next'
 import { registerWithEmail, requestEmailCode, storeAccessToken } from './api/auth'
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const router = useRouter()
 
 const email = ref('')

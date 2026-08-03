@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Activity, ArrowRight, X } from 'lucide-vue-next'
 import { matchingProbeIntervalSeconds, remoteActionLabelKey } from '../../composables/useConnectionHealth'
 import ConnectionHealthLinkDetailCard from './ConnectionHealthLinkDetailCard.vue'
@@ -27,7 +26,7 @@ const emit = defineEmits<{
   (event: 'view-all'): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.connectionHealth'
 const cardPrefix = `${prefix}.eventsDialog.card`
 

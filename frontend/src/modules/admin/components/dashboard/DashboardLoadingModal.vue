@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Check, Loader2 } from 'lucide-vue-next'
 
 export interface LoadingStep {
@@ -14,8 +13,7 @@ const props = defineProps<{
   steps: LoadingStep[]
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const progress = computed(() => {
   if (props.steps.length === 0) return 0
   const done = props.steps.filter(s => s.status === 'done').length

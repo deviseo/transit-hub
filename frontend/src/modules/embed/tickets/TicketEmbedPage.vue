@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Loader2 } from 'lucide-vue-next'
 import { createEmbedSession, listEmbedTickets, setEmbedSessionToken } from './api/tickets'
 import EmbedTicketDetail from './components/EmbedTicketDetail.vue'
@@ -9,8 +8,7 @@ import EmbedTicketList from './components/EmbedTicketList.vue'
 import type { EmbedTicketListItem, TicketEmbedTemplate } from './types'
 
 const route = useRoute()
-const { t, locale } = useI18n()
-
+import { t } from '@/locales'
 type PageState = 'loading' | 'error' | 'ready'
 const pageState = ref<PageState>('loading')
 const initErrorKey = ref<string | null>(null)
@@ -54,7 +52,6 @@ const applyTheme = (theme: string) => {
 }
 
 const applyLocale = (lang: string) => {
-  locale.value = lang === 'zh' ? 'zh-CN' : 'en-US'
 }
 
 // 会话建立后从 URL 中移除 Sub2API token，避免用户刷新页面或分享地址时把 token 泄露出去；

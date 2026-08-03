@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Ban, CheckCircle2, ChevronDown, ChevronUp, Eye, FileText, History, Loader2, Mail, RefreshCw, Search, Send, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { getEmailTemplates } from '../api/settings'
@@ -23,8 +22,7 @@ import type {
   MassEmailUserSortBy,
 } from '../types/massEmail'
 
-const { t, te, locale } = useI18n()
-
+import { t, te, locale } from '@/locales'
 const users = ref<MassEmailUser[]>([])
 const totalUsers = ref(0)
 const userPage = ref(1)
@@ -101,7 +99,7 @@ const formatDateTime = (value?: string | null): string => {
   if (!value) return t('admin.massEmail.common.placeholder')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.massEmail.common.placeholder')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, Loader2, RefreshCw, TrendingUp, X } from 'lucide-vue-next'
 import { getGroupUsageToday, type GroupUsageTodayItem } from '../../api/dashboardAdmin'
 import { formatCny } from '../../utils/dashboard'
@@ -13,8 +12,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const loading = ref(false)
 const error = ref<string | null>(null)
 const groups = ref<GroupUsageTodayItem[]>([])

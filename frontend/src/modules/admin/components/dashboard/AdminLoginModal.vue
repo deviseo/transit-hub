@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Loader2, ShieldCheck, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,7 +22,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const dialogRef = ref<HTMLElement | null>(null)
 const titleId = 'admin-login-dialog-title'
 const descriptionId = 'admin-login-dialog-description'

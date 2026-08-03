@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, type Component } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
-import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import {
@@ -54,7 +53,7 @@ import type { DashboardColorToken, DashboardMetricData, DashboardMetricKey, Dash
 import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
 import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
 
-const { t, te, locale } = useI18n()
+import { t, te, locale } from '@/locales'
 const router = useRouter()
 const { metrics, liveData, applyRawData } = useDashboardMetrics()
 const { theme: chartTheme } = useDashboardChartTheme()
@@ -226,12 +225,12 @@ const loadAllData = async (options: { skipStatusCheck?: boolean } = {}) => {
 }
 
 const adminExpiry = computed(
-  () => formatDateTime(adminStatus.value.expiresAt, locale.value) ?? t('admin.dashboard.adminAuth.timeUnknown'),
+  () => formatDateTime(adminStatus.value.expiresAt, locale) ?? t('admin.dashboard.adminAuth.timeUnknown'),
 )
 
 const lastUpdatedLabel = computed(() => {
   if (lastUpdatedAt.value == null) return t('admin.dashboard.dataStatus.waiting')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -276,11 +275,11 @@ const metricErrorText = (reason: string | undefined) => {
   return t('admin.dashboard.common.metricLoadError', { reason: detail })
 }
 
-const percentFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+const percentFormatter = computed(() => new Intl.NumberFormat(locale, {
   style: 'percent',
   maximumFractionDigits: 1,
 }))
-const numberFormatter = computed(() => new Intl.NumberFormat(locale.value, { maximumFractionDigits: 1 }))
+const numberFormatter = computed(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }))
 
 const profitMargin = computed(() => {
   const revenue = metric('todayProfit')?.current ?? 0
@@ -607,7 +606,7 @@ const attentionItems = computed(() => {
 const lastProbeLabel = computed(() => {
   const value = healthSummary.value?.lastProbeAt
   if (!value) return t('admin.dashboard.attention.neverProbed')
-  return formatDateTime(Date.parse(value), locale.value) ?? t('admin.dashboard.attention.neverProbed')
+  return formatDateTime(Date.parse(value), locale) ?? t('admin.dashboard.attention.neverProbed')
 })
 </script>
 

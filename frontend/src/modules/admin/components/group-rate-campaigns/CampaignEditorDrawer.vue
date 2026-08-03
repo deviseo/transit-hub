@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { X, Megaphone, CircleHelp, Bell, BellOff, Copy, Check, Loader2, Eye } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
@@ -33,7 +32,7 @@ const emit = defineEmits<{
   (event: 'created', campaign: CampaignDetail): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.groupRateCampaigns.editor'
 
 const name = ref('')

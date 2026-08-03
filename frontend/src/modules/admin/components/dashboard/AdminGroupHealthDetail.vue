@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import {
   Activity,
   AlertTriangle,
@@ -42,7 +41,7 @@ const emit = defineEmits<{
   (event: 'update:hide-unmonitored-accounts', value: boolean): void
 }>()
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth'
 const detailPrefix = `${prefix}.groupDetail`
 const expandedTargetId = ref('')

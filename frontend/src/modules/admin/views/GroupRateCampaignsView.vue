@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Loader2, Megaphone, Plus, RefreshCw } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { useGroupRateCampaigns } from '../composables/useGroupRateCampaigns'
@@ -9,7 +8,7 @@ import CampaignEditorDrawer from '../components/group-rate-campaigns/CampaignEdi
 import CampaignDetailDrawer from '../components/group-rate-campaigns/CampaignDetailDrawer.vue'
 import type { CampaignDetail, CampaignListItem } from '../types/groupRateCampaigns'
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const route = useRoute()
 const router = useRouter()
 
@@ -84,7 +83,7 @@ const formatDateTime = (value: string | null): string => {
   if (!value) return t('admin.groupRateCampaigns.common.placeholder')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.groupRateCampaigns.common.placeholder')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

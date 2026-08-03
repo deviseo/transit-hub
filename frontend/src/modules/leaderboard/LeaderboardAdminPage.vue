@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { Settings2 } from 'lucide-vue-next'
-import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import LeaderboardBoard from './components/LeaderboardBoard.vue'
 import LeaderboardEmbedConfigModal from './components/LeaderboardEmbedConfigModal.vue'
@@ -9,7 +8,7 @@ import { getLeaderboard } from './api/leaderboard'
 import { leaderboardDateRange } from './utils/period'
 import type { LeaderboardPeriod, LeaderboardRow } from './types'
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const rows = ref<LeaderboardRow[]>([])
 const period = ref<LeaderboardPeriod>('today')
 const loading = ref(false)

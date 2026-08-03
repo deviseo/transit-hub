@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useDark } from '@vueuse/core'
 import { marked } from 'marked'
 import { Code2, Eye } from 'lucide-vue-next'
@@ -19,7 +18,7 @@ const props = defineProps<{
   placeholder: string
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const isDark = useDark({
   selector: 'html',
   attribute: 'class',

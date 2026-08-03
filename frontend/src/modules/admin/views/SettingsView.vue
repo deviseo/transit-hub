@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail, RefreshCw, ServerCog, Power, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,8 +25,7 @@ import {
 } from '../api/settings'
 import type { NotificationChannel, NotificationChannelSettings, NotificationTemplateFormat, SmtpSettings, SmtpTlsMode, StrategySettings, TestNotificationChannelPayload } from '../types/settings'
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 // Tab Settings
 const activeTab = ref<'strategy' | 'channels' | 'email' | 'system'>('strategy')
 
@@ -1504,6 +1502,9 @@ onBeforeUnmount(() => {
                       :class="isUpgradeBusy ? 'animate-pulse bg-blue-500' : (upgradeStatus.state === 'failed' ? 'bg-destructive' : (upgradeStatus.state === 'succeeded' ? 'bg-green-500' : 'bg-muted-foreground/50'))"
                     ></span>
                     <span>{{ t('admin.settings.upgrade.statusLabel') }}：{{ t(upgradeStatusKey) }}</span>
+                  </div>
+                  <div class="mt-0.5 text-xs text-muted-foreground/60">
+                    {{ t('admin.settings.upgrade.lastUpdated') }}：v0.1.15 · 2026-08-03
                   </div>
                 </div>
               </div>

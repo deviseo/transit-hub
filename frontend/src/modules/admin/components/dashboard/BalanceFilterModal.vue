@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Filter, Loader2, Plus, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,8 +16,7 @@ const emit = defineEmits<{
   (event: 'saved'): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const loading = ref(false)
 const saving = ref(false)
 const errorKey = ref<string | null>(null)

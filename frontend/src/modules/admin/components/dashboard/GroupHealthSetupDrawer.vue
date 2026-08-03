@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import {
   ArrowDownUp,
   Check,
@@ -37,7 +36,7 @@ const emit = defineEmits<{
   (event: 'saved'): void
 }>()
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth.setup'
 const {
   createPolicyForSetup,

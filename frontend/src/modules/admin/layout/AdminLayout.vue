@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github, Mail, Menu, X, Trophy, Gift, Boxes } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github, Mail, Menu, X, Trophy, Gift, Boxes } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
-import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
 import { clearAccessToken } from '@/modules/auth/api/auth'
 import { getSystemVersion } from '../api/system'
 import type { SystemVersionResponse } from '../api/system'
 import logoUrl from '@/assets/logo.png'
-
 const route = useRoute()
 const router = useRouter()
-
 const isDark = useDark({
   selector: 'html',
   attribute: 'class',
@@ -20,17 +17,11 @@ const isDark = useDark({
   valueLight: '',
 })
 const toggleDark = useToggle(isDark)
-
-const { t, locale } = useI18n()
-const toggleLocale = () => {
-  locale.value = locale.value === 'zh-CN' ? 'en-US' : 'zh-CN'
-}
-
+import { t } from '@/locales'
 const { currentAccount, noticeKey, loadCurrentAccount } = useAdminAccounts()
 
 // 版本信息：开源版仅用于纯展示，不依赖授权/更新服务
 const versionInfo = ref<SystemVersionResponse | null>(null)
-
 const loadVersionInfo = async () => {
   try {
     versionInfo.value = await getSystemVersion()
@@ -38,7 +29,6 @@ const loadVersionInfo = async () => {
     // 版本信息加载失败不阻塞页面
   }
 }
-
 // GitHub 仓库地址是本项目唯一来源，版本号链接和图标入口都从这里派生，避免散落硬编码。
 const githubRepoUrl = 'https://github.com/youdaowudao/transit-hub'
 
@@ -51,7 +41,6 @@ const versionLabel = computed(() => {
 
 // 工作区选择页不显示侧边栏和业务菜单
 const isWorkspaceSelectionPage = computed(() => route.name === 'AdminAccounts')
-
 const showUserMenu = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
 const isMobileSidebarOpen = ref(false)
@@ -67,7 +56,6 @@ const closeMobileSidebar = () => {
 const toggleUserMenu = () => {
   showUserMenu.value = !showUserMenu.value
 }
-
 const handleClickOutside = (e: MouseEvent) => {
   if (userMenuRef.value && !userMenuRef.value.contains(e.target as Node)) {
     showUserMenu.value = false
@@ -104,7 +92,6 @@ interface MenuChild {
   path: string
   icon: Component
 }
-
 // 菜单项分两种形态：叶子（单一路由入口）和分组（固定顺序的二级菜单集合）。
 // “分组管理”下的三个二级菜单顺序固定：分组倍率 -> 分组关联 -> 分组健康，不随业务改动调整。
 type MenuEntry =
@@ -143,9 +130,7 @@ const menuItems = computed<MenuEntry[]>(() => [
 
 // 分组展开状态：未手动切换过时，按当前路由是否命中该分组的子项自动展开。
 const expandedGroups = ref<Record<string, boolean>>({})
-
 const isGroupActive = (group: Extract<MenuEntry, { type: 'group' }>) => group.children.some((child) => child.path === route.path)
-
 const isGroupExpanded = (group: Extract<MenuEntry, { type: 'group' }>) => {
   const manual = expandedGroups.value[group.id]
   return manual === undefined ? isGroupActive(group) : manual
@@ -170,9 +155,7 @@ const findMenuLabel = (path: string): string | undefined => {
   }
   return undefined
 }
-
 const pageTitle = computed(() => (route.path === '/admin' ? t('admin.menu.dashboard') : findMenuLabel(route.path) ?? ''))
-
 const handleLogout = () => {
   showUserMenu.value = false
   closeMobileSidebar()
@@ -242,7 +225,6 @@ watch(
             <component :is="item.icon" class="w-5 h-5" aria-hidden="true" />
             {{ item.name }}
           </router-link>
-
           <div v-else>
             <button
               type="button"
@@ -260,7 +242,6 @@ watch(
               <span class="flex-1 text-left">{{ item.name }}</span>
               <ChevronDown class="w-4 h-4 transition-transform" :class="{ 'rotate-180': isGroupExpanded(item) }" aria-hidden="true" />
             </button>
-
             <div v-if="isGroupExpanded(item)" :id="`admin-menu-${item.id}`" class="mt-1 ml-4 space-y-1 border-l border-border/40 pl-3">
               <router-link
                 v-for="child in item.children"
@@ -281,7 +262,6 @@ watch(
           </div>
         </template>
       </nav>
-
       <div class="p-4 border-t border-border/40">
         <button
           @click="handleLogout"
@@ -292,7 +272,6 @@ watch(
         </button>
       </div>
     </aside>
-
     <!-- Main Content -->
     <div class="flex-1 flex flex-col min-w-0 w-full">
       <!-- Header: 工作区选择页不显示业务导航头 -->
@@ -325,7 +304,6 @@ watch(
             >
               {{ versionLabel }}
             </a>
-
             <a
               :href="githubRepoUrl"
               target="_blank"
@@ -336,16 +314,11 @@ watch(
             >
               <Github class="h-4 w-4" />
             </a>
-
-            <button @click="toggleLocale" class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-surface-elevated text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.layout.toggleLanguage')" :aria-label="t('admin.layout.toggleLanguage')">
-              <Globe class="h-4 w-4" />
-            </button>
             <button @click="toggleDark()" class="flex h-9 w-9 items-center justify-center rounded-full hover:bg-surface-elevated text-muted-foreground hover:text-foreground transition-colors" :title="t('admin.layout.toggleTheme')" :aria-label="t('admin.layout.toggleTheme')">
               <Moon v-if="!isDark" class="h-4 w-4" />
               <Sun v-else class="h-4 w-4" />
             </button>
           </div>
-
           <div ref="userMenuRef" class="relative">
             <button
               @click="toggleUserMenu"
@@ -357,7 +330,6 @@ watch(
               <span v-if="currentAccount" class="text-sm font-medium text-foreground max-w-[120px] truncate hidden sm:inline">{{ currentAccount.displayName }}</span>
               <ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
             </button>
-
             <transition name="dropdown">
               <div
                 v-if="showUserMenu"
@@ -386,7 +358,6 @@ watch(
           </div>
         </div>
       </header>
-
       <!-- Content Area -->
       <main id="admin-main-content" class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 sm:p-6'" tabindex="-1">
         <div v-if="!isWorkspaceSelectionPage && noticeKey" class="mb-4 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
@@ -401,24 +372,20 @@ watch(
     </div>
   </div>
 </template>
-
 <style scoped>
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
-
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
   transform: translateY(10px);
 }
-
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
-
 .dropdown-enter-from,
 .dropdown-leave-to {
   opacity: 0;

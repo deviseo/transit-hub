@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import LeaderboardBoard from '@/modules/leaderboard/components/LeaderboardBoard.vue'
 import { leaderboardDateRange } from '@/modules/leaderboard/utils/period'
 import type { LeaderboardPeriod, LeaderboardRow } from '@/modules/leaderboard/types'
 import { createLeaderboardEmbedSession, getEmbedLeaderboard } from './api'
 
 const route = useRoute()
-const { locale } = useI18n()
+
 const rows = ref<LeaderboardRow[]>([])
 const period = ref<LeaderboardPeriod>('today')
 const loading = ref(true)
@@ -57,7 +56,6 @@ const setPeriod = (value: LeaderboardPeriod) => {
 onMounted(async () => {
   applyTheme(queryString(route.query.theme))
   const lang = queryString(route.query.lang).toLowerCase()
-  locale.value = lang.startsWith('zh') ? 'zh-CN' : 'en-US'
 
   const embedToken = queryString(route.query.embed_token)
   const sub2apiToken = queryString(route.query.token)

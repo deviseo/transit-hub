@@ -2313,6 +2313,7 @@ export default {
       upgrade: {
         title: '源码升级',
         statusLabel: '当前状态',
+        lastUpdated: '最后更新',
         action: '立即升级',
         running: '升级中...',
         successTitle: '升级成功',

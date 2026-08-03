@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Inbox, Loader2, RefreshCw, Settings2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { useTickets } from '../composables/useTickets'
@@ -9,8 +8,7 @@ import TicketEmbedConfigModal from '../components/tickets/TicketEmbedConfigModal
 import Sub2apiUserProfileModal from '../components/tickets/Sub2apiUserProfileModal.vue'
 import type { AdminTicketListItem } from '../types/tickets'
 
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 const {
   tickets,
   total,
@@ -66,7 +64,7 @@ const formatDateTime = (value: string | null): string => {
   if (!value) return t('admin.tickets.common.placeholder')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.tickets.common.placeholder')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

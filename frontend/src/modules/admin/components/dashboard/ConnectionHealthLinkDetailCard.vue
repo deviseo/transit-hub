@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Zap } from 'lucide-vue-next'
 import {
   connectionHealthMessageKey,
@@ -28,7 +27,7 @@ const props = defineProps<{
   remoteAction: string
 }>()
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth'
 const cardPrefix = `${prefix}.eventsDialog.card`
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))

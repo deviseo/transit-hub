@@ -2,10 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { Button } from '@/components/ui/button'
 import { usePortalAnimations } from './composables/usePortalAnimations'
-import { useI18n } from 'vue-i18n'
-
-const { t } = useI18n()
-
+import { t } from '@/locales'
 // Refs for animations
 const badgeRef = ref<HTMLElement | null>(null)
 const titleRef = ref<HTMLElement | null>(null)

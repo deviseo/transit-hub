@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Image as ImageIcon, Loader2, Paperclip, X } from 'lucide-vue-next'
 import { createEmbedTicket } from '../api/tickets'
 
@@ -19,8 +18,7 @@ const emit = defineEmits<{
   (event: 'created', id: string): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const manualEmail = ref('')
 const title = ref('')
 const body = ref('')

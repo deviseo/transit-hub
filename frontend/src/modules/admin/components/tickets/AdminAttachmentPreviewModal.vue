@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { X } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -13,8 +12,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 // Esc 关闭预览；只在预览打开时响应，避免和页面上其它 Esc 行为冲突。
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape' && props.open) emit('close')

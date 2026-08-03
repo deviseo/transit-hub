@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Inbox, Loader2, Plus, RefreshCw } from 'lucide-vue-next'
 import EmbedTicketCreateModal from './EmbedTicketCreateModal.vue'
 import type { EmbedTicketListItem, TicketEmbedTemplate } from '../types'
@@ -26,8 +25,7 @@ const emit = defineEmits<{
   (event: 'created', id: string): void
 }>()
 
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 const isCreateModalOpen = ref(false)
 
 const handleCreated = (id: string) => {
@@ -52,7 +50,7 @@ const statusBadgeClass = (status: string): string => {
 const formatDateTime = (value: string): string => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

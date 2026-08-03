@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, Check, Copy, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-vue-next'
 import { getEmbedConfig, rotateEmbedToken, updateEmbedConfig } from '../../api/tickets'
 import type { TicketEmbedConfig, TicketEmbedTemplate } from '../../types/tickets'
@@ -13,7 +12,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.tickets.embedConfig'
 
 const config = ref<TicketEmbedConfig | null>(null)

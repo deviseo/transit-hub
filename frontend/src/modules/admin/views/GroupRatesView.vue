@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Check, ChevronDown, History, KeyRound, Link2, Loader2, Megaphone, RefreshCw, Search, ServerCog, Sparkles, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -11,7 +10,7 @@ import type { GroupRate, GroupRateHistoryRow } from '../types/groupRates'
 import type { AdminResourceOption, ConnectionCapabilities, MySiteMapping, MySiteMappingOwnGroupOption, RealConnection, UpstreamKeyItem } from '../types/mySites'
 import { LEGACY_NEW_API_CHANNEL_SUGGESTIONS, NEW_API_CHANNEL_TYPES } from '../types/mySites'
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const router = useRouter()
 
 const {
@@ -296,7 +295,7 @@ const formatDateTime = (value: string | null): string => {
   if (!value) return t('admin.groupRates.common.placeholder')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.groupRates.common.placeholder')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

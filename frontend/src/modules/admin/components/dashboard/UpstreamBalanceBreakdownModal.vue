@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, CheckCircle2, Landmark, Loader2, RefreshCw, X } from 'lucide-vue-next'
 import { getUpstreamBalanceBreakdown, type UpstreamBalanceBreakdownItem } from '../../api/dashboardAdmin'
 import { formatCny, formatDateTime } from '../../utils/dashboard'
@@ -14,8 +13,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const loading = ref(false)
 const error = ref<string | null>(null)
 const sites = ref<UpstreamBalanceBreakdownItem[]>([])

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Activity, Eye, Layers, ShieldAlert, ShieldCheck, ShieldQuestion, X, Zap } from 'lucide-vue-next'
 import { Tooltip } from '@/components/ui/tooltip'
 import { connectionHealthMessageKey, connectionHealthStateBadgeClass } from '../../composables/useConnectionHealth'
@@ -24,7 +23,7 @@ const emit = defineEmits<{
   (event: 'assign-policy', account: AdminGroupAccount): void
 }>()
 
-const { t, te } = useI18n()
+import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth'
 const dialogPrefix = `${prefix}.accountsDialog`
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))

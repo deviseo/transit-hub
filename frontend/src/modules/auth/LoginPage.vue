@@ -4,12 +4,11 @@ import { useRouter } from 'vue-router'
 import { useDark, useToggle } from '@vueuse/core'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { useI18n } from 'vue-i18n'
-import { Globe, KeyRound, Mail, Moon, Sun } from 'lucide-vue-next'
+import { KeyRound, Mail, Moon, Sun } from 'lucide-vue-next'
 import { loginWithEmail, storeAccessToken } from './api/auth'
 import logoUrl from '@/assets/logo.png'
 
-const { t, locale } = useI18n()
+import { t } from '@/locales'
 const router = useRouter()
 const isDark = useDark({
   selector: 'html',
@@ -18,21 +17,15 @@ const isDark = useDark({
   valueLight: '',
 })
 const toggleDark = useToggle(isDark)
-const toggleLocale = () => {
-  locale.value = locale.value === 'zh-CN' ? 'en-US' : 'zh-CN'
-}
-
 const email = ref('')
 const password = ref('')
 const isLoading = ref(false)
 const statusKey = ref<string | null>(null)
 const errorKey = ref<string | null>(null)
-
 const handleLogin = async () => {
   isLoading.value = true
   statusKey.value = null
   errorKey.value = null
-
   try {
     const response = await loginWithEmail({
       email: email.value,
@@ -48,21 +41,11 @@ const handleLogin = async () => {
   }
 }
 </script>
-
 <template>
   <main class="flex min-h-dvh items-center justify-center bg-background p-4 sm:p-6">
     <div class="w-full max-w-sm">
       <div class="relative overflow-hidden rounded-xl border border-border/70 border-t-2 border-t-primary bg-surface-elevated p-6 shadow-xl shadow-black/10 sm:p-7">
         <div class="mb-1 flex justify-end gap-1">
-          <button
-            type="button"
-            class="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            :title="t('admin.layout.toggleLanguage')"
-            :aria-label="t('admin.layout.toggleLanguage')"
-            @click="toggleLocale"
-          >
-            <Globe class="h-4 w-4" aria-hidden="true" />
-          </button>
           <button
             type="button"
             class="flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
@@ -99,7 +82,6 @@ const handleLogin = async () => {
               />
             </div>
           </div>
-
           <div class="space-y-2">
             <label for="login-password" class="text-sm font-medium text-foreground">{{ t('auth.login.password') }}</label>
             <div class="relative">
@@ -117,7 +99,6 @@ const handleLogin = async () => {
               />
             </div>
           </div>
-
           <p
             v-if="statusKey"
             class="rounded-lg border border-signal/20 bg-signal/10 px-4 py-3 text-sm font-medium text-signal"
@@ -126,7 +107,6 @@ const handleLogin = async () => {
           >
             {{ t(statusKey) }}
           </p>
-
           <p
             v-if="errorKey"
             class="rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm font-medium text-destructive"
@@ -134,7 +114,6 @@ const handleLogin = async () => {
           >
             {{ t(errorKey) }}
           </p>
-
           <Button 
             type="submit" 
             class="mt-2 h-12 w-full text-base font-semibold"

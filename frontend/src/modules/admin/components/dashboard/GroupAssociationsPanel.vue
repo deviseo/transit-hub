@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import {
   AlertCircle,
   ArrowDownUp,
@@ -85,7 +84,7 @@ interface AssociationTargetRow {
   healthStatus: HealthStatus
 }
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const { currentAccount } = useAdminAccounts()
 const loading = ref(true)
 const error = ref<string | null>(null)
@@ -776,13 +775,13 @@ const formatTargetMultiplier = (target: MySiteUpstreamTargetOption): string => {
   return formatMultiplier(target.multiplier)
 }
 
-const profitMarginFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+const profitMarginFormatter = computed(() => new Intl.NumberFormat(locale, {
   style: 'percent',
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 }))
 
-const currencyFormatter = computed(() => new Intl.NumberFormat(locale.value, {
+const currencyFormatter = computed(() => new Intl.NumberFormat(locale, {
   style: 'currency',
   currency: 'CNY',
   minimumFractionDigits: 2,
@@ -843,7 +842,7 @@ const formatRunTime = (value: string | undefined): string => {
   if (!value) return t('admin.groupAssociations.lastRun.never')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.groupAssociations.lastRun.never')
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 const moveGroup = (groupId: string, offset: -1 | 1) => {

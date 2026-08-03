@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { useI18n } from 'vue-i18n'
 import {
   AlertCircle,
   ArrowLeft,
@@ -31,8 +30,7 @@ import {
 import { useLotteryDrawReveal, type LotteryDrawRevealOutcome } from './composables/useLotteryDrawReveal'
 
 const route = useRoute()
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 type PageState = 'loading' | 'error' | 'ready'
 type ResultState = 'none' | 'pending' | 'won' | 'lost' | 'withdrawn'
 
@@ -79,7 +77,6 @@ const applyTheme = (theme: string) => {
 }
 
 const applyLocale = (lang: string) => {
-  locale.value = lang.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US'
 }
 
 const stripTokenFromUrl = () => {
@@ -93,7 +90,7 @@ const formatDateTime = (value?: string): string => {
   if (!value) return t('embed.lottery.common.empty')
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('embed.lottery.common.empty')
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

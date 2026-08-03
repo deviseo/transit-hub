@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { BookOpenText, X } from 'lucide-vue-next'
 
 const props = defineProps<{
@@ -11,7 +10,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.connectionHealth.policyDrawer.runFlow'
 const titleId = 'connection-health-policy-run-flow-title'
 const descriptionId = 'connection-health-policy-run-flow-description'

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ImageOff, Loader2 } from 'lucide-vue-next'
 import { fetchAttachmentBlob } from '../../api/tickets'
 import type { TicketAttachment } from '../../types/tickets'
@@ -13,8 +12,7 @@ const emit = defineEmits<{
   (event: 'preview', payload: { url: string; name: string }): void
 }>()
 
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const objectUrl = ref<string | null>(null)
 const isLoading = ref(true)
 const hasError = ref(false)

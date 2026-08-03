@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ShieldAlert, X, Zap } from 'lucide-vue-next'
 import type { ProbeModelCandidate } from '../../types/connectionHealth'
 
@@ -17,7 +16,7 @@ const emit = defineEmits<{
   (event: 'confirm', models: string[]): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.connectionHealth.probeDialog'
 
 const selected = ref<Set<string>>(new Set())

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { X, ClipboardList, Loader2, Play, Square, Ban } from 'lucide-vue-next'
 import { getGroupRateCampaign } from '../../api/groupRateCampaigns'
 import type { CampaignDetail } from '../../types/groupRateCampaigns'
@@ -17,7 +16,7 @@ const emit = defineEmits<{
   (event: 'cancel', id: string): void
 }>()
 
-const { t, locale } = useI18n()
+import { t, locale } from '@/locales'
 const prefix = 'admin.groupRateCampaigns.detail'
 
 const detail = ref<CampaignDetail | null>(null)
@@ -89,7 +88,7 @@ const formatDateTime = (value: string | null): string => {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
 const statusBadgeClass = (status: string): string => {

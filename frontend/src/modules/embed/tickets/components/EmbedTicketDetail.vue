@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { AlertCircle, ArrowLeft, Loader2, Send } from 'lucide-vue-next'
 import { getEmbedTicket, replyEmbedTicket } from '../api/tickets'
 import EmbedAttachmentThumbnail from './EmbedAttachmentThumbnail.vue'
@@ -18,8 +17,7 @@ const emit = defineEmits<{
   (event: 'updated'): void
 }>()
 
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 const detail = ref<EmbedTicketDetail | null>(null)
 const isLoading = ref(false)
 const errorKey = ref<string | null>(null)
@@ -59,7 +57,7 @@ const submitReply = async () => {
 const formatDateTime = (value: string): string => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return new Intl.DateTimeFormat(locale.value, {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

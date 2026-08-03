@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Check, Copy, Globe2, Link2, Loader2, RefreshCw, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,8 +11,7 @@ import type { LeaderboardEmbedConfig } from '../types'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
-const { t } = useI18n()
-
+import { t } from '@/locales'
 const config = ref<LeaderboardEmbedConfig | null>(null)
 const loading = ref(false)
 const rotating = ref(false)

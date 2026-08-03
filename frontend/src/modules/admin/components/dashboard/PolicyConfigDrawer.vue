@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { ArrowDownUp, BookOpenText, Radar, X, ShieldCheck, Plus, Trash2 } from 'lucide-vue-next'
 import { HelpTooltip } from '@/components/ui/tooltip'
 import PolicyRunFlowDialog from './PolicyRunFlowDialog.vue'
@@ -23,7 +22,7 @@ const emit = defineEmits<{
   (event: 'save', input: PolicyInput): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const prefix = 'admin.connectionHealth.policyDrawer'
 
 const providerOptions = ['gemini', 'anthropic', 'openai', 'custom']

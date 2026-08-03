@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Check, Link2, Loader2, Search, Server, X } from 'lucide-vue-next'
 import type { MySiteGroupRef, MySiteUpstreamTargetOption } from '../../types/mySites'
 
@@ -17,7 +16,7 @@ const emit = defineEmits<{
   (event: 'save', targets: MySiteGroupRef[]): void
 }>()
 
-const { t } = useI18n()
+import { t } from '@/locales'
 const search = ref('')
 const selectedKeys = ref<string[]>([])
 const prefix = 'admin.groupAssociations.targetsDrawer'

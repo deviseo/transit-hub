@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
 import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, ArrowUpDown, ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,8 +9,7 @@ import { useUpstreamSites } from '../composables/useUpstreamSites'
 import SiteSettingsModal from '../components/upstream/SiteSettingsModal.vue'
 import type { UpstreamGroupInfo, UpstreamMetricValue, UpstreamSite, UpstreamSiteForm, UpstreamStatus } from '../types/upstream'
 
-const { t, locale } = useI18n()
-
+import { t, locale } from '@/locales'
 const searchQuery = ref('')
 const isAddModalOpen = ref(false)
 const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, addSite, updateSite, deleteSite, streamRefreshSites, refreshSingleSite } = useUpstreamSites()
@@ -292,7 +290,7 @@ const lastUpdatedDisplay = (site: UpstreamSite): string => {
   if (!site.lastSyncedAt) return t('admin.upstream.fields.notSynced')
   const value = new Date(site.lastSyncedAt)
   if (Number.isNaN(value.getTime())) return t('admin.upstream.fields.notSynced')
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(value)
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(value)
 }
 
 onMounted(() => {
