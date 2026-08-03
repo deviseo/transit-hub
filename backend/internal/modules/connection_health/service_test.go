@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,10 +27,16 @@ type fakeRepository struct {
 	groupExclusions    []GroupTargetExclusion
 	priorityStates     map[string]PrioritySyncState
 	targetActionStates map[string]TargetActionState
+	groupSortSettings  map[string]GroupProbeSortSetting
 	budgetClaims       map[string]int
 	insertEventErr     error
+	upsertStateErr     error
 	savePolicyErr      error
 	deletePolicyErr    error
+	targetLeaseBlocked bool
+	priorityLeaseMu    sync.Mutex
+	priorityLeases     map[string]*sync.Mutex
+	priorityLeaseCount map[string]int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -37,7 +44,10 @@ func newFakeRepository() *fakeRepository {
 		states:             map[string]map[string]ConnectionHealthState{},
 		priorityStates:     map[string]PrioritySyncState{},
 		targetActionStates: map[string]TargetActionState{},
+		groupSortSettings:  map[string]GroupProbeSortSetting{},
 		budgetClaims:       map[string]int{},
+		priorityLeases:     map[string]*sync.Mutex{},
+		priorityLeaseCount: map[string]int{},
 	}
 }
 
@@ -325,6 +335,9 @@ func (f *fakeRepository) GetState(ctx context.Context, connectionID string, mode
 }
 
 func (f *fakeRepository) UpsertState(ctx context.Context, s ConnectionHealthState) error {
+	if f.upsertStateErr != nil {
+		return f.upsertStateErr
+	}
 	if f.states[s.ConnectionID] == nil {
 		f.states[s.ConnectionID] = map[string]ConnectionHealthState{}
 	}
@@ -432,7 +445,7 @@ func (f *fakeRepository) CountFailureEventsSince(ctx context.Context, userID str
 func (f *fakeRepository) CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error) {
 	count := 0
 	for _, e := range f.events {
-		if e.UserID == userID && e.AdminAccountID == adminAccountID && e.PolicyID == policyID && isProbeResultString(e.Result) {
+		if e.UserID == userID && e.AdminAccountID == adminAccountID && e.PolicyID == policyID && e.Source != EventSourceManual && isProbeResultString(e.Result) {
 			count++
 		}
 	}
@@ -448,7 +461,7 @@ func (f *fakeRepository) TryConsumeProbeBudget(ctx context.Context, userID strin
 	if _, initialized := f.budgetClaims[key]; !initialized {
 		count := 0
 		for _, event := range f.events {
-			if event.UserID == userID && event.AdminAccountID == adminAccountID && event.PolicyID == policyID && isProbeResultString(event.Result) {
+			if event.UserID == userID && event.AdminAccountID == adminAccountID && event.PolicyID == policyID && event.Source != EventSourceManual && isProbeResultString(event.Result) {
 				count++
 			}
 		}
@@ -469,8 +482,45 @@ func (f *fakeRepository) AcquireTargetLease(ctx context.Context, targetID string
 	return func() {}, nil
 }
 
+func (f *fakeRepository) TryAcquireTargetLease(ctx context.Context, targetID string) (func(), bool, error) {
+	if f.targetLeaseBlocked {
+		return nil, false, nil
+	}
+	return func() {}, true, nil
+}
+
+func (f *fakeRepository) AcquirePrioritySyncLease(ctx context.Context, userID string, adminAccountID string) (func(), error) {
+	key := userID + "|" + adminAccountID
+	f.priorityLeaseMu.Lock()
+	lease := f.priorityLeases[key]
+	if lease == nil {
+		lease = &sync.Mutex{}
+		f.priorityLeases[key] = lease
+	}
+	f.priorityLeaseCount[key]++
+	f.priorityLeaseMu.Unlock()
+	lease.Lock()
+	return lease.Unlock, nil
+}
+
 func isProbeResultString(result string) bool {
 	return slices.Contains(probeResultKeys(), result)
+}
+
+func TestProbeResultKeysTreatSlowResponseAsSuccessfulSample(t *testing.T) {
+	if !slices.Contains(probeResultKeys(), string(ResultSlowResponse)) {
+		t.Fatalf("slow_response must count as a real probe sample: %v", probeResultKeys())
+	}
+	if slices.Contains(probeFailureResultKeys(), string(ResultSlowResponse)) {
+		t.Fatalf("slow_response must not count as a failure: %v", probeFailureResultKeys())
+	}
+}
+
+func TestToEventViewsPreservesEventSource(t *testing.T) {
+	views := toEventViews([]ConnectionHealthEvent{{ID: "e1", Source: EventSourceManual}})
+	if len(views) != 1 || views[0].Source != EventSourceManual {
+		t.Fatalf("event source was lost: %+v", views)
+	}
 }
 
 // ReplacePolicyAssignments/List* 是策略分配表的内存实现，语义对齐 Repository 的真实实现：
@@ -519,7 +569,7 @@ func (f *fakeRepository) ListAllPolicyAssignments(ctx context.Context) ([]Policy
 	return out, nil
 }
 
-func (f *fakeRepository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+func (f *fakeRepository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error {
 	assignments := make([]GroupPolicyAssignment, 0, len(f.groupAssignments)+len(policyIDs))
 	for _, assignment := range f.groupAssignments {
 		if assignment.UserID == userID && assignment.AdminAccountID == adminAccountID && assignment.AdminGroupID == adminGroupID {
@@ -549,6 +599,14 @@ func (f *fakeRepository) ReplaceGroupPolicyConfiguration(ctx context.Context, us
 		})
 	}
 	f.groupExclusions = exclusions
+	if f.groupSortSettings == nil {
+		f.groupSortSettings = map[string]GroupProbeSortSetting{}
+	}
+	settingKey := userID + "|" + adminAccountID + "|" + adminGroupID
+	f.groupSortSettings[settingKey] = GroupProbeSortSetting{
+		UserID: userID, AdminAccountID: adminAccountID, AdminGroupID: adminGroupID,
+		FallbackMultiplier: cloneFloat64Pointer(fallbackMultiplier),
+	}
 	for _, targetID := range groupTargetIDs {
 		key := userID + "|" + adminAccountID + "|" + targetID
 		if state, ok := f.priorityStates[key]; ok && state.Conflict {
@@ -561,10 +619,20 @@ func (f *fakeRepository) ReplaceGroupPolicyConfiguration(ctx context.Context, us
 	return nil
 }
 
-func (f *fakeRepository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+func (f *fakeRepository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error {
 	policy.ModelTargets = append([]ModelTarget(nil), targets...)
 	f.policies = append(f.policies, policy)
-	return f.ReplaceGroupPolicyConfiguration(ctx, policy.UserID, policy.AdminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs)
+	return f.ReplaceGroupPolicyConfiguration(ctx, policy.UserID, policy.AdminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs, fallbackMultiplier)
+}
+
+func (f *fakeRepository) ListGroupProbeSortSettings(ctx context.Context, userID string, adminAccountID string) ([]GroupProbeSortSetting, error) {
+	settings := make([]GroupProbeSortSetting, 0)
+	for _, setting := range f.groupSortSettings {
+		if setting.UserID == userID && setting.AdminAccountID == adminAccountID {
+			settings = append(settings, setting)
+		}
+	}
+	return settings, nil
 }
 
 func (f *fakeRepository) ListGroupPolicyAssignmentsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupPolicyAssignment, error) {
@@ -956,6 +1024,9 @@ func newProbeTestService(t *testing.T) (*Service, *fakeRepository, *httptest.Ser
 			},
 		},
 	}
+	repo.assignments = []PolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100", PolicyID: "policy-1",
+	}}
 	mySites := fakeMySitesReader{
 		connections: []my_sites.RealConnection{
 			{ID: "conn-1", UserID: "user1", WorkspaceAdminAccountID: "ws1", UpstreamSiteID: "site-1", OwnGroupIDs: []string{"g1"}, UpstreamKey: "gateway-key"},
@@ -980,7 +1051,7 @@ func probedModelNames(results []ModelHealth) []string {
 // TestProbeConnection_NoBodyProbesAllMatchingModels 验证请求体为空（models 未指定）时保持
 // 旧行为：探活该连接匹配到的全部启用模型目标。
 func TestProbeConnection_NoBodyProbesAllMatchingModels(t *testing.T) {
-	svc, _, server := newProbeTestService(t)
+	svc, repo, server := newProbeTestService(t)
 	defer server.Close()
 
 	results, err := svc.ProbeConnection(context.Background(), "user1", "conn-1", ProbeConnectionInput{})
@@ -989,6 +1060,9 @@ func TestProbeConnection_NoBodyProbesAllMatchingModels(t *testing.T) {
 	}
 	if got := probedModelNames(results); !slices.Equal(got, []string{"model-a", "model-b"}) {
 		t.Fatalf("expected all matching models probed, got %v", got)
+	}
+	if len(repo.states) != 0 || len(repo.events) != 0 || len(repo.budgetClaims) != 0 {
+		t.Fatalf("legacy manual endpoint must be isolated from production state: states=%v events=%v budget=%v", repo.states, repo.events, repo.budgetClaims)
 	}
 }
 

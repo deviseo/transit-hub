@@ -3,6 +3,8 @@ package connection_health
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -74,7 +76,7 @@ func TestFinishTargetProbeBatch_SchedulingSkipPreservesLegacyRemoteAction(t *tes
 	}
 
 	svc.finishTargetProbeBatch(context.Background(), "user1", "ws1", upstream.Session{Platform: upstream.PlatformSub2API}, target,
-		[]probeModelSpec{spec}, []targetProbeResult{{state: &state, previousState: StateSuspended, outcome: ProbeOutcome{Result: ResultOK}, spec: spec}})
+		[]probeModelSpec{spec}, []targetProbeResult{{state: &state, previousState: StateSuspended, outcome: ProbeOutcome{Result: ResultOK}, spec: spec}}, EventSourceScheduled)
 
 	stored := repo.states[targetID]["gpt-4o"]
 	if stored.LastRemoteAction != RemoteActionSub2APIStatusInactive {
@@ -649,5 +651,61 @@ func TestCollectAdminProbeJobs_MultiWorkspaceIsolation(t *testing.T) {
 	}
 	if !seen["ws1"] || !seen["ws2"] {
 		t.Fatalf("expected both workspaces scheduled, got %+v", seen)
+	}
+}
+
+func TestRunSchedulerTick_SyncsPriorityAfterProbeStateChanges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	repo := newFakeRepository()
+	policy := Policy{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		ProbeIntervalSeconds: 60, DailyProbeBudget: 10, AutoDegradeEnabled: true,
+		PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeHealthProbe,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", ProviderFamily: ProviderOpenAI, Enabled: true, MaxProbeTokens: 1}},
+	}
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "vip", PolicyID: policy.ID,
+	}}
+	fallback := 0.4
+	repo.groupSortSettings["user1|ws1|g1"] = GroupProbeSortSetting{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", FallbackMultiplier: &fallback,
+	}
+	initialPriority := desiredHealthPriorityForPlatform(upstream.PlatformNewAPI, 3, 0)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Name: "channel", Priority: &initialPriority, BaseURL: server.URL, Models: "gpt-4o"}},
+		},
+		credByAccount: map[string]upstream.ProbeCredential{
+			"100": {BaseURL: server.URL, Key: "secret"},
+		},
+	}
+	priorityActions := &fakeTargetPriorityActioner{}
+	mySites := fakeAdminGroupKeyReader{
+		fakeMySitesReader: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
+		keysBySite:        map[string][]upstream.Sub2APIKeyItem{},
+	}
+	service := &Service{
+		repo: repo, mySites: mySites, sites: fakeSiteLookup{site: &upstream.Site{}},
+		platformGroups: reader, priorityActions: priorityActions, dispatcher: noopRemoteActionRunner{},
+		probeRunner: NewRealProbeRunner(),
+	}
+
+	service.runSchedulerTick(context.Background())
+
+	stored := repo.states["newapi:ws1:100"]["gpt-4o"]
+	if stored.State != StateSuspended {
+		t.Fatalf("probe state = %q, want suspended", stored.State)
+	}
+	if len(priorityActions.calls) != 1 || priorityActions.calls[0].priority != 1 {
+		t.Fatalf("post-probe priority was not synchronized in the same tick: calls=%+v priority_states=%+v states=%+v", priorityActions.calls, repo.priorityStates, repo.states)
+	}
+	if repo.priorityLeaseCount["user1|ws1"] != 2 {
+		t.Fatalf("scheduler priority sync must use the workspace lease before and after probes: %+v", repo.priorityLeaseCount)
 	}
 }

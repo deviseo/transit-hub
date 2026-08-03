@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,28 +17,29 @@ import (
 // real_connections 对接链路。探活字段（probeAvailable / modelHealth 等）来自独立 admin 探活
 // 状态（connection_health_states 中以 targetId 为键的行），不再从 real_connections 叠加。
 type AdminGroupHealth struct {
-	ID                    string                  `json:"id"`
-	Name                  string                  `json:"name"`
-	Platform              string                  `json:"platform"`
-	Status                string                  `json:"status"`
-	Type                  string                  `json:"type"` // public / exclusive / subscription
-	IsExclusive           bool                    `json:"isExclusive"`
-	SubscriptionType      string                  `json:"subscriptionType"`
-	Multiplier            *float64                `json:"multiplier"`
-	MultiplierDisplay     string                  `json:"multiplierDisplay"`
-	AccountCount          int                     `json:"accountCount"`
-	MonitoredAccountCount int                     `json:"monitoredAccountCount"`
-	ExcludedAccountCount  int                     `json:"excludedAccountCount"`
-	AssignedPolicyIDs     []string                `json:"assignedPolicyIds"`
-	AssignedPolicies      []AssignedPolicySummary `json:"assignedPolicies"`
-	HasAssignedPolicy     bool                    `json:"hasAssignedPolicy"`
-	HasEnabledPolicy      bool                    `json:"hasEnabledPolicy"`
-	HasEnabledProbePolicy bool                    `json:"hasEnabledProbePolicy"`
-	PriorityMode          string                  `json:"priorityMode"`
-	PriorityConflictCount int                     `json:"priorityConflictCount"`
-	PriorityConflicts     []AdminPriorityConflict `json:"priorityConflicts,omitempty"`
-	ProbeModelsConfigured bool                    `json:"probeModelsConfigured"`
-	HealthSummary         AdminGroupHealthSummary `json:"healthSummary"`
+	ID                          string                  `json:"id"`
+	Name                        string                  `json:"name"`
+	Platform                    string                  `json:"platform"`
+	Status                      string                  `json:"status"`
+	Type                        string                  `json:"type"` // public / exclusive / subscription
+	IsExclusive                 bool                    `json:"isExclusive"`
+	SubscriptionType            string                  `json:"subscriptionType"`
+	Multiplier                  *float64                `json:"multiplier"`
+	MultiplierDisplay           string                  `json:"multiplierDisplay"`
+	ProbeSortFallbackMultiplier *float64                `json:"probeSortFallbackMultiplier,omitempty"`
+	AccountCount                int                     `json:"accountCount"`
+	MonitoredAccountCount       int                     `json:"monitoredAccountCount"`
+	ExcludedAccountCount        int                     `json:"excludedAccountCount"`
+	AssignedPolicyIDs           []string                `json:"assignedPolicyIds"`
+	AssignedPolicies            []AssignedPolicySummary `json:"assignedPolicies"`
+	HasAssignedPolicy           bool                    `json:"hasAssignedPolicy"`
+	HasEnabledPolicy            bool                    `json:"hasEnabledPolicy"`
+	HasEnabledProbePolicy       bool                    `json:"hasEnabledProbePolicy"`
+	PriorityMode                string                  `json:"priorityMode"`
+	PriorityConflictCount       int                     `json:"priorityConflictCount"`
+	PriorityConflicts           []AdminPriorityConflict `json:"priorityConflicts,omitempty"`
+	ProbeModelsConfigured       bool                    `json:"probeModelsConfigured"`
+	HealthSummary               AdminGroupHealthSummary `json:"healthSummary"`
 	// AccountsError 非空时表示该分组的账号/渠道列表拉取失败（i18n key）；此时 accountCount=0、
 	// accounts 为空，但主列表其余分组不受影响，不会整页崩溃。
 	AccountsError string              `json:"accountsError,omitempty"`
@@ -102,21 +104,26 @@ type AdminGroupAccount struct {
 	UnprobedModels []AdminGroupUnprobedModel `json:"unprobedModels,omitempty"`
 	// 策略分配字段：与 ProbeAvailable 完全解耦——未分配策略的账号/渠道仍可手动一次性探活，
 	// 只是不会被调度器自动探活、不会进策略探活事件列表。
-	AssignedPolicyIDs       []string                `json:"assignedPolicyIds"`
-	AssignedPolicies        []AssignedPolicySummary `json:"assignedPolicies"`
-	HasAssignedPolicy       bool                    `json:"hasAssignedPolicy"`
-	HasEnabledPolicy        bool                    `json:"hasEnabledPolicy"`
-	HasEnabledProbePolicy   bool                    `json:"hasEnabledProbePolicy"`
-	PolicyAssignmentSource  string                  `json:"policyAssignmentSource"`
-	ExcludedFromGroupPolicy bool                    `json:"excludedFromGroupPolicy"`
-	PriorityManaged         bool                    `json:"priorityManaged"`
-	PriorityConflict        bool                    `json:"priorityConflict"`
-	PriorityOriginal        *int                    `json:"priorityOriginal,omitempty"`
-	PriorityExpected        *int                    `json:"priorityExpected,omitempty"`
-	PriorityConflictValue   *int                    `json:"priorityConflictValue,omitempty"`
-	PriorityConflictAt      *time.Time              `json:"priorityConflictAt,omitempty"`
-	ProbeModelsConfigured   bool                    `json:"probeModelsConfigured"`
-	EffectiveMultiplier     *float64                `json:"effectiveMultiplier,omitempty"`
+	AssignedPolicyIDs          []string                `json:"assignedPolicyIds"`
+	AssignedPolicies           []AssignedPolicySummary `json:"assignedPolicies"`
+	HasAssignedPolicy          bool                    `json:"hasAssignedPolicy"`
+	HasEnabledPolicy           bool                    `json:"hasEnabledPolicy"`
+	HasEnabledProbePolicy      bool                    `json:"hasEnabledProbePolicy"`
+	PolicyAssignmentSource     string                  `json:"policyAssignmentSource"`
+	ExcludedFromGroupPolicy    bool                    `json:"excludedFromGroupPolicy"`
+	PriorityManaged            bool                    `json:"priorityManaged"`
+	PriorityConflict           bool                    `json:"priorityConflict"`
+	PriorityOriginal           *int                    `json:"priorityOriginal,omitempty"`
+	PriorityExpected           *int                    `json:"priorityExpected,omitempty"`
+	PriorityConflictValue      *int                    `json:"priorityConflictValue,omitempty"`
+	PriorityConflictAt         *time.Time              `json:"priorityConflictAt,omitempty"`
+	ProbeModelsConfigured      bool                    `json:"probeModelsConfigured"`
+	EffectiveMultiplier        *float64                `json:"effectiveMultiplier,omitempty"`
+	MultiplierResolutionStatus string                  `json:"multiplierResolutionStatus"`
+	MultiplierSource           string                  `json:"multiplierSource"`
+	LocalFallbackMultiplier    *float64                `json:"localFallbackMultiplier,omitempty"`
+	ProductionSortOrder        int                     `json:"productionSortOrder"`
+	PriorityCapacityLimited    bool                    `json:"priorityCapacityLimited"`
 }
 
 type AdminPriorityConflict struct {
@@ -188,6 +195,14 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	if err != nil {
 		return nil, err
 	}
+	probeSortSettings, err := s.repo.ListGroupProbeSortSettings(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	fallbackByGroup := make(map[string]*float64, len(probeSortSettings))
+	for _, setting := range probeSortSettings {
+		fallbackByGroup[setting.AdminGroupID] = cloneFloat64Pointer(setting.FallbackMultiplier)
+	}
 	latestProbeFailureEvents, err := s.repo.ListLatestProbeFailureEventsByWorkspace(ctx, userID, adminAccountID)
 	if err != nil {
 		return nil, err
@@ -234,7 +249,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	budgetDayStart := probeBudgetDayStart(now)
 	// 真实上游 API Key 分组倍率仅用于展示，不参与探活或优先级计算。读取失败时降级为空，
 	// 保证既有分组健康功能不会因为可选的倍率信息不可用而中断。
-	upstreamKeyGroups := s.upstreamKeyGroupsByAdminAccount(ctx, userID, adminAccountID, platform)
+	upstreamMultiplierLookup := s.upstreamMultiplierResolutionsByAdminAccount(ctx, userID, adminAccountID, platform)
 
 	type groupAccountInventory struct {
 		accounts []upstream.AdminGroupAccountInfo
@@ -262,6 +277,40 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			inheritedPolicyIDsByTarget[targetID] = mergePolicyIDs(inheritedPolicyIDsByTarget[targetID], groupPolicyIDs[group.ID])
 		}
 	}
+	healthFallbacksByTarget := make(map[string][]float64)
+	for _, group := range groups {
+		fallback := fallbackByGroup[group.ID]
+		inventory := accountsByGroup[group.ID]
+		if fallback == nil || inventory.err != nil {
+			continue
+		}
+		for _, account := range inventory.accounts {
+			targetID := buildTargetID(platform, adminAccountID, account.ID)
+			directPolicies := make([]Policy, 0, len(assignmentsByTarget[targetID]))
+			for _, assignment := range assignmentsByTarget[targetID] {
+				if policy, ok := policyByID[assignment.PolicyID]; ok {
+					directPolicies = append(directPolicies, policy)
+				}
+			}
+			inheritedPolicies := make([]Policy, 0, len(groupPolicyIDs[group.ID]))
+			if _, excluded := excludedByGroup[group.ID][targetID]; !excluded {
+				for _, policyID := range groupPolicyIDs[group.ID] {
+					if policy, ok := policyByID[policyID]; ok {
+						inheritedPolicies = append(inheritedPolicies, policy)
+					}
+				}
+			}
+			if hasHealthMultiplierPriorityPolicy(directPolicies) || hasHealthMultiplierPriorityPolicy(inheritedPolicies) {
+				healthFallbacksByTarget[targetID] = append(healthFallbacksByTarget[targetID], *fallback)
+			}
+		}
+	}
+	effectiveFallbackByTarget := make(map[string]*float64, len(healthFallbacksByTarget))
+	for targetID, values := range healthFallbacksByTarget {
+		if value, ok := uniqueFloat(values); ok {
+			effectiveFallbackByTarget[targetID] = &value
+		}
+	}
 
 	// stateIndex[targetId][modelName] = 独立探活当前健康状态。旧的 real_connection 状态行
 	// 也会出现在这里（connection_id 为 UUID），但不会与 targetId 命名空间碰撞，互不影响。
@@ -278,17 +327,18 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	result := make([]AdminGroupHealth, 0, len(groups))
 	for _, group := range groups {
 		health := AdminGroupHealth{
-			ID:                group.ID,
-			Name:              group.Name,
-			Platform:          group.Platform,
-			Status:            group.Status,
-			Type:              adminGroupType(group),
-			IsExclusive:       group.IsExclusive,
-			SubscriptionType:  group.SubscriptionType,
-			Multiplier:        group.Multiplier,
-			MultiplierDisplay: group.MultiplierDisplay,
-			Accounts:          []AdminGroupAccount{},
-			AssignedPolicyIDs: append([]string(nil), groupPolicyIDs[group.ID]...),
+			ID:                          group.ID,
+			Name:                        group.Name,
+			Platform:                    group.Platform,
+			Status:                      group.Status,
+			Type:                        adminGroupType(group),
+			IsExclusive:                 group.IsExclusive,
+			SubscriptionType:            group.SubscriptionType,
+			Multiplier:                  group.Multiplier,
+			MultiplierDisplay:           group.MultiplierDisplay,
+			ProbeSortFallbackMultiplier: cloneFloat64Pointer(fallbackByGroup[group.ID]),
+			Accounts:                    []AdminGroupAccount{},
+			AssignedPolicyIDs:           append([]string(nil), groupPolicyIDs[group.ID]...),
 		}
 		health.AssignedPolicyIDs, health.AssignedPolicies = assignedPolicySummariesFromIDs(health.AssignedPolicyIDs, policyByID)
 		health.HasAssignedPolicy = len(health.AssignedPolicyIDs) > 0
@@ -313,7 +363,8 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		summary := AdminGroupHealthSummary{TotalAccounts: len(accounts)}
 		for _, acc := range accounts {
 			targetID := buildTargetID(platform, adminAccountID, acc.ID)
-			upstreamKeyGroup := upstreamKeyGroups[strings.TrimSpace(acc.ID)]
+			multiplierResolution := resolutionForAdminAccount(upstreamMultiplierLookup, acc.ID)
+			upstreamKeyGroup := multiplierResolution.info
 			available, reason := targetManualProbeAvailability(platform, acc.BaseURL)
 			excluded := false
 			if exclusions := excludedByGroup[group.ID]; exclusions != nil {
@@ -336,7 +387,11 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			if !budgetReady {
 				budgetUsage = nil
 			}
-			modelHealth, unprobedModels := modelHealthForSpecs(stateIndex[targetID], activeSpecs, decisionAccount.Schedulable, now, budgetUsage, budgetReady)
+			decisionTarget := AdminProbeTarget{
+				TargetID: targetID, Platform: platform, ProviderFamily: decisionAccount.Platform,
+				Schedulable: cloneBoolPointer(decisionAccount.Schedulable),
+			}
+			modelHealth, unprobedModels := modelHealthForSpecs(stateIndex[targetID], activeSpecs, decisionTarget, now, budgetUsage, budgetReady)
 			credentialReason := latestCredentialUnavailableReason(modelHealth)
 			applyLatestProbeFailureDetails(modelHealth, latestProbeFailureEvent[targetID])
 			if credentialReason != "" {
@@ -386,9 +441,26 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				schedulableChangedAt = utcTimePointer(&event.CreatedAt)
 			}
 			var effectiveMultiplier *float64
+			multiplierSource := MultiplierSourceNone
+			localFallback := cloneFloat64Pointer(effectiveFallbackByTarget[targetID])
+			usesHealthPriority := hasMultiplierPriorityPolicy(effectivePolicies) && !hasMultiplierOnlyPolicy(effectivePolicies)
+			if usesHealthPriority {
+				switch multiplierResolution.status {
+				case MultiplierResolutionResolved:
+					effectiveMultiplier = cloneFloat64Pointer(upstreamKeyGroup.multiplier)
+					multiplierSource = MultiplierSourceUpstreamKey
+				case MultiplierResolutionUnassociated, MultiplierResolutionMissing, MultiplierResolutionConflict:
+					if localFallback != nil {
+						effectiveMultiplier = cloneFloat64Pointer(localFallback)
+						multiplierSource = MultiplierSourceLocalFallback
+					}
+				}
+			}
 			if priorityManaged {
-				value := priorityState.EffectiveMultiplier
-				effectiveMultiplier = &value
+				if effectiveMultiplier == nil {
+					value := priorityState.EffectiveMultiplier
+					effectiveMultiplier = &value
+				}
 			}
 
 			item := AdminGroupAccount{
@@ -435,6 +507,9 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				PriorityConflictAt:            priorityConflictAt,
 				ProbeModelsConfigured:         len(activeSpecs) > 0,
 				EffectiveMultiplier:           effectiveMultiplier,
+				MultiplierResolutionStatus:    multiplierResolution.status,
+				MultiplierSource:              multiplierSource,
+				LocalFallbackMultiplier:       localFallback,
 			}
 			if item.HasEnabledProbePolicy {
 				health.MonitoredAccountCount++
@@ -470,9 +545,55 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		}
 		health.AccountCount = summary.TotalAccounts
 		health.HealthSummary = summary
+		sortAdminGroupAccountsByProduction(health.Accounts, session.Platform)
 		result = append(result, health)
 	}
 	return result, nil
+}
+
+func sortAdminGroupAccountsByProduction(accounts []AdminGroupAccount, platform upstream.Platform) {
+	priorityFor := func(account AdminGroupAccount) *int {
+		if !account.PriorityConflict && account.PriorityExpected != nil {
+			return account.PriorityExpected
+		}
+		return account.Priority
+	}
+	sort.SliceStable(accounts, func(i int, j int) bool {
+		left, right := priorityFor(accounts[i]), priorityFor(accounts[j])
+		if left == nil || right == nil {
+			if left != nil {
+				return true
+			}
+			if right != nil {
+				return false
+			}
+			return accounts[i].TargetID < accounts[j].TargetID
+		}
+		if *left != *right {
+			if platform == upstream.PlatformSub2API {
+				return *left < *right
+			}
+			return *left > *right
+		}
+		return accounts[i].TargetID < accounts[j].TargetID
+	})
+	boundaryCounts := make(map[int]int)
+	if platform == upstream.PlatformSub2API {
+		for _, account := range accounts {
+			if account.PriorityManaged && account.HasEnabledProbePolicy && account.PriorityExpected != nil {
+				switch *account.PriorityExpected {
+				case 18, 108, 1008, 10008, 10009:
+					boundaryCounts[*account.PriorityExpected]++
+				}
+			}
+		}
+	}
+	for index := range accounts {
+		accounts[index].ProductionSortOrder = index
+		if accounts[index].PriorityExpected != nil && boundaryCounts[*accounts[index].PriorityExpected] > 1 {
+			accounts[index].PriorityCapacityLimited = true
+		}
+	}
 }
 
 func (s *Service) loadProbeBudgetUsage(ctx context.Context, userID string, adminAccountID string, specs []probeModelSpec, schedulable *bool, counts map[string]int, loaded map[string]bool, dayStart time.Time) (map[string]int, bool) {
@@ -506,6 +627,28 @@ type upstreamKeyGroupInfo struct {
 	multiplier *float64
 }
 
+const (
+	MultiplierResolutionResolved     = "resolved"
+	MultiplierResolutionUnassociated = "unassociated"
+	MultiplierResolutionMissing      = "missing"
+	MultiplierResolutionConflict     = "conflict"
+	MultiplierResolutionUnavailable  = "unavailable"
+
+	MultiplierSourceUpstreamKey   = "upstream_key"
+	MultiplierSourceLocalFallback = "local_fallback"
+	MultiplierSourceNone          = "none"
+)
+
+type upstreamMultiplierResolution struct {
+	status string
+	info   upstreamKeyGroupInfo
+}
+
+type upstreamMultiplierLookup struct {
+	byAccount   map[string]upstreamMultiplierResolution
+	unavailable bool
+}
+
 type upstreamKeyMetadata struct {
 	id        string
 	groupID   string
@@ -522,27 +665,43 @@ func (s *Service) upstreamKeyGroupsByAdminAccount(
 	adminPlatform string,
 ) map[string]upstreamKeyGroupInfo {
 	result := make(map[string]upstreamKeyGroupInfo)
+	lookup := s.upstreamMultiplierResolutionsByAdminAccount(ctx, userID, adminAccountID, adminPlatform)
+	for accountID, resolution := range lookup.byAccount {
+		if resolution.status == MultiplierResolutionResolved {
+			result[accountID] = resolution.info
+		}
+	}
+	return result
+}
+
+func (s *Service) upstreamMultiplierResolutionsByAdminAccount(
+	ctx context.Context,
+	userID string,
+	adminAccountID string,
+	adminPlatform string,
+) upstreamMultiplierLookup {
+	lookup := upstreamMultiplierLookup{byAccount: make(map[string]upstreamMultiplierResolution)}
 	if s.mySites == nil || s.sites == nil {
-		return result
+		lookup.unavailable = true
+		return lookup
 	}
 	keyReader, ok := s.mySites.(UpstreamKeyReader)
 	if !ok {
-		// 这是向后兼容的可选展示能力。旧注入实现没有 Key 查询能力时保持未知，
-		// 不阻断分组健康、探活和优先级等原有功能。
-		return result
+		lookup.unavailable = true
+		return lookup
 	}
 
 	connections, err := s.mySites.ListRealConnectionsForWorkspace(ctx, userID, adminAccountID)
 	if err != nil {
 		log.Printf("[connection-health] upstream key group lookup skipped workspace=%s err=%v", adminAccountID, err)
-		return result
+		lookup.unavailable = true
+		return lookup
 	}
 
 	connectionsByAccount := make(map[string][]my_sites.RealConnection)
 	for _, connection := range connections {
 		accountID := strings.TrimSpace(connection.AdminAccountID)
-		siteID := strings.TrimSpace(connection.UpstreamSiteID)
-		if accountID == "" || siteID == "" {
+		if accountID == "" {
 			continue
 		}
 		if platform := strings.TrimSpace(connection.AdminPlatform); platform != "" && !strings.EqualFold(platform, adminPlatform) {
@@ -554,36 +713,54 @@ func (s *Service) upstreamKeyGroupsByAdminAccount(
 	// 站点、Key 元数据按站点缓存，避免同一页面为每个账号重复访问上游。Key 明文不会复制进
 	// 缓存，也不会进入日志或响应；这里只保留识别当前分组所需的 ID 和分组字段。
 	siteCache := make(map[string]*upstream.Site)
-	missingSites := make(map[string]struct{})
+	siteStatuses := make(map[string]string)
 	keysBySite := make(map[string][]upstreamKeyMetadata)
-	failedKeySites := make(map[string]struct{})
+	keyStatuses := make(map[string]string)
 	for accountID, accountConnections := range connectionsByAccount {
 		var resolved upstreamKeyGroupInfo
-		reliable := len(accountConnections) > 0
+		status := MultiplierResolutionResolved
 		for index, connection := range accountConnections {
-			candidate, candidateOK := s.upstreamKeyGroupForConnection(
+			candidate := s.upstreamKeyGroupForConnection(
 				ctx,
 				userID,
 				connection,
 				keyReader,
 				siteCache,
-				missingSites,
+				siteStatuses,
 				keysBySite,
-				failedKeySites,
+				keyStatuses,
 			)
-			// 一个 admin 账号可能因脏数据存在多条连接。必须逐条成功解析并且精确指向同一
-			// 站点、Key 和当前分组，才允许展示；不能跳过失败项后采用另一条看似有效的记录。
-			if !candidateOK || (index > 0 && !sameUpstreamKeyGroup(resolved, candidate)) {
-				reliable = false
+			if candidate.status == MultiplierResolutionUnavailable {
+				status = MultiplierResolutionUnavailable
 				break
 			}
-			resolved = candidate
+			if candidate.status != MultiplierResolutionResolved {
+				if len(accountConnections) > 1 {
+					status = MultiplierResolutionConflict
+				} else {
+					status = candidate.status
+				}
+				break
+			}
+			if index > 0 && !sameUpstreamKeyGroup(resolved, candidate.info) {
+				status = MultiplierResolutionConflict
+				break
+			}
+			resolved = candidate.info
 		}
-		if reliable {
-			result[accountID] = resolved
-		}
+		lookup.byAccount[accountID] = upstreamMultiplierResolution{status: status, info: resolved}
 	}
-	return result
+	return lookup
+}
+
+func resolutionForAdminAccount(lookup upstreamMultiplierLookup, accountID string) upstreamMultiplierResolution {
+	if resolution, ok := lookup.byAccount[strings.TrimSpace(accountID)]; ok {
+		return resolution
+	}
+	if lookup.unavailable {
+		return upstreamMultiplierResolution{status: MultiplierResolutionUnavailable}
+	}
+	return upstreamMultiplierResolution{status: MultiplierResolutionUnassociated}
 }
 
 // upstreamKeyGroupForConnection 先用连接保存的 UpstreamKeyID 精确查找当前上游 Key，再用
@@ -595,24 +772,24 @@ func (s *Service) upstreamKeyGroupForConnection(
 	connection my_sites.RealConnection,
 	keyReader UpstreamKeyReader,
 	siteCache map[string]*upstream.Site,
-	missingSites map[string]struct{},
+	siteStatuses map[string]string,
 	keysBySite map[string][]upstreamKeyMetadata,
-	failedKeySites map[string]struct{},
-) (upstreamKeyGroupInfo, bool) {
+	keyStatuses map[string]string,
+) upstreamMultiplierResolution {
 	siteID := strings.TrimSpace(connection.UpstreamSiteID)
 	keyID := strings.TrimSpace(connection.UpstreamKeyID)
 	if siteID == "" || keyID == "" {
-		return upstreamKeyGroupInfo{}, false
+		return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 	}
-	if _, failed := failedKeySites[siteID]; failed {
-		return upstreamKeyGroupInfo{}, false
+	if status := keyStatuses[siteID]; status != "" {
+		return upstreamMultiplierResolution{status: status}
 	}
 	keys, cached := keysBySite[siteID]
 	if !cached {
 		items, err := keyReader.ListUpstreamKeys(ctx, userID, siteID)
 		if err != nil {
-			failedKeySites[siteID] = struct{}{}
-			return upstreamKeyGroupInfo{}, false
+			keyStatuses[siteID] = MultiplierResolutionUnavailable
+			return upstreamMultiplierResolution{status: MultiplierResolutionUnavailable}
 		}
 		keys = make([]upstreamKeyMetadata, 0, len(items))
 		for _, item := range items {
@@ -632,24 +809,28 @@ func (s *Service) upstreamKeyGroupForConnection(
 			continue
 		}
 		if currentKey != nil {
-			return upstreamKeyGroupInfo{}, false
+			return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 		}
 		currentKey = &keys[index]
 	}
 	if currentKey == nil || (currentKey.groupID == "" && currentKey.groupName == "") {
-		return upstreamKeyGroupInfo{}, false
+		return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 	}
 
-	if _, missing := missingSites[siteID]; missing {
-		return upstreamKeyGroupInfo{}, false
+	if status := siteStatuses[siteID]; status != "" {
+		return upstreamMultiplierResolution{status: status}
 	}
 	site, cached := siteCache[siteID]
 	if !cached {
 		var err error
 		site, err = s.sites.GetSite(ctx, siteID)
-		if err != nil || site == nil {
-			missingSites[siteID] = struct{}{}
-			return upstreamKeyGroupInfo{}, false
+		if err != nil {
+			siteStatuses[siteID] = MultiplierResolutionUnavailable
+			return upstreamMultiplierResolution{status: MultiplierResolutionUnavailable}
+		}
+		if site == nil {
+			siteStatuses[siteID] = MultiplierResolutionMissing
+			return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 		}
 		siteCache[siteID] = site
 	}
@@ -661,7 +842,7 @@ func (s *Service) upstreamKeyGroupForConnection(
 				continue
 			}
 			if matched != nil {
-				return upstreamKeyGroupInfo{}, false
+				return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 			}
 			matched = &site.Metrics.Groups[index]
 		}
@@ -674,15 +855,19 @@ func (s *Service) upstreamKeyGroupForConnection(
 				continue
 			}
 			if matched != nil {
-				return upstreamKeyGroupInfo{}, false
+				return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 			}
 			matched = &site.Metrics.Groups[index]
 		}
 	}
 	if matched == nil {
-		return upstreamKeyGroupInfo{}, false
+		return upstreamMultiplierResolution{status: MultiplierResolutionMissing}
 	}
-	return newUpstreamKeyGroupInfo(siteID, keyID, *matched), true
+	info := newUpstreamKeyGroupInfo(siteID, keyID, *matched)
+	if info.multiplier == nil {
+		return upstreamMultiplierResolution{status: MultiplierResolutionMissing, info: info}
+	}
+	return upstreamMultiplierResolution{status: MultiplierResolutionResolved, info: info}
 }
 
 func newUpstreamKeyGroupInfo(siteID string, keyID string, group upstream.GroupInfo) upstreamKeyGroupInfo {
@@ -757,13 +942,13 @@ func applyLatestProbeFailureDetails(models []ModelHealth, latestByModel map[stri
 
 // modelHealthForSpecs 只展开当前有效策略仍启用的模型。历史状态继续留库用于审计，但模型被
 // 删除、禁用或不再属于目标后，不得继续影响页面汇总、优先级和账号级动作。
-func modelHealthForSpecs(byModel map[string]ConnectionHealthState, specs []probeModelSpec, schedulable *bool, now time.Time, budgetUsage map[string]int, budgetReady bool) ([]ModelHealth, []AdminGroupUnprobedModel) {
+func modelHealthForSpecs(byModel map[string]ConnectionHealthState, specs []probeModelSpec, target AdminProbeTarget, now time.Time, budgetUsage map[string]int, budgetReady bool) ([]ModelHealth, []AdminGroupUnprobedModel) {
 	models := make([]ModelHealth, 0, len(specs))
 	unprobed := make([]AdminGroupUnprobedModel, 0)
 	for _, spec := range specs {
 		state, exists := byModel[spec.modelName]
 		if !exists {
-			decision := calculateEffectiveProbeDecisionWithBudgets(spec.policies, schedulable, nil, now, budgetUsage)
+			decision := calculateEffectiveProbeDecisionWithBudgets(spec.policies, target.Schedulable, nil, now, budgetUsage)
 			if !budgetReady && decision.ContinueAutoProbe {
 				decision.NextProbeAt = nil
 				decision.BlockedReason = ProbeBlockedBudgetUnavailable
@@ -777,7 +962,8 @@ func modelHealthForSpecs(byModel map[string]ConnectionHealthState, specs []probe
 		}
 		model := toModelHealth(spec.modelName, state)
 		model.ProviderFamily = spec.providerFamily
-		decision := calculateEffectiveProbeDecisionWithBudgets(spec.policies, schedulable, &state, now, budgetUsage)
+		reuseProbeInterval := probeDecisionCanReuseInterval(&state, probeDecisionKey(target, spec))
+		decision := calculateEffectiveProbeDecisionWithBudgetAndReuse(spec.policies, target.Schedulable, &state, now, budgetUsage, reuseProbeInterval)
 		if !budgetReady && decision.ContinueAutoProbe {
 			decision.NextProbeAt = nil
 			decision.BlockedReason = ProbeBlockedBudgetUnavailable
@@ -922,7 +1108,8 @@ func assignedPolicySummariesFromIDs(ids []string, policyByID map[string]Policy) 
 		if p, ok := policyByID[policyID]; ok {
 			summaries = append(summaries, AssignedPolicySummary{
 				PolicyID: p.ID, PolicyName: p.Name, Enabled: p.Enabled,
-				PriorityMode: normalizePriorityMode(p.PriorityMode), AutoRemoteActionEnabled: policyRemoteActionEnabled(p),
+				PriorityMode: normalizePriorityMode(p.PriorityMode), StrategyMode: normalizeStrategyMode(p.StrategyMode),
+				AutoRemoteActionEnabled: policyRemoteActionEnabled(p),
 			})
 		} else {
 			summaries = append(summaries, AssignedPolicySummary{PolicyID: policyID})

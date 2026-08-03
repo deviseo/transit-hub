@@ -9,6 +9,7 @@ type TransitionInput struct {
 	CurrentWeight        int
 	ConsecutiveFailures  int
 	ConsecutiveSuccesses int
+	CooldownUntil        *time.Time
 	ObservingUntil       *time.Time
 	Now                  time.Time
 	Result               ResultKey
@@ -50,6 +51,9 @@ func isSoftFailure(result ResultKey) bool {
 // Transition 是健康状态机的核心决策函数。disabled 只能人工进出，探活结果不会自动改变它。
 func Transition(in TransitionInput) TransitionOutput {
 	if in.Current == StateDisabled {
+		if in.Result == ResultSlowResponse {
+			return transitionOnSlowResponse(in)
+		}
 		return TransitionOutput{
 			NextState:            StateDisabled,
 			Weight:               0,
@@ -64,6 +68,8 @@ func Transition(in TransitionInput) TransitionOutput {
 	switch {
 	case in.Result == ResultOK:
 		return transitionOnSuccess(in, step)
+	case in.Result == ResultSlowResponse:
+		return transitionOnSlowResponse(in)
 	case isHardFailure(in.Result):
 		return transitionOnHardFailure(in)
 	case isSoftFailure(in.Result):
@@ -78,6 +84,63 @@ func Transition(in TransitionInput) TransitionOutput {
 			ObservingUntil:       in.ObservingUntil,
 		}
 	}
+}
+
+func transitionOnSlowResponse(in TransitionInput) TransitionOutput {
+	out := TransitionOutput{
+		NextState:            in.Current,
+		Weight:               in.CurrentWeight,
+		ConsecutiveFailures:  in.ConsecutiveFailures,
+		ConsecutiveSuccesses: 0,
+		CooldownUntil:        in.CooldownUntil,
+		ObservingUntil:       in.ObservingUntil,
+	}
+	switch in.Current {
+	case StateHealthy, StateRecovering:
+		out.NextState = StateDegraded
+	case StateDisabled:
+		out.Weight = 0
+	}
+	return out
+}
+
+func applyProbeOutcome(current ConnectionHealthState, outcome ProbeOutcome, policy Policy, now time.Time) (ConnectionHealthState, TransitionOutput) {
+	transitionOut := Transition(TransitionInput{
+		Current: current.State, CurrentWeight: current.CurrentWeight,
+		ConsecutiveFailures: current.ConsecutiveFailures, ConsecutiveSuccesses: current.ConsecutiveSuccesses,
+		CooldownUntil: current.CooldownUntil, ObservingUntil: current.ObservingUntil,
+		Now: now, Result: outcome.Result, Policy: policy,
+	})
+	if !policy.AutoDegradeEnabled {
+		transitionOut = TransitionOutput{
+			NextState: current.State, Weight: current.CurrentWeight,
+			ConsecutiveFailures: current.ConsecutiveFailures, ConsecutiveSuccesses: current.ConsecutiveSuccesses,
+			CooldownUntil: current.CooldownUntil, ObservingUntil: current.ObservingUntil,
+		}
+	}
+
+	next := current
+	next.State = transitionOut.NextState
+	next.CurrentWeight = transitionOut.Weight
+	next.ConsecutiveFailures = transitionOut.ConsecutiveFailures
+	next.ConsecutiveSuccesses = transitionOut.ConsecutiveSuccesses
+	next.CooldownUntil = transitionOut.CooldownUntil
+	next.ObservingUntil = transitionOut.ObservingUntil
+	next.LastProbeAt = &now
+	latencyMs := outcome.LatencyMs
+	next.LastLatencyMs = &latencyMs
+
+	if outcome.Result == ResultOK || outcome.Result == ResultSlowResponse {
+		next.LastSuccessAt = &now
+		next.LastSuccessLatencyMs = &latencyMs
+		next.LastErrorKey = ""
+		next.LastErrorDetail = ""
+	} else {
+		next.LastFailureAt = &now
+		next.LastErrorKey = string(outcome.Result)
+		next.LastErrorDetail = outcome.Detail
+	}
+	return next, transitionOut
 }
 
 func stepPercent(p Policy) int {

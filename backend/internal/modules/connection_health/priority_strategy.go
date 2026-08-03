@@ -15,12 +15,24 @@ type TargetPriorityActioner interface {
 }
 
 type priorityTargetInventory struct {
-	target          AdminProbeTarget
-	account         upstream.AdminGroupAccountInfo
-	policies        []Policy
-	multipliers     []float64
-	currentPriority int
-	priorityPresent bool
+	target              AdminProbeTarget
+	account             upstream.AdminGroupAccountInfo
+	policies            []Policy
+	multipliers         []float64
+	fallbackMultipliers []float64
+	upstreamMultiplier  upstreamMultiplierResolution
+	currentPriority     int
+	priorityPresent     bool
+}
+
+type healthPriorityCandidate struct {
+	targetID       string
+	item           *priorityTargetInventory
+	multiplier     float64
+	states         []ConnectionHealthState
+	expectedModels int
+	healthBand     int
+	latencyMs      *int
 }
 
 // syncMultiplierPriorities 在每轮探活前同步上游优先级。普通倍率策略仍然「健康优先、倍率次之」，
@@ -36,6 +48,54 @@ func (s *Service) syncMultiplierPriorities(
 	s.syncMultiplierPrioritiesWithCache(ctx, policies, targetAssignments, groupAssignments, exclusions, allSyncStates, make(adminInventoryCache))
 }
 
+func (s *Service) syncCurrentWorkspacePriorities(ctx context.Context, userID string, adminAccountID string) {
+	if s.priorityActions == nil || s.platformGroups == nil {
+		return
+	}
+	release, err := s.repo.AcquirePrioritySyncLease(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] priority sync acquire workspace lease failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+		return
+	}
+	defer release()
+	s.syncCurrentWorkspacePrioritiesLocked(ctx, userID, adminAccountID)
+}
+
+func (s *Service) syncCurrentWorkspacePrioritiesLocked(ctx context.Context, userID string, adminAccountID string) {
+	policies, err := s.repo.ListPolicies(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] formal probe priority sync list policies failed: %v", err)
+		return
+	}
+	enabled := make([]Policy, 0, len(policies))
+	for _, policy := range policies {
+		if policy.Enabled {
+			enabled = append(enabled, policy)
+		}
+	}
+	assignments, err := s.repo.ListPolicyAssignmentsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] formal probe priority sync list target assignments failed: %v", err)
+		return
+	}
+	groupAssignments, err := s.repo.ListGroupPolicyAssignmentsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] formal probe priority sync list group assignments failed: %v", err)
+		return
+	}
+	exclusions, err := s.repo.ListGroupTargetExclusionsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] formal probe priority sync list exclusions failed: %v", err)
+		return
+	}
+	states, err := s.repo.ListPrioritySyncStates(ctx, userID, adminAccountID)
+	if err != nil {
+		log.Printf("[connection-health] formal probe priority sync list checkpoints failed: %v", err)
+		return
+	}
+	s.syncMultiplierPrioritiesWithCacheLocked(ctx, enabled, assignments, groupAssignments, exclusions, states, make(adminInventoryCache))
+}
+
 func (s *Service) syncMultiplierPrioritiesWithCache(
 	ctx context.Context,
 	policies []Policy,
@@ -45,6 +105,31 @@ func (s *Service) syncMultiplierPrioritiesWithCache(
 	allSyncStates []PrioritySyncState,
 	inventoryCache adminInventoryCache,
 ) {
+	s.syncMultiplierPrioritiesWithCacheMode(ctx, policies, targetAssignments, groupAssignments, exclusions, allSyncStates, inventoryCache, true)
+}
+
+func (s *Service) syncMultiplierPrioritiesWithCacheLocked(
+	ctx context.Context,
+	policies []Policy,
+	targetAssignments []PolicyAssignment,
+	groupAssignments []GroupPolicyAssignment,
+	exclusions []GroupTargetExclusion,
+	allSyncStates []PrioritySyncState,
+	inventoryCache adminInventoryCache,
+) {
+	s.syncMultiplierPrioritiesWithCacheMode(ctx, policies, targetAssignments, groupAssignments, exclusions, allSyncStates, inventoryCache, false)
+}
+
+func (s *Service) syncMultiplierPrioritiesWithCacheMode(
+	ctx context.Context,
+	policies []Policy,
+	targetAssignments []PolicyAssignment,
+	groupAssignments []GroupPolicyAssignment,
+	exclusions []GroupTargetExclusion,
+	allSyncStates []PrioritySyncState,
+	inventoryCache adminInventoryCache,
+	acquireWorkspaceLease bool,
+) {
 	if s.priorityActions == nil || s.platformGroups == nil {
 		return
 	}
@@ -52,11 +137,9 @@ func (s *Service) syncMultiplierPrioritiesWithCache(
 	assignedTargets := assignedEnabledPoliciesByTarget(policies, targetAssignments)
 	assignedGroups := assignedEnabledPoliciesByGroup(policies, groupAssignments)
 	excluded := groupTargetExclusionIndex(exclusions)
-	statesByWorkspace := make(map[string][]PrioritySyncState)
 	workspaceIdentity := make(map[string][2]string)
 	for _, state := range allSyncStates {
 		key := state.UserID + "|" + state.AdminAccountID
-		statesByWorkspace[key] = append(statesByWorkspace[key], state)
 		workspaceIdentity[key] = [2]string{state.UserID, state.AdminAccountID}
 	}
 	for _, policy := range policies {
@@ -72,27 +155,64 @@ func (s *Service) syncMultiplierPrioritiesWithCache(
 		workspaceIdentity[key] = [2]string{assignment.UserID, assignment.AdminAccountID}
 	}
 
-	for workspaceKey, identity := range workspaceIdentity {
+	workspaceKeys := make([]string, 0, len(workspaceIdentity))
+	for workspaceKey := range workspaceIdentity {
+		workspaceKeys = append(workspaceKeys, workspaceKey)
+	}
+	sort.Strings(workspaceKeys)
+	for _, workspaceKey := range workspaceKeys {
+		identity := workspaceIdentity[workspaceKey]
 		userID, adminAccountID := identity[0], identity[1]
-		inventorySnapshot, err := s.loadAdminInventory(ctx, userID, adminAccountID, inventoryCache)
-		if err != nil {
-			log.Printf("[connection-health] priority sync load admin inventory failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
-			continue
+		release := func() {}
+		if acquireWorkspaceLease {
+			var err error
+			release, err = s.repo.AcquirePrioritySyncLease(ctx, userID, adminAccountID)
+			if err != nil {
+				log.Printf("[connection-health] priority sync acquire workspace lease failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				continue
+			}
 		}
-		session := inventorySnapshot.session
-		inventory, inventoryComplete, err := s.priorityInventoryForSnapshot(
-			inventorySnapshot, adminAccountID, assignedTargets[workspaceKey], assignedGroups[workspaceKey], excluded[workspaceKey],
-		)
-		if err != nil {
-			log.Printf("[connection-health] priority sync inventory failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
-			continue
-		}
-		states, err := s.repo.ListStatesByWorkspace(ctx, userID, adminAccountID)
-		if err != nil {
-			log.Printf("[connection-health] priority sync list health states failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
-			continue
-		}
-		s.syncWorkspacePriorities(ctx, session, userID, adminAccountID, inventory, inventoryComplete, states, statesByWorkspace[workspaceKey])
+		func() {
+			defer release()
+			inventorySnapshot, err := s.loadAdminInventory(ctx, userID, adminAccountID, inventoryCache)
+			if err != nil {
+				log.Printf("[connection-health] priority sync load admin inventory failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				return
+			}
+			session := inventorySnapshot.session
+			settings, err := s.repo.ListGroupProbeSortSettings(ctx, userID, adminAccountID)
+			if err != nil {
+				log.Printf("[connection-health] priority sync list fallback multipliers failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				return
+			}
+			fallbackByGroup := make(map[string]*float64, len(settings))
+			for _, setting := range settings {
+				fallbackByGroup[setting.AdminGroupID] = cloneFloat64Pointer(setting.FallbackMultiplier)
+			}
+			multiplierLookup := s.upstreamMultiplierResolutionsByAdminAccount(ctx, userID, adminAccountID, string(session.Platform))
+			inventory, inventoryComplete, err := s.priorityInventoryForSnapshot(
+				inventorySnapshot, adminAccountID, assignedTargets[workspaceKey], assignedGroups[workspaceKey], excluded[workspaceKey],
+				fallbackByGroup, multiplierLookup,
+			)
+			if err != nil {
+				log.Printf("[connection-health] priority sync inventory failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				return
+			}
+			states, err := s.repo.ListStatesByWorkspace(ctx, userID, adminAccountID)
+			if err != nil {
+				log.Printf("[connection-health] priority sync list health states failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				return
+			}
+			// Checkpoints must be read after acquiring the same workspace lease that covers
+			// inventory reads and remote writes. A pre-lease snapshot can be stale even when
+			// the write phase itself is serialized.
+			syncStates, err := s.repo.ListPrioritySyncStates(ctx, userID, adminAccountID)
+			if err != nil {
+				log.Printf("[connection-health] priority sync list checkpoints failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+				return
+			}
+			s.syncWorkspacePriorities(ctx, session, userID, adminAccountID, inventory, inventoryComplete, states, syncStates)
+		}()
 	}
 }
 
@@ -102,6 +222,8 @@ func (s *Service) priorityInventoryForSnapshot(
 	targetPolicies map[string][]Policy,
 	groupPolicies map[string][]Policy,
 	excludedByGroup map[string]map[string]bool,
+	fallbackByGroup map[string]*float64,
+	multiplierLookup upstreamMultiplierLookup,
 ) (map[string]*priorityTargetInventory, bool, error) {
 	session := snapshot.session
 	platform := string(session.Platform)
@@ -133,6 +255,7 @@ func (s *Service) priorityInventoryForSnapshot(
 				}
 				inventory[targetID] = item
 			}
+			item.upstreamMultiplier = resolutionForAdminAccount(multiplierLookup, account.ID)
 			inherited := groupPolicies[group.ID]
 			excluded := excludedByGroup[group.ID][targetID]
 			if excluded {
@@ -144,6 +267,11 @@ func (s *Service) priorityInventoryForSnapshot(
 			inheritedMultiplier := !excluded && hasMultiplierPriorityPolicy(inherited)
 			if group.Multiplier != nil && (explicitMultiplier || inheritedMultiplier) {
 				item.multipliers = append(item.multipliers, *group.Multiplier)
+			}
+			explicitHealthMultiplier := hasHealthMultiplierPriorityPolicy(targetPolicies[targetID])
+			inheritedHealthMultiplier := !excluded && hasHealthMultiplierPriorityPolicy(inherited)
+			if fallback := fallbackByGroup[group.ID]; fallback != nil && (explicitHealthMultiplier || inheritedHealthMultiplier) {
+				item.fallbackMultipliers = append(item.fallbackMultipliers, *fallback)
 			}
 			item.policies = mergePoliciesByID(item.policies, targetPolicies[targetID], inherited)
 		}
@@ -170,30 +298,95 @@ func (s *Service) syncWorkspacePriorities(
 
 	managed := make(map[string]*priorityTargetInventory)
 	missingMultiplier := make(map[string]struct{})
-	distinctMultipliers := make([]float64, 0)
-	seenMultipliers := make(map[float64]struct{})
+	effectiveMultiplierByTarget := make(map[string]float64)
+	desiredByTarget := make(map[string]int)
+	multiplierOnlyTargets := make(map[string]float64)
+	healthCandidates := make([]healthPriorityCandidate, 0)
 	for targetID, item := range inventory {
 		if !hasMultiplierPriorityPolicy(item.policies) {
 			continue
 		}
-		if len(item.multipliers) == 0 {
-			// 分组没有返回倍率时进入等待态：既不猜测 1x，也不把已接管目标恢复成旧优先级。
-			// 保留同步快照后，倍率恢复可见时下一轮会从原状态继续安全同步。
+		if hasMultiplierOnlyPolicy(item.policies) {
+			if len(item.multipliers) == 0 {
+				missingMultiplier[targetID] = struct{}{}
+				continue
+			}
+			multiplier := minFloat(item.multipliers)
+			managed[targetID] = item
+			effectiveMultiplierByTarget[targetID] = multiplier
+			multiplierOnlyTargets[targetID] = multiplier
+			continue
+		}
+
+		multiplier, available := effectiveHealthSortMultiplier(item)
+		if !available {
+			// Deterministic missing/conflict without a fallback and transient lookup
+			// failures both hold any existing checkpoint without guessing or restoring.
 			missingMultiplier[targetID] = struct{}{}
 			continue
 		}
-		multiplier := minFloat(item.multipliers)
-		item.multipliers = []float64{multiplier}
+		activeModels := activeHealthPriorityModels(item)
+		activeStates := activeHealthPriorityStates(statesByTarget[targetID], activeModels)
+		candidate := healthPriorityCandidate{
+			targetID: targetID, item: item, multiplier: multiplier, states: activeStates,
+			expectedModels: len(activeModels), healthBand: priorityHealthBand(activeStates, len(activeModels)),
+			latencyMs: completeTargetSuccessLatency(activeStates, activeModels),
+		}
 		managed[targetID] = item
-		if _, exists := seenMultipliers[multiplier]; !exists {
-			seenMultipliers[multiplier] = struct{}{}
-			distinctMultipliers = append(distinctMultipliers, multiplier)
+		effectiveMultiplierByTarget[targetID] = multiplier
+		healthCandidates = append(healthCandidates, candidate)
+	}
+
+	distinctMultiplierOnly := make([]float64, 0)
+	seenMultiplierOnly := make(map[float64]struct{})
+	for _, multiplier := range multiplierOnlyTargets {
+		if _, exists := seenMultiplierOnly[multiplier]; !exists {
+			seenMultiplierOnly[multiplier] = struct{}{}
+			distinctMultiplierOnly = append(distinctMultiplierOnly, multiplier)
 		}
 	}
-	sort.Float64s(distinctMultipliers)
-	multiplierRank := make(map[float64]int, len(distinctMultipliers))
-	for rank, multiplier := range distinctMultipliers {
-		multiplierRank[multiplier] = rank
+	sort.Float64s(distinctMultiplierOnly)
+	multiplierOnlyRank := make(map[float64]int, len(distinctMultiplierOnly))
+	for rank, multiplier := range distinctMultiplierOnly {
+		multiplierOnlyRank[multiplier] = rank
+	}
+	for targetID, multiplier := range multiplierOnlyTargets {
+		rank := multiplierOnlyRank[multiplier]
+		desired := desiredManagedPriorityForPlatformWithExpected(session.Platform, nil, rank, 0)
+		if session.Platform == upstream.PlatformSub2API {
+			desired = desiredSub2APIMultiplierOnlyPriority(rank)
+		}
+		desiredByTarget[targetID] = desired
+	}
+
+	sort.Slice(healthCandidates, func(i int, j int) bool {
+		left, right := healthCandidates[i], healthCandidates[j]
+		if left.healthBand != right.healthBand {
+			return left.healthBand < right.healthBand
+		}
+		if left.multiplier != right.multiplier {
+			return left.multiplier < right.multiplier
+		}
+		if left.latencyMs == nil || right.latencyMs == nil {
+			if left.latencyMs != nil {
+				return true
+			}
+			if right.latencyMs != nil {
+				return false
+			}
+		} else if *left.latencyMs != *right.latencyMs {
+			return *left.latencyMs < *right.latencyMs
+		}
+		return left.targetID < right.targetID
+	})
+	currentBand, bandRank := -1, 0
+	for _, candidate := range healthCandidates {
+		if candidate.healthBand != currentBand {
+			currentBand = candidate.healthBand
+			bandRank = 0
+		}
+		desiredByTarget[candidate.targetID] = desiredHealthPriorityForPlatform(session.Platform, candidate.healthBand, bandRank)
+		bandRank++
 	}
 
 	storedByTarget := make(map[string]PrioritySyncState, len(syncStates))
@@ -208,29 +401,8 @@ func (s *Service) syncWorkspacePriorities(
 		if session.Platform == upstream.PlatformSub2API && !item.priorityPresent {
 			continue
 		}
-		multiplier := item.multipliers[0]
-		activeModels := make(map[string]struct{})
-		if !hasMultiplierOnlyPolicy(item.policies) {
-			for _, spec := range candidateModelSpecs(item.target.Models, item.policies) {
-				// 关闭自动降级后模型状态不会继续推进，因此不能让历史 suspended/degraded
-				// 状态永久影响倍率排序。倍率本身继续生效，但健康层级回到未配置档。
-				if spec.policy.AutoDegradeEnabled {
-					activeModels[spec.modelName] = struct{}{}
-				}
-			}
-		}
-		activeStates := make([]ConnectionHealthState, 0, len(activeModels))
-		for _, state := range statesByTarget[targetID] {
-			if _, active := activeModels[state.ModelName]; active {
-				activeStates = append(activeStates, state)
-			}
-		}
-		desired := desiredManagedPriorityForPlatformWithExpected(
-			session.Platform, activeStates, multiplierRank[multiplier], len(activeModels),
-		)
-		if session.Platform == upstream.PlatformSub2API && hasMultiplierOnlyPolicy(item.policies) {
-			desired = desiredSub2APIMultiplierOnlyPriority(multiplierRank[multiplier])
-		}
+		multiplier := effectiveMultiplierByTarget[targetID]
+		desired := desiredByTarget[targetID]
 		stored, exists := storedByTarget[targetID]
 		if !exists {
 			stored = PrioritySyncState{
@@ -379,6 +551,28 @@ func desiredManagedPriorityForPlatformWithExpected(platform upstream.Platform, s
 	return score
 }
 
+func desiredHealthPriorityForPlatform(platform upstream.Platform, healthBand int, tupleRank int) int {
+	if platform == upstream.PlatformSub2API {
+		bases := []int{10, 19, 109, 1009, 10009}
+		nextBases := []int{19, 109, 1009, 10009, 10010}
+		if healthBand < 0 || healthBand >= len(bases) {
+			healthBand = 3
+		}
+		if healthBand == 4 {
+			return bases[healthBand]
+		}
+		return sub2APIPriorityWithinBand(bases[healthBand], nextBases[healthBand], tupleRank)
+	}
+	bases := []int{40000, 30000, 20000, 10000, 1}
+	if healthBand < 0 || healthBand >= len(bases) {
+		healthBand = 3
+	}
+	if healthBand == 4 {
+		return 1
+	}
+	return bases[healthBand] + maxInt(0, 999-tupleRank)
+}
+
 // desiredSub2APIManagedPriority 使用 Sub2API「数值越小越优先」的原生语义，并为不同健康
 // 状态预留互不重叠的区间：健康 10-18、恢复中 19-108、降级/观察 109-1008、待探活
 // 1009-10008、暂停/禁用 10009。同一状态内 multiplierRank 越小，priority 越小。
@@ -424,6 +618,95 @@ func hasMultiplierPriorityPolicy(policies []Policy) bool {
 		}
 	}
 	return false
+}
+
+func hasHealthMultiplierPriorityPolicy(policies []Policy) bool {
+	return hasMultiplierPriorityPolicy(policies) && !hasMultiplierOnlyPolicy(policies)
+}
+
+func effectiveHealthSortMultiplier(item *priorityTargetInventory) (float64, bool) {
+	if item.upstreamMultiplier.status == MultiplierResolutionResolved && item.upstreamMultiplier.info.multiplier != nil {
+		return *item.upstreamMultiplier.info.multiplier, true
+	}
+	if item.upstreamMultiplier.status == MultiplierResolutionUnavailable {
+		return 0, false
+	}
+	return uniqueFloat(item.fallbackMultipliers)
+}
+
+func uniqueFloat(values []float64) (float64, bool) {
+	if len(values) == 0 {
+		return 0, false
+	}
+	value := values[0]
+	for _, candidate := range values[1:] {
+		if candidate != value {
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+func activeHealthPriorityModels(item *priorityTargetInventory) map[string]struct{} {
+	models := make(map[string]struct{})
+	for _, spec := range candidateModelSpecs(item.target.Models, item.policies) {
+		if spec.policy.AutoDegradeEnabled {
+			models[spec.modelName] = struct{}{}
+		}
+	}
+	return models
+}
+
+func activeHealthPriorityStates(states []ConnectionHealthState, activeModels map[string]struct{}) []ConnectionHealthState {
+	active := make([]ConnectionHealthState, 0, len(activeModels))
+	for _, state := range states {
+		if _, ok := activeModels[state.ModelName]; ok {
+			active = append(active, state)
+		}
+	}
+	return active
+}
+
+func priorityHealthBand(states []ConnectionHealthState, expectedModels int) int {
+	for _, state := range states {
+		if state.State == StateDisabled || state.State == StateSuspended {
+			return 4
+		}
+	}
+	if len(states) < expectedModels {
+		return 3
+	}
+	band := 0
+	for _, state := range states {
+		switch state.State {
+		case StateDegraded, StateObserving:
+			return 2
+		case StateRecovering:
+			band = 1
+		}
+	}
+	return band
+}
+
+func completeTargetSuccessLatency(states []ConnectionHealthState, activeModels map[string]struct{}) *int {
+	if len(activeModels) == 0 {
+		return nil
+	}
+	latencyByModel := make(map[string]*int, len(states))
+	for _, state := range states {
+		latencyByModel[state.ModelName] = state.LastSuccessLatencyMs
+	}
+	maxLatency := 0
+	for model := range activeModels {
+		latency := latencyByModel[model]
+		if latency == nil {
+			return nil
+		}
+		if *latency > maxLatency {
+			maxLatency = *latency
+		}
+	}
+	return &maxLatency
 }
 
 // hasMultiplierOnlyPolicy 让明确的仅倍率策略成为同一目标的优先级依据。即使目标还叠加了

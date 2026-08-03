@@ -7,7 +7,7 @@ import {
   formatConnectionHealthTime,
   useConnectionHealth,
 } from '../../composables/useConnectionHealth'
-import type { ManualProbeModelOption, ManualProbeResult } from '../../types/connectionHealth'
+import type { ManualProbeModelOption, ManualProbeResult, ModelHealth } from '../../types/connectionHealth'
 
 export interface ManualProbeTargetSummary {
   targetId: string
@@ -16,6 +16,7 @@ export interface ManualProbeTargetSummary {
   type: string
   status: string
   groupName: string
+  formalModels: ManualProbeModelOption[]
 }
 
 const props = defineProps<{
@@ -25,16 +26,21 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'close'): void
+  (event: 'completed'): void
 }>()
 
 import { t, te } from '@/locales'
 const prefix = 'admin.connectionHealth.manualProbeDialog'
-const { discoverModels, runManualProbeOnce } = useConnectionHealth()
+const { discoverModels, runManualProbeOnce, manualProbeTarget, errorKey: serviceErrorKey } = useConnectionHealth()
 
 type Phase = 'loading' | 'ready' | 'testing' | 'error'
+type ProbeMode = 'once' | 'formal'
 
 const phase = ref<Phase>('loading')
+const mode = ref<ProbeMode>('once')
 const models = ref<ManualProbeModelOption[]>([])
+const onceModels = ref<ManualProbeModelOption[]>([])
+const onceLoadState = ref<'loading' | 'ready' | 'error'>('loading')
 const selected = ref<Set<string>>(new Set())
 const results = ref<ManualProbeResult[]>([])
 const loadErrorKey = ref('')
@@ -57,7 +63,10 @@ watch(
     const targetId = props.target.targetId
     const sequence = ++loadSequence
     phase.value = 'loading'
+		mode.value = 'once'
     models.value = []
+		onceModels.value = []
+		onceLoadState.value = 'loading'
     selected.value = new Set()
     results.value = []
     loadErrorKey.value = ''
@@ -67,15 +76,33 @@ watch(
     if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
     if ('errorKey' in outcome) {
       loadErrorKey.value = outcome.errorKey
-      phase.value = 'error'
+		onceLoadState.value = 'error'
+		if (mode.value === 'once') phase.value = 'error'
       return
     }
-    models.value = outcome.models
+		onceModels.value = outcome.models
+		onceLoadState.value = 'ready'
+		if (mode.value !== 'once') return
+		models.value = onceModels.value
     // 精确优先选择 gpt-5.6-sol；目标不提供时回退第一项。每次打开都会重新执行。
     selected.value = defaultSelection(outcome.models)
     phase.value = 'ready'
   },
 )
+
+watch(mode, (nextMode) => {
+	results.value = []
+	testErrorKey.value = ''
+	if (nextMode === 'formal') {
+		models.value = props.target?.formalModels ?? []
+		selected.value = defaultSelection(models.value)
+		phase.value = 'ready'
+		return
+	}
+	models.value = onceModels.value
+	selected.value = defaultSelection(models.value)
+	phase.value = onceLoadState.value
+})
 
 const hasModels = computed(() => models.value.length > 0)
 const canStartTest = computed(() => hasModels.value && selected.value.size > 0 && phase.value !== 'testing')
@@ -96,15 +123,19 @@ const retryLoad = async () => {
   const targetId = props.target.targetId
   const sequence = ++loadSequence
   phase.value = 'loading'
+	onceLoadState.value = 'loading'
   loadErrorKey.value = ''
   const outcome = await discoverModels(targetId)
   if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
   if ('errorKey' in outcome) {
     loadErrorKey.value = outcome.errorKey
+		onceLoadState.value = 'error'
     phase.value = 'error'
     return
   }
-  models.value = outcome.models
+	onceModels.value = outcome.models
+	onceLoadState.value = 'ready'
+	models.value = outcome.models
   selected.value = defaultSelection(outcome.models)
   phase.value = 'ready'
 }
@@ -113,17 +144,39 @@ const startTest = async () => {
   if (!canStartTest.value || !props.target) return
   phase.value = 'testing'
   testErrorKey.value = ''
-  const outcome = await runManualProbeOnce(props.target.targetId, Array.from(selected.value))
-  if ('errorKey' in outcome) {
-    testErrorKey.value = outcome.errorKey
-    phase.value = 'ready'
-    return
-  }
-  results.value = outcome.results
+	if (mode.value === 'once') {
+		const outcome = await runManualProbeOnce(props.target.targetId, Array.from(selected.value))
+		if ('errorKey' in outcome) {
+			testErrorKey.value = outcome.errorKey
+			phase.value = 'ready'
+			return
+		}
+		results.value = outcome.results
+	} else {
+		const outcome = await manualProbeTarget(props.target.targetId, Array.from(selected.value))
+		if (outcome == null) {
+			testErrorKey.value = serviceErrorKey.value
+			phase.value = 'ready'
+			return
+		}
+		results.value = outcome.map(formalProbeResult)
+		emit('completed')
+	}
   phase.value = 'ready'
 }
 
+const formalProbeResult = (model: ModelHealth): ManualProbeResult => ({
+	modelName: model.modelName,
+	result: model.probeResult || model.lastErrorKey || model.state,
+	healthy: model.probeResult === 'ok' || model.probeResult === 'slow_response',
+	latencyMs: model.lastLatencyMs,
+	errorKey: model.probeResult === 'ok' || model.probeResult === 'slow_response' ? '' : (model.probeResult || model.lastErrorKey),
+	errorDetail: model.lastErrorDetail,
+	probedAt: model.updatedAt ?? new Date().toISOString(),
+})
+
 const resultLabel = (result: string): string => readableMessage(result)
+const resultIsSlow = (result: ManualProbeResult): boolean => result.result === 'slow_response'
 
 const close = () => {
   if (phase.value === 'testing') return
@@ -169,6 +222,34 @@ const close = () => {
 
           <!-- 内容区：模型选择 + 结果展示，内部独立滚动 -->
           <div class="flex-1 overflow-y-auto px-5 py-4">
+            <div class="mb-4 inline-flex rounded-lg border border-border/60 bg-surface-line/30 p-1">
+              <button
+                type="button"
+                class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="mode === 'formal' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                :disabled="phase === 'testing'"
+                @click="mode = 'formal'"
+              >
+                {{ t(`${prefix}.modes.formal`) }}
+              </button>
+              <button
+                type="button"
+                class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                :class="mode === 'once' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                :disabled="phase === 'testing'"
+                @click="mode = 'once'"
+              >
+                {{ t(`${prefix}.modes.once`) }}
+              </button>
+            </div>
+
+            <p class="mb-4 text-xs text-muted-foreground">
+              {{ t(`${prefix}.modeDescriptions.${mode}`) }}
+            </p>
+			<p class="mb-4 text-xs text-muted-foreground">
+				{{ t(`${prefix}.contractLimit`) }}
+			</p>
+
             <div v-if="phase === 'loading'" class="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <Loader2 class="h-6 w-6 animate-spin text-primary/60" />
               <p class="text-sm text-muted-foreground">{{ t(`${prefix}.loadingModels`) }}</p>
@@ -193,7 +274,9 @@ const close = () => {
               </div>
 
               <template v-else>
-                <p class="mb-3 text-xs text-muted-foreground">{{ t(`${prefix}.selectHint`) }}</p>
+                <p class="mb-3 text-xs text-muted-foreground">
+                  {{ t(`${prefix}.${mode === 'formal' ? 'formalSelectHint' : 'selectHint'}`) }}
+                </p>
                 <div class="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   <label
                     v-for="model in models"
@@ -231,7 +314,8 @@ const close = () => {
                       class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/40 px-3 py-2.5"
                     >
                       <div class="flex min-w-0 items-center gap-2">
-                        <CheckCircle2 v-if="result.healthy" class="h-4 w-4 shrink-0 text-green-500" />
+                        <AlertTriangle v-if="resultIsSlow(result)" class="h-4 w-4 shrink-0 text-amber-500" />
+                        <CheckCircle2 v-else-if="result.healthy" class="h-4 w-4 shrink-0 text-green-500" />
                         <XCircle v-else class="h-4 w-4 shrink-0 text-red-500" />
                         <span class="truncate text-sm font-medium text-foreground">{{ result.modelName }}</span>
                         <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-elevated px-2 py-0.5 text-xs text-muted-foreground">
@@ -271,7 +355,7 @@ const close = () => {
                 @click="startTest"
               >
                 <Loader2 v-if="phase === 'testing'" class="h-4 w-4 animate-spin" />
-                {{ phase === 'testing' ? t(`${prefix}.testing`) : t(`${prefix}.startTest`) }}
+                {{ phase === 'testing' ? t(`${prefix}.testing`) : t(`${prefix}.${mode === 'formal' ? 'startFormal' : 'startTest'}`) }}
               </button>
             </div>
           </div>

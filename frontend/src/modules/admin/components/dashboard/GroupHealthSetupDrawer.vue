@@ -53,6 +53,7 @@ const selectedPolicyIds = ref<Set<string>>(new Set())
 const modelText = ref('')
 const providerFamily = ref('openai')
 const autoRemoteActionEnabled = ref(true)
+const fallbackMultiplierText = ref('')
 const errorKey = ref('')
 const modelsTouched = ref(false)
 const modelSuggestionSource = ref<ModelSuggestionSource>('none')
@@ -167,6 +168,7 @@ const reset = async () => {
   providerFamily.value = detectedProvider ?? (providerOptions.includes(group.platform) ? group.platform : 'openai')
   mode.value = 'multiplier'
   autoRemoteActionEnabled.value = true
+	fallbackMultiplierText.value = ''
 
   const outcome = await loadAdminGroupPolicyConfiguration(group.id)
   if (sequence !== loadSequence || !props.open || props.group?.id !== group.id) return
@@ -176,6 +178,7 @@ const reset = async () => {
     return
   }
   const configuration = outcome.configuration
+	fallbackMultiplierText.value = configuration.probeSortFallbackMultiplier == null ? '' : String(configuration.probeSortFallbackMultiplier)
   selectedPolicyIds.value = new Set(configuration.policyIds)
   const excluded = new Set(configuration.excludedTargetIds)
   selectedTargetIds.value = new Set(group.accounts.filter((account) => !excluded.has(account.targetId)).map((account) => account.targetId))
@@ -208,11 +211,22 @@ const effectivePriorityMode = computed<ConnectionHealthPriorityMode>(() =>
 const selectedExistingPolicies = computed(() => props.policies.filter((policy) => selectedPolicyIds.value.has(policy.id)))
 const hasGroupMultiplier = computed(() => typeof props.group?.multiplier === 'number' && Number.isFinite(props.group.multiplier))
 const requiresGroupMultiplier = computed(() => {
-  if (mode.value === 'multiplier' || mode.value === 'multiplierOnly') return true
+	if (mode.value === 'multiplierOnly') return true
   if (mode.value !== 'existing') return false
-  return selectedExistingPolicies.value.some((policy) => policy.enabled && policy.priorityMode === 'multiplier')
+	return selectedExistingPolicies.value.some((policy) => policy.enabled && policy.strategyMode === 'multiplier_only')
 })
 const multiplierMissing = computed(() => requiresGroupMultiplier.value && !hasGroupMultiplier.value)
+const usesHealthMultiplier = computed(() => mode.value === 'multiplier' || (
+	mode.value === 'existing'
+	&& selectedExistingPolicies.value.some(policy => policy.enabled && policy.priorityMode === 'multiplier' && policy.strategyMode !== 'multiplier_only')
+))
+const fallbackMultiplier = computed<number | null>(() => {
+	const trimmed = fallbackMultiplierText.value.trim()
+	if (!trimmed) return null
+	const value = Number(trimmed)
+	return Number.isFinite(value) && value > 0 ? value : null
+})
+const fallbackMultiplierInvalid = computed(() => fallbackMultiplierText.value.trim() !== '' && fallbackMultiplier.value == null)
 
 const toggleTarget = (targetId: string) => {
   const next = new Set(selectedTargetIds.value)
@@ -232,6 +246,7 @@ const canContinue = computed(() => {
   if (phase.value !== 'ready') return false
   if (step.value === 1) return selectedCount.value > 0
   if (step.value === 2 && multiplierMissing.value) return false
+	if (step.value === 2 && fallbackMultiplierInvalid.value) return false
   if (step.value === 2 && mode.value === 'existing') return selectedPolicyIds.value.size > 0
   if (step.value === 2 && mode.value === 'multiplierOnly') return true
   if (step.value === 2) return models.value.length > 0
@@ -284,6 +299,7 @@ const bindLegacyQuickPolicy = async (
   group: AdminGroupHealth,
   quickPolicy: PolicyInput,
   excludedTargetIds: string[],
+	probeSortFallbackMultiplier: number | null,
 ): Promise<string | null> => {
   const fingerprint = JSON.stringify(quickPolicy)
   const pending = pendingLegacyPolicy(group)
@@ -315,6 +331,7 @@ const bindLegacyQuickPolicy = async (
   let fallback = await saveAdminGroupPolicyConfiguration(group.id, {
     policyIds: [policyId],
     excludedTargetIds,
+		probeSortFallbackMultiplier,
   })
   if ('errorKey' in fallback && fallback.errorKey === 'admin.connectionHealth.errors.policyNotFound' && reusedPendingPolicy) {
     // 缓存策略可能已被用户从其它页面删除。只在确认 policy 不存在时重建一次，
@@ -327,6 +344,7 @@ const bindLegacyQuickPolicy = async (
     fallback = await saveAdminGroupPolicyConfiguration(group.id, {
       policyIds: [policyId],
       excludedTargetIds,
+			probeSortFallbackMultiplier,
     })
   }
   if ('errorKey' in fallback) return fallback.errorKey
@@ -352,7 +370,7 @@ const save = async () => {
 
   // 上一次旧后端兼容绑定若只完成了策略创建，直接继续绑定该策略；不再先尝试创建新的 quickPolicy。
   if (quickPolicy && pendingLegacyPolicy(group)) {
-    const fallbackError = await bindLegacyQuickPolicy(group, quickPolicy, excludedTargetIds)
+		const fallbackError = await bindLegacyQuickPolicy(group, quickPolicy, excludedTargetIds, fallbackMultiplier.value)
     if (fallbackError) {
       errorKey.value = fallbackError
       phase.value = 'ready'
@@ -366,13 +384,14 @@ const save = async () => {
   const outcome = await saveAdminGroupPolicyConfiguration(group.id, {
     policyIds,
     excludedTargetIds,
+		probeSortFallbackMultiplier: fallbackMultiplier.value,
     ...(quickPolicy ? { quickPolicy } : {}),
   })
   if ('errorKey' in outcome) {
     // 旧后端的配置 DTO 不认识 quickPolicy，严格 JSON 解码会返回 request 错误。
     // 仅对这个兼容信号走旧的「先创建策略、再绑定分组」路径，真实业务/网络错误仍直接返回。
     if (quickPolicy && outcome.errorKey === 'admin.connectionHealth.errors.request') {
-      const fallbackError = await bindLegacyQuickPolicy(group, quickPolicy, excludedTargetIds)
+			const fallbackError = await bindLegacyQuickPolicy(group, quickPolicy, excludedTargetIds, fallbackMultiplier.value)
       if (fallbackError) {
         errorKey.value = fallbackError
         phase.value = 'ready'
@@ -537,6 +556,22 @@ const close = () => {
                   <p class="mt-1 text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.strategy.multiplierMissingHelp`) }}</p>
                 </div>
 
+				<div v-if="usesHealthMultiplier" class="space-y-1.5 rounded-lg border border-border/60 px-4 py-3">
+					<label for="probe-sort-fallback-multiplier" class="text-xs font-medium text-foreground">{{ t(`${prefix}.strategy.fallbackMultiplierLabel`) }}</label>
+					<input
+						id="probe-sort-fallback-multiplier"
+						v-model="fallbackMultiplierText"
+						type="number"
+						min="0.0001"
+						step="0.01"
+						class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20"
+						:placeholder="t(`${prefix}.strategy.fallbackMultiplierPlaceholder`)"
+					>
+					<p class="text-xs leading-5" :class="fallbackMultiplierInvalid ? 'text-destructive' : 'text-muted-foreground'">
+						{{ t(`${prefix}.strategy.${fallbackMultiplierInvalid ? 'fallbackMultiplierInvalid' : 'fallbackMultiplierHelp'}`) }}
+					</p>
+				</div>
+
                 <div v-if="mode === 'existing'" class="space-y-2 rounded-lg border border-border/60 p-3">
                   <label v-for="policy in policies" :key="policy.id" class="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-surface/60">
                     <input type="checkbox" class="h-4 w-4 rounded border-border" :checked="selectedPolicyIds.has(policy.id)" @change="togglePolicy(policy.id)">
@@ -614,6 +649,10 @@ const close = () => {
                       {{ mode === 'existing' ? t(`${prefix}.confirm.fromPolicy`) : t(`${prefix}.confirm.${autoRemoteActionEnabled && mode !== 'multiplierOnly' ? 'enabled' : 'disabled'}`) }}
                     </dd>
                   </div>
+					<div v-if="usesHealthMultiplier" class="flex items-center justify-between gap-4 px-4 py-3">
+						<dt class="text-sm text-muted-foreground">{{ t(`${prefix}.confirm.fallbackMultiplier`) }}</dt>
+						<dd class="text-right text-sm font-medium text-foreground">{{ fallbackMultiplier == null ? t(`${prefix}.confirm.notConfigured`) : `${fallbackMultiplier}x` }}</dd>
+					</div>
                 </dl>
                 <div v-if="mode === 'multiplier'" class="rounded-lg border border-primary/25 bg-primary/[0.05] px-4 py-3 text-xs leading-5 text-muted-foreground">
                   {{ t(`${prefix}.confirm.multiplierRule`) }}

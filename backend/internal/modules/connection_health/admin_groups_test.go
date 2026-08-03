@@ -334,6 +334,53 @@ func TestAdminGroups_UsesRealUpstreamAPIKeyGroupMultiplier(t *testing.T) {
 	}
 }
 
+func TestAdminGroups_ConflictingGroupFallbacksDoNotClaimLocalEffectiveMultiplier(t *testing.T) {
+	repo := newFakeRepository()
+	policy := probePolicy()
+	policy.PriorityMode = PriorityModeMultiplier
+	policy.StrategyMode = StrategyModeHealthProbe
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID},
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g2", PolicyID: policy.ID},
+	}
+	first, second := 0.1, 0.2
+	repo.groupSortSettings["user1|ws1|g1"] = GroupProbeSortSetting{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", FallbackMultiplier: &first}
+	repo.groupSortSettings["user1|ws1|g2"] = GroupProbeSortSetting{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g2", FallbackMultiplier: &second}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "one"}, {ID: "g2", Name: "two"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", BaseURL: "https://up", Models: "gpt-4o"}},
+			"g2": {{ID: "100", BaseURL: "https://up", Models: "gpt-4o"}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, group := range groups {
+		account := group.Accounts[0]
+		if account.MultiplierSource != MultiplierSourceNone || account.EffectiveMultiplier != nil || account.LocalFallbackMultiplier != nil {
+			t.Fatalf("conflicting target-wide fallbacks must hold production without a claimed local multiplier: %+v", account)
+		}
+	}
+}
+
+func TestSortAdminGroupAccountsByProduction_ConflictUsesObservedPriority(t *testing.T) {
+	observedHigh, observedLow := 90, 10
+	staleLow, staleHigh := 1, 99
+	accounts := []AdminGroupAccount{
+		{TargetID: "newapi:ws1:low", Priority: &observedLow, PriorityExpected: &staleHigh, PriorityConflict: true},
+		{TargetID: "newapi:ws1:high", Priority: &observedHigh, PriorityExpected: &staleLow, PriorityConflict: true},
+	}
+	sortAdminGroupAccountsByProduction(accounts, upstream.PlatformNewAPI)
+	if accounts[0].TargetID != "newapi:ws1:high" {
+		t.Fatalf("conflicted accounts must use observed production priority: %+v", accounts)
+	}
+}
+
 // TestAdminGroups_NoPolicyStillAllowsManualProbe 验证尚未创建策略时，只要静态凭据条件满足，
 // 目标仍可进入一次性手动探活并实时发现模型；自动调度仍会因没有策略而跳过。
 func TestAdminGroups_NoPolicyStillAllowsManualProbe(t *testing.T) {
@@ -823,7 +870,7 @@ func TestAdminGroups_ExposesEffectiveUnschedulableDecisionAndAllSources(t *testi
 func TestModelHealthForSpecs_BudgetUnavailableIsBlocked(t *testing.T) {
 	policy := probePolicy()
 	spec := probeModelSpec{modelName: "gpt-4o", providerFamily: "openai", policy: policy, policies: []Policy{policy}}
-	_, unprobed := modelHealthForSpecs(nil, []probeModelSpec{spec}, boolPointer(true), time.Now().UTC(), nil, false)
+	_, unprobed := modelHealthForSpecs(nil, []probeModelSpec{spec}, AdminProbeTarget{Schedulable: boolPointer(true)}, time.Now().UTC(), nil, false)
 	if len(unprobed) != 1 {
 		t.Fatalf("expected one unprobed model, got %+v", unprobed)
 	}

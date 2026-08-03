@@ -21,9 +21,11 @@ export interface ModelHealth {
   lastSuccessAt: string | null
   lastFailureAt: string | null
   lastLatencyMs: number | null
+  lastSuccessLatencyMs?: number | null
   lastErrorKey: string
   lastErrorDetail: string
   lastRemoteAction: string
+  probeResult?: string
   elapsedSeconds?: number | null
   nextProbeAt?: string | null
   blockedReason?: string
@@ -95,6 +97,7 @@ export interface TargetPolicyAssignmentSummary {
   policyName: string
   enabled: boolean
   priorityMode?: ConnectionHealthPriorityMode
+  strategyMode?: ConnectionHealthStrategyMode
   autoRemoteActionEnabled?: boolean
 }
 
@@ -165,6 +168,11 @@ export interface AdminGroupAccount {
   priorityConflictAt?: string | null
   probeModelsConfigured?: boolean
   effectiveMultiplier?: number | null
+  multiplierResolutionStatus?: 'resolved' | 'unassociated' | 'missing' | 'conflict' | 'unavailable' | string
+  multiplierSource?: 'upstream_key' | 'local_fallback' | 'none' | string
+  localFallbackMultiplier?: number | null
+  productionSortOrder?: number
+  priorityCapacityLimited?: boolean
 }
 
 export interface AdminGroupHealth {
@@ -177,6 +185,7 @@ export interface AdminGroupHealth {
   subscriptionType: string
   multiplier: number | null
   multiplierDisplay: string
+  probeSortFallbackMultiplier?: number | null
   accountCount: number
   monitoredAccountCount?: number
   excludedAccountCount?: number
@@ -218,6 +227,7 @@ export interface ConnectionHealthEvent {
   errorDetail?: string
   remoteAction: string
   actionSource?: string
+  source?: 'manual' | 'scheduled' | 'legacy' | string
   createdAt: string
 }
 
@@ -355,10 +365,12 @@ export interface AdminGroupPolicyConfiguration {
   policyIds: string[]
   policies: TargetPolicyAssignmentSummary[]
   excludedTargetIds: string[]
+  probeSortFallbackMultiplier?: number | null
 }
 
 export interface AdminGroupPolicyConfigurationInput {
   policyIds: string[]
   excludedTargetIds: string[]
+  probeSortFallbackMultiplier: number | null
   quickPolicy?: PolicyInput
 }

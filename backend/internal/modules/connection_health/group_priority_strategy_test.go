@@ -3,10 +3,80 @@ package connection_health
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
+	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
+
+type blockingPrioritySyncRepository struct {
+	*fakeRepository
+	mu           sync.Mutex
+	active       int
+	maxActive    int
+	calls        int
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+}
+
+func (r *blockingPrioritySyncRepository) ListPolicies(ctx context.Context, userID string, adminAccountID string) ([]Policy, error) {
+	r.mu.Lock()
+	r.calls++
+	call := r.calls
+	r.active++
+	if r.active > r.maxActive {
+		r.maxActive = r.active
+	}
+	if call == 1 {
+		close(r.firstEntered)
+	}
+	r.mu.Unlock()
+
+	if call == 1 {
+		select {
+		case <-r.releaseFirst:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	policies, err := r.fakeRepository.ListPolicies(ctx, userID, adminAccountID)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return policies, err
+}
+
+func TestSyncCurrentWorkspacePriorities_SerializesSameWorkspace(t *testing.T) {
+	repo := &blockingPrioritySyncRepository{
+		fakeRepository: newFakeRepository(),
+		firstEntered:   make(chan struct{}),
+		releaseFirst:   make(chan struct{}),
+	}
+	service := &Service{
+		repo: repo, platformGroups: fakePlatformGroupReader{}, priorityActions: &fakeTargetPriorityActioner{},
+	}
+
+	done := make(chan struct{}, 2)
+	go func() {
+		service.syncCurrentWorkspacePriorities(context.Background(), "user1", "ws1")
+		done <- struct{}{}
+	}()
+	<-repo.firstEntered
+	go func() {
+		service.syncCurrentWorkspacePriorities(context.Background(), "user1", "ws1")
+		done <- struct{}{}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	close(repo.releaseFirst)
+	<-done
+	<-done
+	if repo.maxActive != 1 {
+		t.Fatalf("same-workspace priority snapshots overlapped: max active ListPolicies calls = %d", repo.maxActive)
+	}
+}
 
 func TestCollectAdminProbeJobs_GroupAssignmentAndExclusion(t *testing.T) {
 	repo := newFakeRepository()
@@ -149,6 +219,38 @@ func TestSetAdminGroupPolicyConfiguration_ValidatesAndPersistsScope(t *testing.T
 	}
 }
 
+func TestSetAdminGroupPolicyConfiguration_PersistsProbeSortFallbackMultiplier(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{probePolicy()}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Name: "channel", BaseURL: "https://up", Models: "gpt-4o"}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+	fallback := 0.08
+
+	configuration, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
+		PolicyIDs: []string{"policy-1"}, ProbeSortFallbackMultiplier: &fallback,
+	})
+	if err != nil {
+		t.Fatalf("save fallback multiplier: %v", err)
+	}
+	if configuration.ProbeSortFallbackMultiplier == nil || *configuration.ProbeSortFallbackMultiplier != fallback {
+		t.Fatalf("saved fallback = %+v, want %v", configuration.ProbeSortFallbackMultiplier, fallback)
+	}
+	loaded, err := service.GetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1")
+	if err != nil || loaded.ProbeSortFallbackMultiplier == nil || *loaded.ProbeSortFallbackMultiplier != fallback {
+		t.Fatalf("loaded fallback = %+v err=%v", loaded.ProbeSortFallbackMultiplier, err)
+	}
+
+	cleared, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{PolicyIDs: []string{"policy-1"}})
+	if err != nil || cleared.ProbeSortFallbackMultiplier != nil {
+		t.Fatalf("clear fallback = %+v err=%v", cleared.ProbeSortFallbackMultiplier, err)
+	}
+}
+
 func TestSetAdminGroupPolicyConfiguration_QuickPolicyCreatesAndBindsTogether(t *testing.T) {
 	repo := newFakeRepository()
 	reader := fakePlatformGroupReader{
@@ -285,7 +387,7 @@ func TestMultiplierPrioritySyncAndManualConflict(t *testing.T) {
 		priorityActions: priorityActions,
 	}
 	policies := []Policy{{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}}
 	groupAssignments := []GroupPolicyAssignment{{
@@ -331,7 +433,7 @@ func TestMultiplierPrioritySync_Sub2APIPreservesMissingUpstreamPriority(t *testi
 		platformGroups: reader, priorityActions: priorityActions,
 	}
 	policy := Policy{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
@@ -359,7 +461,7 @@ func TestMultiplierPrioritySync_NewAPIPreservesMissingPriorityBehavior(t *testin
 		platformGroups: reader, priorityActions: priorityActions,
 	}
 	policy := Policy{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
@@ -390,7 +492,7 @@ func TestMultiplierPrioritySync_IgnoresFrozenHealthWhenAutoDegradeDisabled(t *te
 	}
 	policy := Policy{
 		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
-		AutoDegradeEnabled: false, PriorityMode: PriorityModeMultiplier,
+		AutoDegradeEnabled: false, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	assignment := GroupPolicyAssignment{
@@ -468,10 +570,11 @@ func TestMultiplierPrioritySync_ConfirmsPendingSystemWrite(t *testing.T) {
 		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
 		platformGroups: reader, priorityActions: priorityActions,
 	}
-	policy := Policy{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}}}
+	policy := Policy{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly, ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}}}
 	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
 	pending := desired
 	stored := PrioritySyncState{UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100", OriginalPriority: 7, LastAppliedPriority: 7, PendingPriority: &pending}
+	repo.priorityStates["user1|ws1|"+stored.TargetID] = stored
 
 	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, []PrioritySyncState{stored})
 	updated := repo.priorityStates["user1|ws1|newapi:ws1:100"]
@@ -497,10 +600,11 @@ func TestMultiplierPrioritySync_PreservesExpectedPriorityOnPendingConflict(t *te
 		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
 		platformGroups: reader, priorityActions: priorityActions,
 	}
-	policy := Policy{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}}}
+	policy := Policy{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly, ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}}}
 	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
 	pending := desiredManagedPriorityForPlatform(upstream.PlatformNewAPI, nil, 0)
 	stored := PrioritySyncState{UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100", OriginalPriority: 7, LastAppliedPriority: 7, PendingPriority: &pending}
+	repo.priorityStates["user1|ws1|"+stored.TargetID] = stored
 
 	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, []PrioritySyncState{stored})
 	updated := repo.priorityStates["user1|ws1|newapi:ws1:100"]
@@ -524,7 +628,7 @@ func TestMultiplierPrioritySync_DoesNotRestoreWhenInventoryIsIncomplete(t *testi
 		platformGroups: reader, priorityActions: priorityActions,
 	}
 	policy := Policy{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
@@ -644,7 +748,7 @@ func TestMultiplierPrioritySync_IgnoresExcludedGroupMultiplier(t *testing.T) {
 		platformGroups: reader, priorityActions: priorityActions,
 	}
 	policy := Policy{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	assignments := []GroupPolicyAssignment{{
@@ -676,7 +780,7 @@ func TestMultiplierPrioritySync_ExplicitTargetSurvivesGroupExclusion(t *testing.
 		platformGroups: reader, priorityActions: priorityActions,
 	}
 	policy := Policy{
-		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, StrategyMode: StrategyModeMultiplierOnly,
 		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
 	}
 	targetID := "newapi:ws1:100"
@@ -691,6 +795,164 @@ func TestMultiplierPrioritySync_ExplicitTargetSurvivesGroupExclusion(t *testing.
 	stored := repo.priorityStates["user1|ws1|"+targetID]
 	if stored.EffectiveMultiplier != 0.1 || len(priorityActions.calls) != 1 {
 		t.Fatalf("explicit target multiplier should survive group exclusion, stored=%+v calls=%+v", stored, priorityActions.calls)
+	}
+}
+
+func TestHealthPrioritySync_UsesHealthThenUpstreamMultiplierThenSuccessLatency(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	currentPriority := 1
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "managed"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {
+				{ID: "a", Priority: &currentPriority, Models: "gpt-4o"},
+				{ID: "b", Priority: &currentPriority, Models: "gpt-4o"},
+				{ID: "c", Priority: &currentPriority, Models: "gpt-4o"},
+				{ID: "d", Priority: &currentPriority, Models: "gpt-4o"},
+			},
+		},
+	}
+	multiplier006, multiplier008, multiplier001 := 0.06, 0.08, 0.01
+	mySites := fakeAdminGroupKeyReader{
+		fakeMySitesReader: fakeMySitesReader{
+			session: upstream.Session{Platform: upstream.PlatformNewAPI},
+			connections: []my_sites.RealConnection{
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "a", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-a"},
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "b", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-b"},
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "c", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-c"},
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "d", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-d"},
+			},
+		},
+		keysBySite: map[string][]upstream.Sub2APIKeyItem{
+			"site": {
+				{ID: "key-a", GroupID: "m008"}, {ID: "key-b", GroupID: "m006"},
+				{ID: "key-c", GroupID: "m006"}, {ID: "key-d", GroupID: "m001"},
+			},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: mySites, platformGroups: reader, priorityActions: priorityActions,
+		sites: fakeSiteLookup{site: &upstream.Site{Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{
+			{ID: "m008", Multiplier: &multiplier008}, {ID: "m006", Multiplier: &multiplier006}, {ID: "m001", Multiplier: &multiplier001},
+		}}}},
+	}
+	policy := Policy{
+		ID: "health", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeHealthProbe, PriorityMode: PriorityModeMultiplier, AutoDegradeEnabled: true,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+	for target, state := range map[string]struct {
+		health  State
+		latency int
+	}{
+		"a": {StateHealthy, 400}, "b": {StateHealthy, 800}, "c": {StateHealthy, 300}, "d": {StateDegraded, 100},
+	} {
+		targetID := "newapi:ws1:" + target
+		latency := state.latency
+		repo.states[targetID] = map[string]ConnectionHealthState{
+			"gpt-4o": {ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1", State: state.health, CurrentWeight: 100, LastSuccessLatencyMs: &latency},
+		}
+	}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	priorities := make(map[string]int)
+	for _, call := range priorityActions.calls {
+		priorities[call.targetID] = call.priority
+	}
+	if !(priorities["c"] > priorities["b"] && priorities["b"] > priorities["a"] && priorities["a"] > priorities["d"]) {
+		t.Fatalf("priority tuple order is wrong: %+v", priorities)
+	}
+}
+
+func TestHealthPrioritySync_NewAPITupleIsNotOverriddenByCurrentWeight(t *testing.T) {
+	repo := newFakeRepository()
+	actions := &fakeTargetPriorityActioner{}
+	currentPriority := 1
+	cheapMultiplier, expensiveMultiplier := 0.1, 0.2
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "managed"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {
+				{ID: "cheap", Priority: &currentPriority, Models: "gpt-4o"},
+				{ID: "expensive", Priority: &currentPriority, Models: "gpt-4o"},
+			},
+		},
+	}
+	mySites := fakeAdminGroupKeyReader{
+		fakeMySitesReader: fakeMySitesReader{
+			session: upstream.Session{Platform: upstream.PlatformNewAPI},
+			connections: []my_sites.RealConnection{
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "cheap", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-cheap"},
+				{UserID: "user1", WorkspaceAdminAccountID: "ws1", AdminAccountID: "expensive", AdminPlatform: string(upstream.PlatformNewAPI), UpstreamSiteID: "site", UpstreamKeyID: "key-expensive"},
+			},
+		},
+		keysBySite: map[string][]upstream.Sub2APIKeyItem{
+			"site": {{ID: "key-cheap", GroupID: "cheap"}, {ID: "key-expensive", GroupID: "expensive"}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: mySites, platformGroups: reader, priorityActions: actions,
+		sites: fakeSiteLookup{site: &upstream.Site{Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{
+			{ID: "cheap", Multiplier: &cheapMultiplier}, {ID: "expensive", Multiplier: &expensiveMultiplier},
+		}}}},
+	}
+	policy := Policy{
+		ID: "health", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeHealthProbe, PriorityMode: PriorityModeMultiplier, AutoDegradeEnabled: true,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+	repo.states["newapi:ws1:cheap"] = map[string]ConnectionHealthState{
+		"gpt-4o": {ConnectionID: "newapi:ws1:cheap", ModelName: "gpt-4o", State: StateDegraded, CurrentWeight: 25},
+	}
+	repo.states["newapi:ws1:expensive"] = map[string]ConnectionHealthState{
+		"gpt-4o": {ConnectionID: "newapi:ws1:expensive", ModelName: "gpt-4o", State: StateDegraded, CurrentWeight: 75},
+	}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	priorities := make(map[string]int)
+	for _, call := range actions.calls {
+		priorities[call.targetID] = call.priority
+	}
+	if priorities["cheap"] <= priorities["expensive"] {
+		t.Fatalf("lower multiplier must remain first regardless of current weight: %+v", priorities)
+	}
+}
+
+func TestHealthPrioritySync_UsesFallbackOnlyForDeterministicMissing(t *testing.T) {
+	policy := Policy{
+		ID: "health", UserID: "user1", AdminAccountID: "ws1", Enabled: true,
+		StrategyMode: StrategyModeHealthProbe, PriorityMode: PriorityModeMultiplier, AutoDegradeEnabled: true,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+	fallback := 0.08
+	newService := func(mySites MySitesReader) (*Service, *fakeRepository, *fakeTargetPriorityActioner) {
+		repo := newFakeRepository()
+		repo.groupSortSettings["user1|ws1|g1"] = GroupProbeSortSetting{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", FallbackMultiplier: &fallback}
+		actions := &fakeTargetPriorityActioner{}
+		priority := 1
+		reader := fakePlatformGroupReader{
+			groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "managed"}},
+			accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "100", Priority: &priority, Models: "gpt-4o"}}},
+		}
+		return &Service{repo: repo, mySites: mySites, platformGroups: reader, priorityActions: actions, sites: fakeSiteLookup{site: &upstream.Site{}}}, repo, actions
+	}
+
+	deterministicSites := fakeAdminGroupKeyReader{fakeMySitesReader: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}}
+	service, repo, actions := newService(deterministicSites)
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	if len(actions.calls) != 1 || repo.priorityStates["user1|ws1|newapi:ws1:100"].EffectiveMultiplier != fallback {
+		t.Fatalf("deterministic unassociated target must use local fallback: calls=%+v state=%+v", actions.calls, repo.priorityStates)
+	}
+
+	unavailableSites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}
+	service, repo, actions = newService(unavailableSites)
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	if len(actions.calls) != 0 || len(repo.priorityStates) != 0 {
+		t.Fatalf("unavailable lookup must hold without fallback or new management: calls=%+v state=%+v", actions.calls, repo.priorityStates)
 	}
 }
 

@@ -15,6 +15,7 @@ type AssignedPolicySummary struct {
 	PolicyName              string `json:"policyName"`
 	Enabled                 bool   `json:"enabled"`
 	PriorityMode            string `json:"priorityMode"`
+	StrategyMode            string `json:"strategyMode"`
 	AutoRemoteActionEnabled bool   `json:"autoRemoteActionEnabled"`
 }
 
@@ -107,7 +108,8 @@ func buildTargetPolicyAssignments(assignments []PolicyAssignment, policies []Pol
 		if p, ok := policyByID[a.PolicyID]; ok {
 			summaries = append(summaries, AssignedPolicySummary{
 				PolicyID: p.ID, PolicyName: p.Name, Enabled: p.Enabled,
-				PriorityMode: normalizePriorityMode(p.PriorityMode), AutoRemoteActionEnabled: policyRemoteActionEnabled(p),
+				PriorityMode: normalizePriorityMode(p.PriorityMode), StrategyMode: normalizeStrategyMode(p.StrategyMode),
+				AutoRemoteActionEnabled: policyRemoteActionEnabled(p),
 			})
 		} else {
 			// 策略行已被删除但分配未清理（理论上不应发生，ReplacePolicyAssignments 有校验）：

@@ -37,9 +37,27 @@ func (s *Service) ManualProbeTarget(ctx context.Context, userID string, targetID
 		return nil, requestError(ErrorManualModelsRequired)
 	}
 
-	session, target, account, _, err := s.resolveManualTarget(ctx, userID, targetID)
+	session, target, account, adminAccountID, err := s.resolveManualTarget(ctx, userID, targetID)
 	if err != nil {
 		return nil, err
+	}
+	_, _, memberships, found, accountsReadError, err := s.findAdminTargetWithMemberships(ctx, session, adminAccountID, target.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		if accountsReadError {
+			return nil, requestError(ErrorAccountsFetch)
+		}
+		return nil, requestError(ErrorProbeTargetNotFound)
+	}
+	effectiveSpecs, _, policyOK := s.currentScheduledProbeSpecs(ctx, userID, adminAccountID, target, memberships, nil)
+	if !policyOK {
+		return nil, requestError(ErrorUnknown)
+	}
+	specByModel := make(map[string]probeModelSpec, len(effectiveSpecs))
+	for _, spec := range effectiveSpecs {
+		specByModel[spec.modelName] = spec
 	}
 	cred, err := s.platformGroups.ResolveProbeCredential(session, account)
 	if err != nil {
@@ -48,15 +66,16 @@ func (s *Service) ManualProbeTarget(ctx context.Context, userID string, targetID
 
 	results := make([]ManualProbeResult, 0, len(requested))
 	for _, modelName := range requested {
-		outcome := s.probeRunner.Probe(ctx, ProbeRequest{
-			BaseURL: cred.BaseURL, UpstreamKey: cred.Key, ProviderFamily: target.ProviderFamily,
-			ModelName: modelName, MaxTokens: 1,
-		})
+		spec, exists := specByModel[modelName]
+		if !exists {
+			spec = probeModelSpec{modelName: modelName, providerFamily: target.ProviderFamily, maxProbeTokens: 1}
+		}
+		outcome := s.executeTargetProbe(ctx, target, cred, spec)
 		result := ManualProbeResult{
-			ModelName: modelName, Result: string(outcome.Result), Healthy: outcome.Result == ResultOK,
+			ModelName: modelName, Result: string(outcome.Result), Healthy: outcome.Result == ResultOK || outcome.Result == ResultSlowResponse,
 			LatencyMs: intPtr(outcome.LatencyMs), ProbedAt: time.Now(),
 		}
-		if outcome.Result != ResultOK {
+		if outcome.Result != ResultOK && outcome.Result != ResultSlowResponse {
 			result.ErrorKey = string(outcome.Result)
 			result.ErrorDetail = outcome.Detail
 		}

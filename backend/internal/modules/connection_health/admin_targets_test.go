@@ -15,6 +15,17 @@ import (
 // newAdminTargetsRemoteActionService 构造一个用真实 remoteActionDispatcher（而不是
 // noopRemoteActionRunner）驱动的 Service，供本文件测试断言 probeTargetOnce 触发的真实远端动作调用。
 func newAdminTargetsRemoteActionService(reader PlatformGroupReader, mySites MySitesReader, repo *fakeRepository, platform *fakePlatformActioner) *Service {
+	if fixture, ok := reader.(fakePlatformGroupReader); ok {
+		if siteFixture, ok := mySites.(fakeMySitesReader); ok {
+			for _, accounts := range fixture.accountsByGrp {
+				for _, account := range accounts {
+					for _, policy := range repo.policies {
+						assignPolicyToTarget(repo, policy, buildTargetID(string(siteFixture.session.Platform), "ws1", account.ID))
+					}
+				}
+			}
+		}
+	}
 	return &Service{
 		repo:           repo,
 		mySites:        mySites,
@@ -32,6 +43,232 @@ func sub2APIProbePolicy(autoRemoteAction bool) Policy {
 		AutoDegradeEnabled: true, AutoRemoteActionEnabled: autoRemoteAction,
 		FailureThreshold: 3, SuccessThreshold: 2, CooldownSeconds: 300, ObservationSeconds: 300, RecoveryStepPercent: 25,
 		ModelTargets: []ModelTarget{{ID: "t1", PolicyID: "policy-1", ModelName: "gpt-4o", ProviderFamily: ProviderOpenAI, Enabled: true, MaxProbeTokens: 1}},
+	}
+}
+
+func assignPolicyToTarget(repo *fakeRepository, policy Policy, targetID string) {
+	repo.assignments = append(repo.assignments, PolicyAssignment{
+		UserID: policy.UserID, AdminAccountID: policy.AdminAccountID, TargetID: targetID, PolicyID: policy.ID,
+	})
+}
+
+func TestProbeTarget_FormalProbeUsesEffectiveStrategyWithoutConsumingBudget(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	repo := newFakeRepository()
+	policy := sub2APIProbePolicy(false)
+	policy.ModelTargets[0].ProbePrompt = "formal prompt"
+	policy.ModelTargets[0].MaxProbeTokens = 7
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}},
+		},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+	svc.priorityActions = &fakeTargetPriorityActioner{}
+
+	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err != nil {
+		t.Fatalf("formal probe failed: %v", err)
+	}
+	if len(results) != 1 || results[0].State != StateHealthy {
+		t.Fatalf("unexpected formal result: %+v", results)
+	}
+	if requestBody["max_tokens"] != float64(7) {
+		t.Fatalf("max_tokens = %#v, want 7", requestBody["max_tokens"])
+	}
+	messages, _ := requestBody["messages"].([]any)
+	if len(messages) != 1 || messages[0].(map[string]any)["content"] != "formal prompt" {
+		t.Fatalf("formal probe did not use strategy prompt: %#v", requestBody)
+	}
+	if len(repo.budgetClaims) != 0 {
+		t.Fatalf("formal probe must not consume automatic budget: %+v", repo.budgetClaims)
+	}
+	if len(repo.events) != 1 || repo.events[0].Source != EventSourceManual {
+		t.Fatalf("formal probe event source = %+v, want manual", repo.events)
+	}
+	stored := repo.states[targetID]["gpt-4o"]
+	if stored.LastProbeDecisionKey == "" {
+		t.Fatal("formal probe must persist its effective decision key")
+	}
+	count, err := repo.CountProbesToday(context.Background(), "user1", "ws1", policy.ID, probeBudgetDayStart(time.Now()))
+	if err != nil || count != 0 {
+		t.Fatalf("manual event must not count against automatic budget: count=%d err=%v", count, err)
+	}
+	allowed, err := repo.TryConsumeProbeBudget(context.Background(), "user1", "ws1", policy.ID, probeBudgetDayStart(time.Now()), 1)
+	if err != nil || !allowed {
+		t.Fatalf("automatic probe must retain its full budget after formal manual probe: allowed=%v err=%v", allowed, err)
+	}
+	if repo.priorityLeaseCount["user1|ws1"] != 1 {
+		t.Fatalf("formal probe priority refresh must use the workspace lease: %+v", repo.priorityLeaseCount)
+	}
+}
+
+func TestProbeTarget_FormalProbeReturnsEventPersistenceFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	repo := newFakeRepository()
+	repo.insertEventErr = errors.New("audit unavailable")
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}},
+		},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err == nil || len(results) != 0 {
+		t.Fatalf("formal probe must report missing manual audit event, results=%+v err=%v", results, err)
+	}
+}
+
+func TestProbeTarget_FormalProbeReturnsStatePersistenceFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	repo := newFakeRepository()
+	repo.upsertStateErr = errors.New("state unavailable")
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}},
+		},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err == nil || len(results) != 0 || len(repo.events) != 0 {
+		t.Fatalf("formal probe must report missing state persistence without an event, results=%+v events=%+v err=%v", results, repo.events, err)
+	}
+}
+
+func TestProbeTarget_TargetLeaseConflictHasZeroSideEffects(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer server.Close()
+	repo := newFakeRepository()
+	repo.targetLeaseBlocked = true
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}},
+		},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	_, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err == nil || err.Error() != ErrorProbeTargetLeaseBusy {
+		t.Fatalf("lease conflict error = %v, want %s", err, ErrorProbeTargetLeaseBusy)
+	}
+	if hits != 0 || len(repo.states) != 0 || len(repo.events) != 0 || len(repo.budgetClaims) != 0 {
+		t.Fatalf("lease conflict caused side effects: hits=%d states=%+v events=%+v budget=%+v", hits, repo.states, repo.events, repo.budgetClaims)
+	}
+}
+
+func TestProbeTarget_FormalProbeBlockedStateHasZeroSideEffects(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	for _, test := range []struct {
+		name      string
+		state     ConnectionHealthState
+		wantError string
+	}{
+		{name: "disabled", state: ConnectionHealthState{State: StateDisabled}, wantError: "admin.connectionHealth.errors.probeBlockedHealthDisabled"},
+		{name: "cooldown", state: ConnectionHealthState{State: StateDegraded, CooldownUntil: timePointer(time.Now().Add(time.Hour))}, wantError: "admin.connectionHealth.errors.probeBlockedCooldown"},
+		{name: "failure backoff", state: ConnectionHealthState{State: StateDegraded, ConsecutiveFailures: 2, LastProbeAt: timePointer(time.Now())}, wantError: "admin.connectionHealth.errors.probeBlockedFailureBackoff"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			policy := sub2APIProbePolicy(false)
+			repo.policies = []Policy{policy}
+			targetID := "sub2api:ws1:acc-1"
+			assignPolicyToTarget(repo, policy, targetID)
+			test.state.ConnectionID = targetID
+			test.state.ModelName = "gpt-4o"
+			test.state.UserID = "user1"
+			test.state.AdminAccountID = "ws1"
+			repo.states[targetID] = map[string]ConnectionHealthState{"gpt-4o": test.state}
+			before := repo.states[targetID]["gpt-4o"]
+			reader := fakePlatformGroupReader{
+				groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+				accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+				credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+			}
+			svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+			_, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+			if err == nil || err.Error() != test.wantError {
+				t.Fatalf("error = %v, want %s", err, test.wantError)
+			}
+			if got := repo.states[targetID]["gpt-4o"]; got != before {
+				t.Fatalf("blocked probe changed state: before=%+v after=%+v", before, got)
+			}
+			if len(repo.events) != 0 || len(repo.budgetClaims) != 0 {
+				t.Fatalf("blocked probe wrote side effects: events=%+v budget=%+v", repo.events, repo.budgetClaims)
+			}
+		})
+	}
+	if hits != 0 {
+		t.Fatalf("blocked formal probes issued %d HTTP requests", hits)
+	}
+}
+
+func TestProbeTarget_FormalProbeRejectsUnassignedModel(t *testing.T) {
+	repo := newFakeRepository()
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	reader := fakePlatformGroupReader{
+		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	_, err := svc.ProbeTarget(context.Background(), "user1", "sub2api:ws1:acc-1", []string{"gpt-4o"})
+	if err == nil || err.Error() != ErrorNoMatchingModels {
+		t.Fatalf("unassigned formal model error = %v, want %s", err, ErrorNoMatchingModels)
 	}
 }
 
@@ -245,6 +482,7 @@ func TestProbeTargetOnce_Sub2APIRealPlatformServiceComboDegradeSucceeds(t *testi
 	}
 
 	targetID := "sub2api:ws1:1515"
+	assignPolicyToTarget(repo, repo.policies[0], targetID)
 	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -107,7 +107,7 @@ func (s *Service) recordSchedulableActionEvent(ctx context.Context, userID strin
 	event := ConnectionHealthEvent{
 		ID: id, ConnectionID: target.TargetID, ModelName: "*", UserID: userID, AdminAccountID: adminAccountID,
 		AdminGroupID: target.AdminGroupID, OwnGroupName: target.AdminGroupName, UpstreamGroupName: target.AdminGroupName,
-		Result: result, ErrorKey: errorKey, RemoteAction: remoteAction, ActionSource: ActionSourceUser, CreatedAt: time.Now().UTC(),
+		Result: result, ErrorKey: errorKey, RemoteAction: remoteAction, ActionSource: ActionSourceUser, Source: EventSourceManual, CreatedAt: time.Now().UTC(),
 	}
 	return s.repo.InsertEvent(ctx, event)
 }

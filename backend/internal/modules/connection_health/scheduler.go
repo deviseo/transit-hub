@@ -165,32 +165,42 @@ func (s *Service) runSchedulerTick(ctx context.Context) {
 		return
 	}
 
-	globalSem := make(chan struct{}, globalProbeConcurrency)
-	workspaceSemaphores := make(map[string]chan struct{})
 	var wg sync.WaitGroup
+	type probedWorkspace struct {
+		userID         string
+		adminAccountID string
+	}
+	probedWorkspaces := make([]probedWorkspace, 0)
+	seenWorkspaces := make(map[string]struct{})
 
 	for _, j := range jobs {
 		wsKey := j.userID + "|" + j.adminAccountID
-		wsSem, ok := workspaceSemaphores[wsKey]
-		if !ok {
-			wsSem = make(chan struct{}, perSiteProbeConcurrency)
-			workspaceSemaphores[wsKey] = wsSem
+		releaseSlot, acquired := s.sharedProbeLimiter().acquire(ctx, wsKey, true)
+		if !acquired {
+			break
+		}
+		if _, seen := seenWorkspaces[wsKey]; !seen {
+			seenWorkspaces[wsKey] = struct{}{}
+			probedWorkspaces = append(probedWorkspaces, probedWorkspace{userID: j.userID, adminAccountID: j.adminAccountID})
 		}
 
 		wg.Add(1)
-		globalSem <- struct{}{}
-		wsSem <- struct{}{}
-		go s.runAdminProbeJob(ctx, j, globalSem, wsSem, &wg)
+		go s.runAdminProbeJob(ctx, j, releaseSlot, &wg)
 	}
 	wg.Wait()
+	// 探活会在本轮改变健康档位和延迟排序。所有已启动任务完成后复用正式手动探活的
+	// workspace 同步入口，让生产 priority 在同一轮反映最新状态，而不是等待下一次 tick。
+	for _, workspace := range probedWorkspaces {
+		s.syncCurrentWorkspacePriorities(ctx, workspace.userID, workspace.adminAccountID)
+	}
 }
 
 // runAdminProbeJob 处理单个目标的到期任务：先解析一次凭据；凭据不可用时对每个到期模型记录
 // 一次「不可探活」事件并回填 last_probe_at 退避（不驱动状态机、不计入探活预算），
 // 凭据可用时逐个模型执行独立探活。
-func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalSem chan struct{}, wsSem chan struct{}, wg *sync.WaitGroup) {
+func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, releaseSlot func(), wg *sync.WaitGroup) {
 	defer wg.Done()
-	defer func() { <-wsSem; <-globalSem }()
+	defer releaseSlot()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[connection-health] admin probe goroutine panic recovered target_id=%s: %v", j.target.TargetID, r)
@@ -228,7 +238,7 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 	}
 	results := make([]targetProbeResult, 0, len(j.dueSpecs))
 	for _, spec := range j.dueSpecs {
-		result, err := s.probeTargetOnce(ctx, j.userID, j.adminAccountID, j.target, cred, spec)
+		result, err := s.probeTargetOnce(ctx, j.userID, j.adminAccountID, j.target, cred, spec, true)
 		if err != nil {
 			log.Printf("[connection-health] scheduled target probe failed target_id=%s model=%s err=%v", j.target.TargetID, spec.modelName, err)
 			continue
@@ -237,7 +247,9 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 			results = append(results, *result)
 		}
 	}
-	s.finishTargetProbeBatch(ctx, j.userID, j.adminAccountID, j.session, j.target, j.models, results)
+	if err := s.finishTargetProbeBatch(ctx, j.userID, j.adminAccountID, j.session, j.target, j.models, results, EventSourceScheduled); err != nil {
+		log.Printf("[connection-health] finish scheduled target probe failed target_id=%s err=%v", j.target.TargetID, err)
+	}
 }
 
 // recheckAdminProbeSpecs closes the gap between scheduler collection and job execution:
@@ -255,7 +267,7 @@ func (s *Service) recheckAdminProbeSpecs(ctx context.Context, userID string, adm
 		if len(policies) == 0 {
 			policies = []Policy{spec.policy}
 		}
-		decision, stateOK := s.effectiveProbeDecision(ctx, target.TargetID, spec.modelName, policies, target.Schedulable, now)
+		decision, stateOK := s.effectiveProbeDecisionForSpec(ctx, target, spec, policies, now, nil)
 		if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
 			continue
 		}
@@ -280,7 +292,7 @@ func (s *Service) recheckAdminProbeSpecs(ctx context.Context, userID string, adm
 		if !budgetReady {
 			continue
 		}
-		decision, stateOK = s.effectiveProbeDecisionWithBudgets(ctx, target.TargetID, spec.modelName, policies, target.Schedulable, now, specBudgetUsage)
+		decision, stateOK = s.effectiveProbeDecisionForSpec(ctx, target, spec, policies, now, specBudgetUsage)
 		if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
 			continue
 		}
@@ -398,7 +410,9 @@ func (s *Service) recordTargetCredentialUnavailable(ctx context.Context, userID 
 			continue
 		}
 		eventTarget := targetForProbeSpec(target, spec)
-		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, spec.effectiveBudgetPolicy().ID, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "")
+		if err := s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, spec.effectiveBudgetPolicy().ID, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "", EventSourceScheduled); err != nil {
+			log.Printf("[connection-health] insert unavailable target event failed target_id=%s model=%s err=%v", target.TargetID, spec.modelName, err)
+		}
 	}
 }
 
@@ -563,7 +577,7 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				if modelBudget <= 0 {
 					break
 				}
-				decision, stateOK := s.effectiveProbeDecision(ctx, candidate.target.TargetID, spec.modelName, spec.policies, candidate.target.Schedulable, now)
+				decision, stateOK := s.effectiveProbeDecisionForSpec(ctx, candidate.target, spec, spec.policies, now, nil)
 				if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
 					continue
 				}
@@ -590,7 +604,7 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				if !budgetReady {
 					continue
 				}
-				decision, stateOK = s.effectiveProbeDecisionWithBudgets(ctx, candidate.target.TargetID, spec.modelName, spec.policies, candidate.target.Schedulable, now, specBudgetUsage)
+				decision, stateOK = s.effectiveProbeDecisionForSpec(ctx, candidate.target, spec, spec.policies, now, specBudgetUsage)
 				if !stateOK || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
 					continue
 				}
@@ -649,6 +663,16 @@ func (s *Service) effectiveProbeDecisionWithBudgets(ctx context.Context, targetI
 		return EffectiveProbeDecision{}, false
 	}
 	return calculateEffectiveProbeDecisionWithBudgets(policies, schedulable, state, now, budgetUsage), true
+}
+
+func (s *Service) effectiveProbeDecisionForSpec(ctx context.Context, target AdminProbeTarget, spec probeModelSpec, policies []Policy, now time.Time, budgetUsage map[string]int) (EffectiveProbeDecision, bool) {
+	state, err := s.repo.GetState(ctx, target.TargetID, spec.modelName)
+	if err != nil {
+		log.Printf("[connection-health] get state failed target_id=%s model=%s err=%v", target.TargetID, spec.modelName, err)
+		return EffectiveProbeDecision{}, false
+	}
+	reuseProbeInterval := probeDecisionCanReuseInterval(state, probeDecisionKey(target, spec))
+	return calculateEffectiveProbeDecisionWithBudgetAndReuse(policies, target.Schedulable, state, now, budgetUsage, reuseProbeInterval), true
 }
 
 func policyWithID(policies []Policy, id string) (Policy, bool) {

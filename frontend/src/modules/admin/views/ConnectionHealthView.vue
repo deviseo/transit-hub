@@ -244,12 +244,22 @@ const onSetupSaved = async () => {
   await Promise.all([loadAll({ silent: true }), loadPolicies()])
 }
 
-// 一次性手动探活：不写状态/事件，不触发远端动作。
+// 手动探活弹窗同时承载正式探活和隔离的一次性测试。
 const probeDialogOpen = ref(false)
 const probeDialogTarget = ref<ManualProbeTargetSummary | null>(null)
 
 const onProbeAccount = (account: AdminGroupAccount) => {
   if (!selectedGroup.value || !account.probeAvailable) return
+  const formalModelMap = new Map<string, { id: string; name: string; providerFamily?: string }>()
+  if (account.hasEnabledProbePolicy) {
+    for (const model of [...(account.modelHealth ?? []), ...(account.unprobedModels ?? [])]) {
+      formalModelMap.set(model.modelName, {
+        id: model.modelName,
+        name: model.modelName,
+        providerFamily: model.providerFamily,
+      })
+    }
+  }
   probeDialogTarget.value = {
     targetId: account.targetId,
     accountName: account.name || account.id,
@@ -257,8 +267,13 @@ const onProbeAccount = (account: AdminGroupAccount) => {
     type: account.type,
     status: account.status,
     groupName: selectedGroup.value.name,
+    formalModels: Array.from(formalModelMap.values()),
   }
   probeDialogOpen.value = true
+}
+
+const onFormalProbeCompleted = async () => {
+  await loadAdminGroups({ silent: true })
 }
 
 // 策略探活事件。
@@ -570,6 +585,7 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
       :open="probeDialogOpen"
       :target="probeDialogTarget"
       @close="probeDialogOpen = false"
+      @completed="onFormalProbeCompleted"
     />
 
     <ProbePolicyListDialog

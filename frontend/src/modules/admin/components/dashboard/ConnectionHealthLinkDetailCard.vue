@@ -57,6 +57,17 @@ const effectivePolicySourcesText = computed(() => props.effectivePolicySources.m
 })).join('；'))
 
 const budgetPolicyLabel = computed(() => props.effectivePolicySources.find((source) => source.policyId === props.budgetPolicyId)?.policyName || props.budgetPolicyId)
+const slowResponseCount = computed(() => props.records.filter(record => record.result === 'slow_response').length)
+
+const eventSourceLabel = (source?: string): string => {
+  const key = `${cardPrefix}.eventSources.${source || 'legacy'}`
+  return te(key) ? t(key) : (source || t(`${cardPrefix}.eventSources.legacy`))
+}
+
+const latestEventSource = computed(() => {
+  const latest = props.records[props.records.length - 1]
+  return latest ? eventSourceLabel(latest.source) : ''
+})
 
 // remoteActionText 为空字符串时模板不渲染这一行；失败/unsupported 也照常展示，不隐藏。
 const remoteActionText = computed(() => {
@@ -112,6 +123,9 @@ const remoteActionText = computed(() => {
       <p class="text-2xl font-bold text-foreground">
         {{ availabilityPct != null ? `${availabilityPct}%` : t(`${cardPrefix}.noData`) }}
       </p>
+      <p v-if="slowResponseCount > 0" class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+        {{ t(`${cardPrefix}.slowResponseCount`, { count: slowResponseCount }) }}
+      </p>
     </div>
 
     <p class="mt-3 text-xs font-medium text-foreground">{{ nextProbeText }}</p>
@@ -120,6 +134,7 @@ const remoteActionText = computed(() => {
     </p>
     <p v-if="budgetPolicyId" class="mt-1 text-xs text-muted-foreground">{{ t(`${cardPrefix}.budgetPolicy`, { policy: budgetPolicyLabel }) }}</p>
     <p v-if="actionSource" class="mt-1 text-xs text-muted-foreground">{{ t(`${cardPrefix}.actionSource`, { source: actionSourceLabel, time: formatConnectionHealthTime(actionAt) }) }}</p>
+    <p v-if="latestEventSource" class="mt-1 text-xs text-muted-foreground">{{ t(`${cardPrefix}.eventSource`, { source: latestEventSource }) }}</p>
     <p v-if="remoteActionText" class="mt-1 text-xs text-muted-foreground">{{ t(`${cardPrefix}.remoteActionLine`, { label: remoteActionText }) }}</p>
 
     <div class="mt-3">
@@ -134,7 +149,7 @@ const remoteActionText = computed(() => {
             :key="record.id"
             class="min-w-[2px] flex-1 rounded-[1px]"
             :class="connectionHealthRecordColorClass(record.result)"
-            :title="`${formatConnectionHealthTime(record.createdAt)} · ${readableMessage(record.result)}`"
+            :title="`${formatConnectionHealthTime(record.createdAt)} · ${readableMessage(record.result)} · ${eventSourceLabel(record.source)}`"
           />
         </div>
         <span class="text-[10px] text-muted-foreground">{{ t(`${cardPrefix}.now`) }}</span>

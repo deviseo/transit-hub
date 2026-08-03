@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -91,16 +92,20 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			last_probe_at timestamptz NULL,
 			last_success_at timestamptz NULL,
 			last_failure_at timestamptz NULL,
-			cooldown_until timestamptz NULL,
-			observing_until timestamptz NULL,
-			last_latency_ms integer NULL,
-			last_error_key text NOT NULL DEFAULT '',
+				cooldown_until timestamptz NULL,
+					observing_until timestamptz NULL,
+					last_latency_ms integer NULL,
+					last_success_latency_ms integer NULL,
+					last_probe_decision_key text NOT NULL DEFAULT '',
+					last_error_key text NOT NULL DEFAULT '',
 			last_error_detail text NOT NULL DEFAULT '',
 			last_remote_action text NOT NULL DEFAULT '',
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (connection_id, model_name)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_states_workspace_state ON connection_health_states (user_id, admin_account_id, state)`,
+		`ALTER TABLE connection_health_states ADD COLUMN IF NOT EXISTS last_success_latency_ms integer NULL`,
+		`ALTER TABLE connection_health_states ADD COLUMN IF NOT EXISTS last_probe_decision_key text NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_states_group ON connection_health_states (user_id, admin_account_id, own_group_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_states_site_group ON connection_health_states (upstream_site_id, upstream_group_name)`,
 
@@ -122,12 +127,14 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			error_key text NOT NULL DEFAULT '',
 			error_detail text NOT NULL DEFAULT '',
 			remote_action text NOT NULL DEFAULT '',
-			action_source text NOT NULL DEFAULT '',
-			created_at timestamptz NOT NULL DEFAULT now()
+				action_source text NOT NULL DEFAULT '',
+				source text NOT NULL DEFAULT 'legacy',
+				created_at timestamptz NOT NULL DEFAULT now()
 		)`,
 		`ALTER TABLE connection_health_events ADD COLUMN IF NOT EXISTS policy_id text NOT NULL DEFAULT ''`,
 		`ALTER TABLE connection_health_events ADD COLUMN IF NOT EXISTS admin_group_id text NOT NULL DEFAULT ''`,
 		`ALTER TABLE connection_health_events ADD COLUMN IF NOT EXISTS action_source text NOT NULL DEFAULT ''`,
+		`ALTER TABLE connection_health_events ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'legacy'`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_events_connection_created ON connection_health_events (connection_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_events_workspace_created ON connection_health_events (user_id, admin_account_id, created_at DESC)`,
 
@@ -169,6 +176,16 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			UNIQUE (user_id, admin_account_id, admin_group_id, target_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_group_exclusions_workspace_group ON connection_health_group_target_exclusions (user_id, admin_account_id, admin_group_id)`,
+
+		`CREATE TABLE IF NOT EXISTS connection_health_group_probe_sort_settings (
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL DEFAULT '',
+			admin_group_id text NOT NULL,
+			fallback_multiplier double precision NULL,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, admin_account_id, admin_group_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_connection_health_group_probe_sort_settings_workspace ON connection_health_group_probe_sort_settings (user_id, admin_account_id)`,
 
 		`CREATE TABLE IF NOT EXISTS connection_health_priority_sync_states (
 			user_id text NOT NULL,
@@ -521,9 +538,10 @@ func (r *Repository) UpsertState(ctx context.Context, s ConnectionHealthState) e
 		INSERT INTO connection_health_states (
 			connection_id, model_name, user_id, admin_account_id, own_group_id, own_group_name,
 			upstream_site_id, upstream_group_id, upstream_group_name, state, current_weight,
-			consecutive_failures, consecutive_successes, last_probe_at, last_success_at, last_failure_at,
-			cooldown_until, observing_until, last_latency_ms, last_error_key, last_error_detail, last_remote_action, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now())
+				consecutive_failures, consecutive_successes, last_probe_at, last_success_at, last_failure_at,
+				cooldown_until, observing_until, last_latency_ms, last_success_latency_ms, last_probe_decision_key,
+				last_error_key, last_error_detail, last_remote_action, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,now())
 		ON CONFLICT (connection_id, model_name) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			admin_account_id = EXCLUDED.admin_account_id,
@@ -540,8 +558,10 @@ func (r *Repository) UpsertState(ctx context.Context, s ConnectionHealthState) e
 			last_success_at = EXCLUDED.last_success_at,
 			last_failure_at = EXCLUDED.last_failure_at,
 			cooldown_until = EXCLUDED.cooldown_until,
-			observing_until = EXCLUDED.observing_until,
-			last_latency_ms = EXCLUDED.last_latency_ms,
+				observing_until = EXCLUDED.observing_until,
+				last_latency_ms = EXCLUDED.last_latency_ms,
+				last_success_latency_ms = EXCLUDED.last_success_latency_ms,
+				last_probe_decision_key = EXCLUDED.last_probe_decision_key,
 			last_error_key = EXCLUDED.last_error_key,
 			last_error_detail = EXCLUDED.last_error_detail,
 			last_remote_action = EXCLUDED.last_remote_action,
@@ -549,7 +569,8 @@ func (r *Repository) UpsertState(ctx context.Context, s ConnectionHealthState) e
 	`, s.ConnectionID, s.ModelName, s.UserID, s.AdminAccountID, s.OwnGroupID, s.OwnGroupName,
 		s.UpstreamSiteID, s.UpstreamGroupID, s.UpstreamGroupName, string(s.State), s.CurrentWeight,
 		s.ConsecutiveFailures, s.ConsecutiveSuccesses, s.LastProbeAt, s.LastSuccessAt, s.LastFailureAt,
-		s.CooldownUntil, s.ObservingUntil, s.LastLatencyMs, s.LastErrorKey, s.LastErrorDetail, s.LastRemoteAction)
+		s.CooldownUntil, s.ObservingUntil, s.LastLatencyMs, s.LastSuccessLatencyMs, s.LastProbeDecisionKey,
+		s.LastErrorKey, s.LastErrorDetail, s.LastRemoteAction)
 	return err
 }
 
@@ -558,7 +579,8 @@ func (r *Repository) GetState(ctx context.Context, connectionID string, modelNam
 		SELECT connection_id, model_name, user_id, admin_account_id, own_group_id, own_group_name,
 			upstream_site_id, upstream_group_id, upstream_group_name, state, current_weight,
 			consecutive_failures, consecutive_successes, last_probe_at, last_success_at, last_failure_at,
-			cooldown_until, observing_until, last_latency_ms, last_error_key, last_error_detail, last_remote_action, updated_at
+			cooldown_until, observing_until, last_latency_ms, last_success_latency_ms, last_probe_decision_key,
+			last_error_key, last_error_detail, last_remote_action, updated_at
 		FROM connection_health_states WHERE connection_id = $1 AND model_name = $2
 	`, connectionID, modelName)
 	return scanState(row)
@@ -570,7 +592,8 @@ func (r *Repository) ListStatesByWorkspace(ctx context.Context, userID string, a
 		SELECT connection_id, model_name, user_id, admin_account_id, own_group_id, own_group_name,
 			upstream_site_id, upstream_group_id, upstream_group_name, state, current_weight,
 			consecutive_failures, consecutive_successes, last_probe_at, last_success_at, last_failure_at,
-			cooldown_until, observing_until, last_latency_ms, last_error_key, last_error_detail, last_remote_action, updated_at
+			cooldown_until, observing_until, last_latency_ms, last_success_latency_ms, last_probe_decision_key,
+			last_error_key, last_error_detail, last_remote_action, updated_at
 		FROM connection_health_states WHERE user_id = $1 AND admin_account_id = $2
 	`, userID, adminAccountID)
 	if err != nil {
@@ -594,7 +617,8 @@ func (r *Repository) ListStatesByConnection(ctx context.Context, connectionID st
 		SELECT connection_id, model_name, user_id, admin_account_id, own_group_id, own_group_name,
 			upstream_site_id, upstream_group_id, upstream_group_name, state, current_weight,
 			consecutive_failures, consecutive_successes, last_probe_at, last_success_at, last_failure_at,
-			cooldown_until, observing_until, last_latency_ms, last_error_key, last_error_detail, last_remote_action, updated_at
+			cooldown_until, observing_until, last_latency_ms, last_success_latency_ms, last_probe_decision_key,
+			last_error_key, last_error_detail, last_remote_action, updated_at
 		FROM connection_health_states WHERE connection_id = $1
 	`, connectionID)
 	if err != nil {
@@ -618,7 +642,8 @@ func scanState(row pgx.Row) (*ConnectionHealthState, error) {
 	if err := row.Scan(&s.ConnectionID, &s.ModelName, &s.UserID, &s.AdminAccountID, &s.OwnGroupID, &s.OwnGroupName,
 		&s.UpstreamSiteID, &s.UpstreamGroupID, &s.UpstreamGroupName, &state, &s.CurrentWeight,
 		&s.ConsecutiveFailures, &s.ConsecutiveSuccesses, &s.LastProbeAt, &s.LastSuccessAt, &s.LastFailureAt,
-		&s.CooldownUntil, &s.ObservingUntil, &s.LastLatencyMs, &s.LastErrorKey, &s.LastErrorDetail, &s.LastRemoteAction, &s.UpdatedAt); err != nil {
+		&s.CooldownUntil, &s.ObservingUntil, &s.LastLatencyMs, &s.LastSuccessLatencyMs, &s.LastProbeDecisionKey,
+		&s.LastErrorKey, &s.LastErrorDetail, &s.LastRemoteAction, &s.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -634,7 +659,8 @@ func scanStateRow(row rowScanner) (*ConnectionHealthState, error) {
 	if err := row.Scan(&s.ConnectionID, &s.ModelName, &s.UserID, &s.AdminAccountID, &s.OwnGroupID, &s.OwnGroupName,
 		&s.UpstreamSiteID, &s.UpstreamGroupID, &s.UpstreamGroupName, &state, &s.CurrentWeight,
 		&s.ConsecutiveFailures, &s.ConsecutiveSuccesses, &s.LastProbeAt, &s.LastSuccessAt, &s.LastFailureAt,
-		&s.CooldownUntil, &s.ObservingUntil, &s.LastLatencyMs, &s.LastErrorKey, &s.LastErrorDetail, &s.LastRemoteAction, &s.UpdatedAt); err != nil {
+		&s.CooldownUntil, &s.ObservingUntil, &s.LastLatencyMs, &s.LastSuccessLatencyMs, &s.LastProbeDecisionKey,
+		&s.LastErrorKey, &s.LastErrorDetail, &s.LastRemoteAction, &s.UpdatedAt); err != nil {
 		return nil, err
 	}
 	s.State = State(state)
@@ -647,11 +673,11 @@ func (r *Repository) InsertEvent(ctx context.Context, e ConnectionHealthEvent) e
 		INSERT INTO connection_health_events (
 			id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now())
 	`, e.ID, e.ConnectionID, e.ModelName, e.UserID, e.AdminAccountID, e.PolicyID, e.AdminGroupID, e.OwnGroupName,
 		e.UpstreamSiteID, e.UpstreamGroupName, e.Result, e.FromState, e.ToState,
-		e.LatencyMs, e.ErrorKey, e.ErrorDetail, e.RemoteAction, e.ActionSource)
+		e.LatencyMs, e.ErrorKey, e.ErrorDetail, e.RemoteAction, e.ActionSource, e.Source)
 	return err
 }
 
@@ -665,7 +691,7 @@ func (r *Repository) ListEventsByConnection(ctx context.Context, connectionID st
 	rows, err := r.db.Query(ctx, `
 		SELECT id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 		FROM connection_health_events WHERE connection_id = $1 AND user_id = $2 AND admin_account_id = $3 ORDER BY created_at DESC LIMIT $4
 	`, connectionID, userID, adminAccountID, limit)
 	if err != nil {
@@ -683,7 +709,7 @@ func (r *Repository) ListRecentEventsByWorkspace(ctx context.Context, userID str
 	rows, err := r.db.Query(ctx, `
 		SELECT id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 		FROM connection_health_events WHERE user_id = $1 AND admin_account_id = $2 ORDER BY created_at DESC LIMIT $3
 	`, userID, adminAccountID, limit)
 	if err != nil {
@@ -700,12 +726,12 @@ func (r *Repository) ListLatestProbeFailureEventsByWorkspace(ctx context.Context
 	rows, err := r.db.Query(ctx, `
 		SELECT id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 		FROM (
 			SELECT DISTINCT ON (connection_id, model_name)
 				id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 				upstream_site_id, upstream_group_name, result, from_state, to_state,
-				latency_ms, error_key, error_detail, remote_action, action_source, created_at
+				latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 			FROM connection_health_events
 			WHERE user_id = $1 AND admin_account_id = $2 AND result = ANY($3)
 			ORDER BY connection_id, model_name, created_at DESC
@@ -725,12 +751,12 @@ func (r *Repository) ListLatestSchedulableActionEventsByWorkspace(ctx context.Co
 	rows, err := r.db.Query(ctx, `
 		SELECT id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 		FROM (
 			SELECT DISTINCT ON (connection_id)
 				id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 				upstream_site_id, upstream_group_name, result, from_state, to_state,
-				latency_ms, error_key, error_detail, remote_action, action_source, created_at
+					latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 			FROM connection_health_events
 				WHERE user_id = $1 AND admin_account_id = $2
 					AND action_source = $3
@@ -752,12 +778,12 @@ func (r *Repository) ListLatestSuccessfulSchedulableActionEventsByWorkspace(ctx 
 	rows, err := r.db.Query(ctx, `
 		SELECT id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 			upstream_site_id, upstream_group_name, result, from_state, to_state,
-			latency_ms, error_key, error_detail, remote_action, action_source, created_at
+			latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 		FROM (
 			SELECT DISTINCT ON (connection_id)
 				id, connection_id, model_name, user_id, admin_account_id, policy_id, admin_group_id, own_group_name,
 				upstream_site_id, upstream_group_name, result, from_state, to_state,
-				latency_ms, error_key, error_detail, remote_action, action_source, created_at
+					latency_ms, error_key, error_detail, remote_action, action_source, source, created_at
 			FROM connection_health_events
 			WHERE user_id = $1 AND admin_account_id = $2
 				AND action_source = $3 AND result = $4
@@ -794,8 +820,8 @@ func (r *Repository) CountProbesToday(ctx context.Context, userID string, adminA
 	row := r.db.QueryRow(ctx, `
 		SELECT GREATEST(
 			(SELECT count(*) FROM connection_health_events
-			 WHERE user_id = $1 AND admin_account_id = $2 AND policy_id = $3 AND created_at >= $4
-			   AND result = ANY($5)),
+				WHERE user_id = $1 AND admin_account_id = $2 AND policy_id = $3 AND created_at >= $4
+				  AND result = ANY($5) AND source <> 'manual'),
 			COALESCE((SELECT used FROM connection_health_probe_budget_usage
 			          WHERE user_id = $1 AND admin_account_id = $2 AND policy_id = $3 AND day_start = $4), 0)
 		)
@@ -824,8 +850,8 @@ func (r *Repository) TryConsumeProbeBudget(ctx context.Context, userID string, a
 		)
 		SELECT $1, $2, $3, $4, count(*)::integer, now()
 		FROM connection_health_events
-		WHERE user_id = $1 AND admin_account_id = $2 AND policy_id = $3 AND created_at >= $4
-			AND result = ANY($5)
+			WHERE user_id = $1 AND admin_account_id = $2 AND policy_id = $3 AND created_at >= $4
+				AND result = ANY($5) AND source <> 'manual'
 		ON CONFLICT (user_id, admin_account_id, policy_id, day_start) DO NOTHING
 	`, userID, adminAccountID, policyID, dayStart, probeResultKeys()); err != nil {
 		return false, err
@@ -859,6 +885,17 @@ func (r *Repository) TryAcquireSchedulerLease(ctx context.Context) (func(), bool
 
 func (r *Repository) AcquireTargetLease(ctx context.Context, targetID string) (func(), error) {
 	release, _, err := r.acquireRuntimeLease(ctx, "connection-health:target:"+targetID, true)
+	return release, err
+}
+
+func (r *Repository) TryAcquireTargetLease(ctx context.Context, targetID string) (func(), bool, error) {
+	return r.acquireRuntimeLease(ctx, "connection-health:target:"+targetID, false)
+}
+
+func (r *Repository) AcquirePrioritySyncLease(ctx context.Context, userID string, adminAccountID string) (func(), error) {
+	// userID 使用长度前缀分隔，避免包含冒号的标识组合出相同租约键。
+	key := "connection-health:priority-sync:" + strconv.Itoa(len(userID)) + ":" + userID + adminAccountID
+	release, _, err := r.acquireRuntimeLease(ctx, key, true)
 	return release, err
 }
 
@@ -948,7 +985,7 @@ func (r *Repository) acquireRuntimeLease(ctx context.Context, key string, wait b
 }
 
 func probeResultKeys() []string {
-	return append([]string{string(ResultOK)}, probeFailureResultKeys()...)
+	return append([]string{string(ResultOK), string(ResultSlowResponse)}, probeFailureResultKeys()...)
 }
 
 func probeFailureResultKeys() []string {
@@ -964,7 +1001,7 @@ func scanEvents(rows pgx.Rows) ([]ConnectionHealthEvent, error) {
 		var e ConnectionHealthEvent
 		if err := rows.Scan(&e.ID, &e.ConnectionID, &e.ModelName, &e.UserID, &e.AdminAccountID, &e.PolicyID, &e.AdminGroupID, &e.OwnGroupName,
 			&e.UpstreamSiteID, &e.UpstreamGroupName, &e.Result, &e.FromState, &e.ToState,
-			&e.LatencyMs, &e.ErrorKey, &e.ErrorDetail, &e.RemoteAction, &e.ActionSource, &e.CreatedAt); err != nil {
+			&e.LatencyMs, &e.ErrorKey, &e.ErrorDetail, &e.RemoteAction, &e.ActionSource, &e.Source, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		events = append(events, e)
@@ -1056,13 +1093,13 @@ func scanPolicyAssignments(rows pgx.Rows) ([]PolicyAssignment, error) {
 
 // ReplaceGroupPolicyConfiguration 原子替换一个 admin 分组的策略列表和目标排除列表。分组级
 // 配置独立于旧 target 分配表，清空分组配置不会删除任何旧版逐目标分配。
-func (r *Repository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+func (r *Repository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := replaceGroupPolicyConfigurationTx(ctx, tx, userID, adminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs); err != nil {
+	if err := replaceGroupPolicyConfigurationTx(ctx, tx, userID, adminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs, fallbackMultiplier); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -1070,7 +1107,7 @@ func (r *Repository) ReplaceGroupPolicyConfiguration(ctx context.Context, userID
 
 // CreatePolicyAndReplaceGroupConfiguration 在一个事务里创建向导策略、模型目标和分组绑定。
 // 任意一步失败都会整体回滚，避免线上留下无法从向导继续使用的孤立策略。
-func (r *Repository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+func (r *Repository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -1101,13 +1138,13 @@ func (r *Repository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Contex
 			return err
 		}
 	}
-	if err := replaceGroupPolicyConfigurationTx(ctx, tx, policy.UserID, policy.AdminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs); err != nil {
+	if err := replaceGroupPolicyConfigurationTx(ctx, tx, policy.UserID, policy.AdminAccountID, adminGroupID, adminGroupName, policyIDs, excludedTargetIDs, groupTargetIDs, fallbackMultiplier); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 
-func replaceGroupPolicyConfigurationTx(ctx context.Context, tx pgx.Tx, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error {
+func replaceGroupPolicyConfigurationTx(ctx context.Context, tx pgx.Tx, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error {
 
 	if _, err := tx.Exec(ctx, `
 		DELETE FROM connection_health_group_policy_assignments
@@ -1119,6 +1156,16 @@ func replaceGroupPolicyConfigurationTx(ctx context.Context, tx pgx.Tx, userID st
 		DELETE FROM connection_health_group_target_exclusions
 		WHERE user_id = $1 AND admin_account_id = $2 AND admin_group_id = $3
 	`, userID, adminAccountID, adminGroupID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO connection_health_group_probe_sort_settings
+			(user_id, admin_account_id, admin_group_id, fallback_multiplier, updated_at)
+		VALUES ($1,$2,$3,$4,now())
+		ON CONFLICT (user_id, admin_account_id, admin_group_id) DO UPDATE SET
+			fallback_multiplier = EXCLUDED.fallback_multiplier,
+			updated_at = now()
+	`, userID, adminAccountID, adminGroupID, fallbackMultiplier); err != nil {
 		return err
 	}
 
@@ -1167,6 +1214,27 @@ func replaceGroupPolicyConfigurationTx(ctx context.Context, tx pgx.Tx, userID st
 		}
 	}
 	return nil
+}
+
+func (r *Repository) ListGroupProbeSortSettings(ctx context.Context, userID string, adminAccountID string) ([]GroupProbeSortSetting, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, admin_account_id, admin_group_id, fallback_multiplier, updated_at
+		FROM connection_health_group_probe_sort_settings
+		WHERE user_id = $1 AND admin_account_id = $2
+	`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	settings := make([]GroupProbeSortSetting, 0)
+	for rows.Next() {
+		var setting GroupProbeSortSetting
+		if err := rows.Scan(&setting.UserID, &setting.AdminAccountID, &setting.AdminGroupID, &setting.FallbackMultiplier, &setting.UpdatedAt); err != nil {
+			return nil, err
+		}
+		settings = append(settings, setting)
+	}
+	return settings, rows.Err()
 }
 
 func (r *Repository) ListGroupPolicyAssignmentsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupPolicyAssignment, error) {

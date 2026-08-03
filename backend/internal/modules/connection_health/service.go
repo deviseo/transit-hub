@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"transithub/backend/internal/modules/my_sites"
@@ -32,17 +33,20 @@ type healthRepository interface {
 	TryConsumeProbeBudget(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time, limit int) (bool, error)
 	TryAcquireSchedulerLease(ctx context.Context) (release func(), acquired bool, err error)
 	AcquireTargetLease(ctx context.Context, targetID string) (release func(), err error)
+	TryAcquireTargetLease(ctx context.Context, targetID string) (release func(), acquired bool, err error)
+	AcquirePrioritySyncLease(ctx context.Context, userID string, adminAccountID string) (release func(), err error)
 	ListEnabledPolicies(ctx context.Context) ([]Policy, error)
 	ReplacePolicyAssignments(ctx context.Context, userID string, adminAccountID string, targetID string, policyIDs []string) error
 	ListPolicyAssignmentsForTarget(ctx context.Context, userID string, adminAccountID string, targetID string) ([]PolicyAssignment, error)
 	ListPolicyAssignmentsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]PolicyAssignment, error)
 	ListAllPolicyAssignments(ctx context.Context) ([]PolicyAssignment, error)
-	ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error
-	CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string) error
+	ReplaceGroupPolicyConfiguration(ctx context.Context, userID string, adminAccountID string, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error
+	CreatePolicyAndReplaceGroupConfiguration(ctx context.Context, policy Policy, targets []ModelTarget, adminGroupID string, adminGroupName string, policyIDs []string, excludedTargetIDs []string, groupTargetIDs []string, fallbackMultiplier *float64) error
 	ListGroupPolicyAssignmentsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupPolicyAssignment, error)
 	ListAllGroupPolicyAssignments(ctx context.Context) ([]GroupPolicyAssignment, error)
 	ListGroupTargetExclusionsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]GroupTargetExclusion, error)
 	ListAllGroupTargetExclusions(ctx context.Context) ([]GroupTargetExclusion, error)
+	ListGroupProbeSortSettings(ctx context.Context, userID string, adminAccountID string) ([]GroupProbeSortSetting, error)
 	ListPrioritySyncStates(ctx context.Context, userID string, adminAccountID string) ([]PrioritySyncState, error)
 	ListAllPrioritySyncStates(ctx context.Context) ([]PrioritySyncState, error)
 	UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error
@@ -68,6 +72,8 @@ type Service struct {
 	platformGroups     PlatformGroupReader
 	priorityActions    TargetPriorityActioner
 	schedulableActions TargetSchedulableActioner
+	probeLimiterMu     sync.Mutex
+	probeLimiter       *probeConcurrencyLimiter
 }
 
 func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platform PlatformActioner) *Service {
@@ -78,6 +84,7 @@ func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platf
 		dispatcher:     newRemoteActionDispatcher(sites, mySites, platform),
 		probeRunner:    NewRealProbeRunner(),
 		modelDiscovery: NewModelDiscoveryRunner(),
+		probeLimiter:   newProbeConcurrencyLimiter(globalProbeConcurrency, perSiteProbeConcurrency),
 	}
 	// 真实 PlatformService 同时实现优先级更新能力；测试或旧注入器如果尚未实现，倍率策略会
 	// 安全跳过远端写入，不影响既有探活/降级流程。
@@ -118,9 +125,11 @@ type ModelHealth struct {
 	LastSuccessAt            *time.Time                   `json:"lastSuccessAt"`
 	LastFailureAt            *time.Time                   `json:"lastFailureAt"`
 	LastLatencyMs            *int                         `json:"lastLatencyMs"`
+	LastSuccessLatencyMs     *int                         `json:"lastSuccessLatencyMs"`
 	LastErrorKey             string                       `json:"lastErrorKey"`
 	LastErrorDetail          string                       `json:"lastErrorDetail"`
 	LastRemoteAction         string                       `json:"lastRemoteAction"`
+	ProbeResult              string                       `json:"probeResult,omitempty"`
 	ElapsedSeconds           *int64                       `json:"elapsedSeconds,omitempty"`
 	NextProbeAt              *time.Time                   `json:"nextProbeAt,omitempty"`
 	BlockedReason            string                       `json:"blockedReason,omitempty"`
@@ -167,6 +176,7 @@ type EventView struct {
 	ErrorDetail       string    `json:"errorDetail"`
 	RemoteAction      string    `json:"remoteAction"`
 	ActionSource      string    `json:"actionSource"`
+	Source            string    `json:"source"`
 	CreatedAt         time.Time `json:"createdAt"`
 }
 
@@ -359,6 +369,7 @@ func toModelHealth(modelName string, st ConnectionHealthState) ModelHealth {
 		LastSuccessAt:        utcTimePointer(st.LastSuccessAt),
 		LastFailureAt:        utcTimePointer(st.LastFailureAt),
 		LastLatencyMs:        st.LastLatencyMs,
+		LastSuccessLatencyMs: st.LastSuccessLatencyMs,
 		LastErrorKey:         st.LastErrorKey,
 		LastErrorDetail:      st.LastErrorDetail,
 		LastRemoteAction:     st.LastRemoteAction,
@@ -639,7 +650,8 @@ func toEventViews(events []ConnectionHealthEvent) []EventView {
 			ID: e.ID, ConnectionID: e.ConnectionID, ModelName: e.ModelName, OwnGroupName: e.OwnGroupName,
 			UpstreamSiteID: e.UpstreamSiteID, UpstreamGroupName: e.UpstreamGroupName, Result: e.Result,
 			FromState: e.FromState, ToState: e.ToState, LatencyMs: e.LatencyMs, ErrorKey: e.ErrorKey,
-			ErrorDetail: e.ErrorDetail, RemoteAction: e.RemoteAction, ActionSource: e.ActionSource, CreatedAt: e.CreatedAt.UTC(),
+			ErrorDetail: e.ErrorDetail, RemoteAction: e.RemoteAction, ActionSource: e.ActionSource,
+			Source: e.Source, CreatedAt: e.CreatedAt.UTC(),
 		})
 	}
 	return views
@@ -845,8 +857,8 @@ type ProbeConnectionInput struct {
 	Models []string `json:"models"`
 }
 
-// ProbeConnection 手动触发一次真实探活：对该连接匹配到的全部（或 input.Models 指定的）
-// 启用策略/模型目标逐一探活，立即执行，不受 60s 调度间隔和失败退避限制，但仍计入每日探活预算。
+// ProbeConnection 是旧连接维度入口的兼容一次性测试。它保留原有模型过滤和返回结构，
+// 但不再进入状态机、预算、事件或远端动作，避免成为绕过 Q 正式 target 探活门禁的旁路。
 func (s *Service) ProbeConnection(ctx context.Context, userID string, connectionID string, input ProbeConnectionInput) ([]ModelHealth, error) {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
@@ -894,15 +906,32 @@ func (s *Service) ProbeConnection(ctx context.Context, userID string, connection
 	if len(targets) == 0 {
 		return []ModelHealth{}, nil
 	}
+	site, err := s.sites.GetSite(ctx, conn.UpstreamSiteID)
+	if err != nil {
+		return nil, err
+	}
+	if site == nil {
+		return nil, requestError(ErrorNotFound)
+	}
 
 	results := make([]ModelHealth, 0, len(targets))
 	for _, mt := range targets {
-		st, probeErr := s.probeOnce(ctx, *conn, mt.policy, mt.target)
-		if probeErr != nil {
-			log.Printf("[connection-health] manual probe failed connection_id=%s model=%s err=%v", connectionID, mt.target.ModelName, probeErr)
-			continue
+		outcome := s.probeRunner.Probe(ctx, ProbeRequest{
+			BaseURL: site.BaseURL, UpstreamKey: conn.UpstreamKey, ProviderFamily: mt.target.ProviderFamily,
+			ModelName: mt.target.ModelName, MaxTokens: mt.target.MaxProbeTokens, ProbePrompt: mt.target.ProbePrompt,
+		})
+		latencyMs := outcome.LatencyMs
+		probedAt := time.Now().UTC()
+		model := ModelHealth{
+			ModelName: mt.target.ModelName, ProviderFamily: mt.target.ProviderFamily, Configured: true,
+			State: StateHealthy, CurrentWeight: 100, ProbeResult: string(outcome.Result),
+			LastLatencyMs: &latencyMs, UpdatedAt: &probedAt,
 		}
-		results = append(results, toModelHealth(mt.target.ModelName, *st))
+		if outcome.Result != ResultOK && outcome.Result != ResultSlowResponse {
+			model.LastErrorKey = string(outcome.Result)
+			model.LastErrorDetail = outcome.Detail
+		}
+		results = append(results, model)
 	}
 	return results, nil
 }
@@ -947,7 +976,7 @@ func (s *Service) DisableConnection(ctx context.Context, userID string, connecti
 		if err := s.repo.UpsertState(ctx, st); err != nil {
 			return err
 		}
-		s.recordEvent(ctx, *conn, "", st.ModelName, "manual_disable", string(fromState), string(StateDisabled), nil, "", "", remoteAction)
+		s.recordEvent(ctx, *conn, "", st.ModelName, "manual_disable", string(fromState), string(StateDisabled), nil, "", "", remoteAction, EventSourceManual)
 	}
 	return nil
 }
@@ -995,7 +1024,7 @@ func (s *Service) RestoreConnection(ctx context.Context, userID string, connecti
 		if err := s.repo.UpsertState(ctx, st); err != nil {
 			return err
 		}
-		s.recordEvent(ctx, *conn, "", st.ModelName, "manual_restore", string(fromState), string(StateObserving), nil, "", "", remoteAction)
+		s.recordEvent(ctx, *conn, "", st.ModelName, "manual_restore", string(fromState), string(StateObserving), nil, "", "", remoteAction, EventSourceManual)
 	}
 	return nil
 }
@@ -1033,43 +1062,12 @@ func (s *Service) probeOnce(ctx context.Context, conn my_sites.RealConnection, p
 	})
 
 	now := time.Now()
-	transitionOut := Transition(TransitionInput{
-		Current: current.State, CurrentWeight: current.CurrentWeight, ConsecutiveFailures: current.ConsecutiveFailures,
-		ConsecutiveSuccesses: current.ConsecutiveSuccesses, ObservingUntil: current.ObservingUntil, Now: now,
-		Result: outcome.Result, Policy: policy,
-	})
-	if !policy.AutoDegradeEnabled {
-		// 自动降级关闭：只记录探活结果，状态机不推进，也不触发远端动作。
-		transitionOut = TransitionOutput{
-			NextState: current.State, Weight: current.CurrentWeight,
-			ConsecutiveFailures: transitionOut.ConsecutiveFailures, ConsecutiveSuccesses: transitionOut.ConsecutiveSuccesses,
-		}
-	}
-
-	next := *current
-	next.State = transitionOut.NextState
-	next.CurrentWeight = transitionOut.Weight
-	next.ConsecutiveFailures = transitionOut.ConsecutiveFailures
-	next.ConsecutiveSuccesses = transitionOut.ConsecutiveSuccesses
-	next.CooldownUntil = transitionOut.CooldownUntil
-	next.ObservingUntil = transitionOut.ObservingUntil
-	next.LastProbeAt = &now
+	next, transitionOut := applyProbeOutcome(*current, outcome, policy, now)
 	latencyMs := outcome.LatencyMs
-	next.LastLatencyMs = &latencyMs
 	next.UserID = policy.UserID
 	next.AdminAccountID = policy.AdminAccountID
 	next.OwnGroupID = policy.OwnGroupID
 	next.OwnGroupName = policy.OwnGroupName
-
-	if outcome.Result == ResultOK {
-		next.LastSuccessAt = &now
-		next.LastErrorKey = ""
-		next.LastErrorDetail = ""
-	} else {
-		next.LastFailureAt = &now
-		next.LastErrorKey = string(outcome.Result)
-		next.LastErrorDetail = outcome.Detail
-	}
 
 	remoteAction := ""
 	if policy.AutoRemoteActionEnabled {
@@ -1092,7 +1090,7 @@ func (s *Service) probeOnce(ctx context.Context, conn my_sites.RealConnection, p
 	if err := s.repo.UpsertState(ctx, next); err != nil {
 		return nil, err
 	}
-	s.recordEvent(ctx, conn, policy.ID, target.ModelName, string(outcome.Result), string(current.State), string(next.State), &latencyMs, next.LastErrorKey, next.LastErrorDetail, remoteAction)
+	s.recordEvent(ctx, conn, policy.ID, target.ModelName, string(outcome.Result), string(current.State), string(next.State), &latencyMs, next.LastErrorKey, next.LastErrorDetail, remoteAction, EventSourceScheduled)
 
 	return &next, nil
 }
@@ -1118,7 +1116,7 @@ func (s *Service) defaultState(conn my_sites.RealConnection, modelName string) C
 	}
 }
 
-func (s *Service) recordEvent(ctx context.Context, conn my_sites.RealConnection, policyID string, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string) {
+func (s *Service) recordEvent(ctx context.Context, conn my_sites.RealConnection, policyID string, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string, source string) {
 	id, err := newID()
 	if err != nil {
 		log.Printf("[connection-health] generate event id failed: %v", err)
@@ -1128,6 +1126,7 @@ func (s *Service) recordEvent(ctx context.Context, conn my_sites.RealConnection,
 		ID: id, ConnectionID: conn.ID, ModelName: modelName, UserID: conn.UserID, AdminAccountID: conn.WorkspaceAdminAccountID, PolicyID: policyID,
 		UpstreamSiteID: conn.UpstreamSiteID, UpstreamGroupName: conn.UpstreamGroupName, Result: result,
 		FromState: fromState, ToState: toState, LatencyMs: latencyMs, ErrorKey: errorKey, ErrorDetail: errorDetail, RemoteAction: remoteAction,
+		Source: source,
 	}
 	if err := s.repo.InsertEvent(ctx, event); err != nil {
 		log.Printf("[connection-health] insert event failed connection_id=%s err=%v", conn.ID, err)

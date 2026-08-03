@@ -32,6 +32,11 @@ const (
 	ErrorExportUnavailable          = "admin.connectionHealth.errors.exportUnavailable"
 	ErrorCredentialsRedacted        = "admin.connectionHealth.errors.credentialsRedacted"
 	ErrorProbeTargetNotFound        = "admin.connectionHealth.errors.targetNotFound"
+	ErrorProbeBlockedHealthDisabled = "admin.connectionHealth.errors.probeBlockedHealthDisabled"
+	ErrorProbeBlockedCooldown       = "admin.connectionHealth.errors.probeBlockedCooldown"
+	ErrorProbeBlockedFailureBackoff = "admin.connectionHealth.errors.probeBlockedFailureBackoff"
+	ErrorProbeConcurrencyLimited    = "admin.connectionHealth.errors.probeConcurrencyLimited"
+	ErrorProbeTargetLeaseBusy       = "admin.connectionHealth.errors.probeTargetLeaseBusy"
 )
 
 // AdminProbeTarget 是平台中性的独立探活目标：一个 admin 分组下的账号(sub2api)/渠道(new-api)。
@@ -310,25 +315,37 @@ func (s *Service) resolveManualTarget(ctx context.Context, userID string, target
 // 不可探活时返回结构化 requestError（credential_unavailable / secure_verification_required /
 // base_url_unavailable / model_unavailable 等对应的 i18n key）。
 //
-// 注意：这是旧的「策略候选池」手动探活路径，会写入 connection_health_states/events。
-// 新账号弹窗的一次性手动探活已改用 ManualProbeTarget（见 manual_probe.go），不写状态/事件。
-// 本接口继续保留只为兼容可能存在的旧调用方。
+// 这是正式手动探活路径：只允许当前目标实际生效的策略模型，写入统一健康状态和 manual 事件，
+// 但不消耗自动探活预算。一次性隔离测试使用 ManualProbeTarget（见 manual_probe.go）。
 func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID string, models []string) ([]ModelHealth, error) {
-	session, target, account, adminAccountID, err := s.resolveManualTarget(ctx, userID, targetID)
+	session, target, _, adminAccountID, err := s.resolveManualTarget(ctx, userID, targetID)
 	if err != nil {
 		return nil, err
 	}
-	release, err := s.repo.AcquireTargetLease(ctx, targetID)
+	release, acquired, err := s.repo.TryAcquireTargetLease(ctx, targetID)
 	if err != nil {
 		return nil, err
+	}
+	if !acquired {
+		return nil, requestError(ErrorProbeTargetLeaseBusy)
 	}
 	defer release()
 
-	policies, err := s.repo.ListPolicies(ctx, userID, adminAccountID)
+	// Re-read the target and its memberships under the same lease used by the scheduler.
+	target, account, memberships, found, accountsReadError, err := s.findAdminTargetWithMemberships(ctx, session, adminAccountID, target.AccountID)
 	if err != nil {
 		return nil, err
 	}
-	allSpecs := candidateModelSpecs(target.Models, policies)
+	if !found || target.TargetID != targetID {
+		if accountsReadError {
+			return nil, requestError(ErrorAccountsFetch)
+		}
+		return nil, requestError(ErrorProbeTargetNotFound)
+	}
+	allSpecs, _, policyOK := s.currentScheduledProbeSpecs(ctx, userID, adminAccountID, target, memberships, nil)
+	if !policyOK {
+		return nil, requestError(ErrorUnknown)
+	}
 	specs := allSpecs
 
 	// 按请求的 models 过滤（语义与 ProbeConnection 一致）：显式指定但一个都没命中 -> 明确拒绝。
@@ -356,8 +373,26 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	}
 
 	if len(specs) == 0 {
-		return nil, requestError(ErrorModelUnavailable)
+		return nil, requestError(ErrorNoMatchingModels)
 	}
+
+	now := time.Now()
+	for _, spec := range specs {
+		current, stateErr := s.repo.GetState(ctx, target.TargetID, spec.modelName)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		if blocked := formalProbeBlockedError(current, now); blocked != "" {
+			return nil, requestError(blocked)
+		}
+	}
+
+	workspaceKey := userID + "|" + adminAccountID
+	releaseSlot, acquired := s.sharedProbeLimiter().acquire(ctx, workspaceKey, false)
+	if !acquired {
+		return nil, requestError(ErrorProbeConcurrencyLimited)
+	}
+	defer releaseSlot()
 
 	// 解析凭据（server-only，明文只在内存短暂存在）。失败 -> 结构化不可探活错误。
 	cred, err := s.platformGroups.ResolveProbeCredential(session, account)
@@ -368,20 +403,42 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	results := make([]ModelHealth, 0, len(specs))
 	probeResults := make([]targetProbeResult, 0, len(specs))
 	for _, spec := range specs {
-		result, probeErr := s.probeTargetOnce(ctx, userID, adminAccountID, target, cred, spec)
+		result, probeErr := s.probeTargetOnce(ctx, userID, adminAccountID, target, cred, spec, false)
 		if probeErr != nil {
-			log.Printf("[connection-health] manual target probe failed target_id=%s model=%s err=%v", target.TargetID, spec.modelName, probeErr)
-			continue
+			return nil, probeErr
 		}
 		if result != nil {
 			probeResults = append(probeResults, *result)
 		}
 	}
-	s.finishTargetProbeBatch(ctx, userID, adminAccountID, session, target, allSpecs, probeResults)
+	if err := s.finishTargetProbeBatch(ctx, userID, adminAccountID, session, target, allSpecs, probeResults, EventSourceManual); err != nil {
+		return nil, err
+	}
+	if len(probeResults) > 0 {
+		s.syncCurrentWorkspacePriorities(ctx, userID, adminAccountID)
+	}
 	for _, result := range probeResults {
-		results = append(results, toModelHealth(result.spec.modelName, *result.state))
+		modelHealth := toModelHealth(result.spec.modelName, *result.state)
+		modelHealth.ProbeResult = string(result.outcome.Result)
+		results = append(results, modelHealth)
 	}
 	return results, nil
+}
+
+func formalProbeBlockedError(state *ConnectionHealthState, now time.Time) string {
+	if state == nil {
+		return ""
+	}
+	if state.State == StateDisabled {
+		return ErrorProbeBlockedHealthDisabled
+	}
+	if state.CooldownUntil != nil && state.CooldownUntil.After(now) {
+		return ErrorProbeBlockedCooldown
+	}
+	if state.LastProbeAt != nil && state.ConsecutiveFailures > 0 && state.LastProbeAt.Add(ProbeBackoff(state.ConsecutiveFailures)).After(now) {
+		return ErrorProbeBlockedFailureBackoff
+	}
+	return ""
 }
 
 // findAdminTarget 在当前 workspace 的 admin 分组/账号里按 accountID 找到目标，并构造 AdminProbeTarget。
@@ -446,7 +503,7 @@ func (s *Service) findAdminTargetWithMemberships(ctx context.Context, session up
 // session 来自调用方（ProbeTarget 的 resolveManualTarget / 调度器 job 的 RequireSession），
 // 不信任前端传入的任何 platform/account 信息。
 // 每日探活预算耗尽时跳过真实请求，只保留当前状态。
-func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, cred upstream.ProbeCredential, spec probeModelSpec) (*targetProbeResult, error) {
+func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, cred upstream.ProbeCredential, spec probeModelSpec, consumeBudget bool) (*targetProbeResult, error) {
 	current, err := s.repo.GetState(ctx, target.TargetID, spec.modelName)
 	if err != nil {
 		return nil, err
@@ -456,59 +513,24 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 		current = &defaultState
 	}
 
-	dayStart := probeBudgetDayStart(time.Now())
-	budgetPolicy := spec.effectiveBudgetPolicy()
-	allowed, err := s.repo.TryConsumeProbeBudget(ctx, userID, adminAccountID, budgetPolicy.ID, dayStart, probeBudgetLimit(budgetPolicy))
-	if err != nil {
-		return nil, err
-	}
-	if !allowed {
-		return nil, nil
-	}
-
-	providerFamily := spec.providerFamily
-	if providerFamily == "" {
-		providerFamily = target.ProviderFamily
-	}
-	outcome := s.probeRunner.Probe(ctx, ProbeRequest{
-		BaseURL: cred.BaseURL, UpstreamKey: cred.Key, ProviderFamily: providerFamily,
-		ModelName: spec.modelName, MaxTokens: spec.maxProbeTokens, ProbePrompt: spec.probePrompt,
-	})
-
-	now := time.Now()
-	transitionOut := Transition(TransitionInput{
-		Current: current.State, CurrentWeight: current.CurrentWeight, ConsecutiveFailures: current.ConsecutiveFailures,
-		ConsecutiveSuccesses: current.ConsecutiveSuccesses, ObservingUntil: current.ObservingUntil, Now: now,
-		Result: outcome.Result, Policy: spec.policy,
-	})
-	if !spec.policy.AutoDegradeEnabled {
-		// 自动降级关闭：只记录探活结果，状态机不推进。
-		transitionOut = TransitionOutput{
-			NextState: current.State, Weight: current.CurrentWeight,
-			ConsecutiveFailures: transitionOut.ConsecutiveFailures, ConsecutiveSuccesses: transitionOut.ConsecutiveSuccesses,
+	if consumeBudget {
+		dayStart := probeBudgetDayStart(time.Now())
+		budgetPolicy := spec.effectiveBudgetPolicy()
+		allowed, err := s.repo.TryConsumeProbeBudget(ctx, userID, adminAccountID, budgetPolicy.ID, dayStart, probeBudgetLimit(budgetPolicy))
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, nil
 		}
 	}
 
-	next := *current
-	next.State = transitionOut.NextState
-	next.CurrentWeight = transitionOut.Weight
-	next.ConsecutiveFailures = transitionOut.ConsecutiveFailures
-	next.ConsecutiveSuccesses = transitionOut.ConsecutiveSuccesses
-	next.CooldownUntil = transitionOut.CooldownUntil
-	next.ObservingUntil = transitionOut.ObservingUntil
-	next.LastProbeAt = &now
-	latencyMs := outcome.LatencyMs
-	next.LastLatencyMs = &latencyMs
+	outcome := s.executeTargetProbe(ctx, target, cred, spec)
 
-	if outcome.Result == ResultOK {
-		next.LastSuccessAt = &now
-		next.LastErrorKey = ""
-		next.LastErrorDetail = ""
-	} else {
-		next.LastFailureAt = &now
-		next.LastErrorKey = string(outcome.Result)
-		next.LastErrorDetail = outcome.Detail
-	}
+	now := time.Now()
+	next, transitionOut := applyProbeOutcome(*current, outcome, spec.policy, now)
+	next.LastProbeDecisionKey = probeDecisionKey(target, spec)
+	latencyMs := outcome.LatencyMs
 
 	if err := s.repo.UpsertState(ctx, next); err != nil {
 		return nil, err
@@ -517,6 +539,17 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 		state: &next, previousState: current.State, outcome: outcome, latencyMs: latencyMs, spec: spec,
 		triggeredRemote: transitionOut.TriggerRemoteDegrade || transitionOut.TriggerRemoteRestore,
 	}, nil
+}
+
+func (s *Service) executeTargetProbe(ctx context.Context, target AdminProbeTarget, cred upstream.ProbeCredential, spec probeModelSpec) ProbeOutcome {
+	providerFamily := spec.providerFamily
+	if providerFamily == "" {
+		providerFamily = target.ProviderFamily
+	}
+	return s.probeRunner.Probe(ctx, ProbeRequest{
+		BaseURL: cred.BaseURL, UpstreamKey: cred.Key, ProviderFamily: providerFamily,
+		ModelName: spec.modelName, MaxTokens: spec.maxProbeTokens, ProbePrompt: spec.probePrompt,
+	})
 }
 
 func (spec probeModelSpec) effectiveBudgetPolicy() Policy {
@@ -537,9 +570,9 @@ func probeBudgetLimit(policy Policy) int {
 	return defaultInt(policy.DailyProbeBudget, 1000)
 }
 
-func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adminAccountID string, session upstream.Session, target AdminProbeTarget, specs []probeModelSpec, results []targetProbeResult) {
+func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adminAccountID string, session upstream.Session, target AdminProbeTarget, specs []probeModelSpec, results []targetProbeResult, source string) error {
 	if len(results) == 0 {
-		return
+		return nil
 	}
 	remoteAction := ""
 	var actionErr error
@@ -568,7 +601,7 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 		if remoteAction != RemoteActionSkippedUpstreamScheduling {
 			results[actionIndex].state.LastRemoteAction = remoteAction
 			if err := s.repo.UpsertState(ctx, *results[actionIndex].state); err != nil {
-				log.Printf("[connection-health] store target remote action failed target_id=%s err=%v", target.TargetID, err)
+				return err
 			}
 		}
 		for index := range results {
@@ -578,19 +611,24 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 			if index == actionIndex {
 				action = remoteAction
 			}
-			s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
+			if err := s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
 				string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
-				result.state.LastErrorKey, result.state.LastErrorDetail, action)
+				result.state.LastErrorKey, result.state.LastErrorDetail, action, source); err != nil {
+				return err
+			}
 		}
-		return
+		return nil
 	}
 	for index := range results {
 		result := &results[index]
 		eventTarget := targetForProbeSpec(target, result.spec)
-		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
+		if err := s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
 			string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
-			result.state.LastErrorKey, result.state.LastErrorDetail, "")
+			result.state.LastErrorKey, result.state.LastErrorDetail, "", source); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func targetForProbeSpec(target AdminProbeTarget, spec probeModelSpec) AdminProbeTarget {
@@ -631,11 +669,10 @@ func defaultTargetState(userID string, adminAccountID string, target AdminProbeT
 
 // recordTargetEvent 写入一条独立探活事件（connection_id 列存 targetId）。error_detail 已在
 // probe_runner 里脱敏，绝不含明文 key。
-func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, policyID string, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string) {
+func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, policyID string, modelName string, result string, fromState string, toState string, latencyMs *int, errorKey string, errorDetail string, remoteAction string, source string) error {
 	id, err := newID()
 	if err != nil {
-		log.Printf("[connection-health] generate target event id failed: %v", err)
-		return
+		return err
 	}
 	actionSource := ""
 	if remoteAction != "" {
@@ -646,11 +683,9 @@ func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAcc
 		PolicyID: policyID, AdminGroupID: target.AdminGroupID,
 		OwnGroupName: target.AdminGroupName, UpstreamSiteID: "", UpstreamGroupName: target.AdminGroupName, Result: result,
 		FromState: fromState, ToState: toState, LatencyMs: latencyMs, ErrorKey: errorKey, ErrorDetail: errorDetail,
-		RemoteAction: remoteAction, ActionSource: actionSource,
+		RemoteAction: remoteAction, ActionSource: actionSource, Source: source,
 	}
-	if err := s.repo.InsertEvent(ctx, event); err != nil {
-		log.Printf("[connection-health] insert target event failed target_id=%s err=%v", target.TargetID, err)
-	}
+	return s.repo.InsertEvent(ctx, event)
 }
 
 // splitModelList 把逗号分隔的模型字符串拆成去空列表（连接层已有 splitModels 在 upstream 包，

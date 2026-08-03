@@ -244,7 +244,10 @@ func (s *Service) restoreUnmanagedTargetActions(
 			log.Printf("[connection-health] restore unmanaged target failed target_id=%s action=%s err=%v", stored.TargetID, action, actionErr)
 			continue
 		}
-		s.recordTargetEvent(ctx, stored.UserID, stored.AdminAccountID, target, "", "*", "policy_unmanaged_restore", "", "", nil, "", "", action)
+		if err := s.recordTargetEvent(ctx, stored.UserID, stored.AdminAccountID, target, "", "*", "policy_unmanaged_restore", "", "", nil, "", "", action, EventSourceScheduled); err != nil {
+			log.Printf("[connection-health] insert unmanaged target restore event failed target_id=%s err=%v", stored.TargetID, err)
+			continue
+		}
 		if err := s.repo.DeleteTargetActionState(ctx, stored.UserID, stored.AdminAccountID, stored.TargetID); err != nil {
 			log.Printf("[connection-health] clear unmanaged target action state failed target_id=%s err=%v", stored.TargetID, err)
 		}

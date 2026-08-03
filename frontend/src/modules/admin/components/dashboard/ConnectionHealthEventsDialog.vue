@@ -31,7 +31,7 @@ const cardPrefix = `${prefix}.eventsDialog.card`
 
 // 探活结果分类：用于近 60 次记录条着色和可用率计算分母。人工禁用/恢复不算一次探活结果，
 // 不计入可用率分母，只在记录条里以中性色展示这个动作发生过。
-const PROBE_RESULTS = new Set(['ok', 'network_fluctuation', 'rate_limited', 'server_error', 'auth', 'model_not_found', 'invalid_response'])
+const PROBE_RESULTS = new Set(['ok', 'slow_response', 'network_fluctuation', 'rate_limited', 'server_error', 'auth', 'model_not_found', 'invalid_response'])
 const VALID_STATES = new Set<ConnectionHealthState>(['healthy', 'degraded', 'suspended', 'observing', 'recovering', 'disabled'])
 
 interface StatusCard {
@@ -233,7 +233,7 @@ const buildRecords = (eventsDesc: ConnectionHealthEvent[]) => {
   // 近 60 次记录条：取最新 60 条后反转为「从过去到现在」排列，条数不足 60 就按实际数量渲染。
   const records = eventsDesc.slice(0, 60).slice().reverse()
   const probeRecords = records.filter((r) => PROBE_RESULTS.has(r.result))
-  const okCount = probeRecords.filter((r) => r.result === 'ok').length
+  const okCount = probeRecords.filter((r) => r.result === 'ok' || r.result === 'slow_response').length
   const availabilityPct = probeRecords.length > 0 ? Math.round((okCount / probeRecords.length) * 100) : null
   return { records, availabilityPct }
 }

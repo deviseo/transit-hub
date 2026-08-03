@@ -25,6 +25,7 @@ type ResultKey string
 
 const (
 	ResultOK                 ResultKey = "ok"
+	ResultSlowResponse       ResultKey = "slow_response"
 	ResultNetworkFluctuation ResultKey = "network_fluctuation"
 	ResultRateLimited        ResultKey = "rate_limited"
 	ResultServerError        ResultKey = "server_error"
@@ -32,6 +33,12 @@ const (
 	ResultModelNotFound      ResultKey = "model_not_found"
 	ResultInvalidResponse    ResultKey = "invalid_response"
 	ResultUnsupported        ResultKey = "unsupported"
+)
+
+const (
+	EventSourceManual    = "manual"
+	EventSourceScheduled = "scheduled"
+	EventSourceLegacy    = "legacy"
 )
 
 // ProviderFamily 探活请求的最小形态按此分类选择。
@@ -118,6 +125,14 @@ type GroupTargetExclusion struct {
 	TargetID       string    `json:"targetId"`
 	CreatedAt      time.Time `json:"createdAt"`
 	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+type GroupProbeSortSetting struct {
+	UserID             string
+	AdminAccountID     string
+	AdminGroupID       string
+	FallbackMultiplier *float64
+	UpdatedAt          time.Time
 }
 
 // PrioritySyncState 记录倍率策略接管目标前的优先级和最后一次系统写入值。同步前若发现上游
@@ -218,11 +233,13 @@ type ConnectionHealthState struct {
 	ConsecutiveFailures  int
 	ConsecutiveSuccesses int
 	LastProbeAt          *time.Time
+	LastProbeDecisionKey string
 	LastSuccessAt        *time.Time
 	LastFailureAt        *time.Time
 	CooldownUntil        *time.Time
 	ObservingUntil       *time.Time
 	LastLatencyMs        *int
+	LastSuccessLatencyMs *int
 	LastErrorKey         string
 	LastErrorDetail      string
 	LastRemoteAction     string
@@ -249,6 +266,7 @@ type ConnectionHealthEvent struct {
 	ErrorDetail       string
 	RemoteAction      string
 	ActionSource      string
+	Source            string
 	CreatedAt         time.Time
 }
 

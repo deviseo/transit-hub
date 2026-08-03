@@ -15,6 +15,110 @@ func testPolicy() Policy {
 	}
 }
 
+func TestTransition_SlowResponsePreservesFailureStateAndNeverTriggersRemoteAction(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	observingUntil := now.Add(5 * time.Minute)
+	cases := []struct {
+		name          string
+		current       State
+		weight        int
+		wantState     State
+		wantWeight    int
+		wantObserving *time.Time
+	}{
+		{name: "healthy degrades", current: StateHealthy, weight: 100, wantState: StateDegraded, wantWeight: 100},
+		{name: "degraded remains", current: StateDegraded, weight: 75, wantState: StateDegraded, wantWeight: 75},
+		{name: "recovering degrades", current: StateRecovering, weight: 25, wantState: StateDegraded, wantWeight: 25},
+		{name: "observing remains", current: StateObserving, weight: 0, wantState: StateObserving, wantWeight: 0, wantObserving: &observingUntil},
+		{name: "suspended remains", current: StateSuspended, weight: 0, wantState: StateSuspended, wantWeight: 0},
+		{name: "disabled remains", current: StateDisabled, weight: 0, wantState: StateDisabled, wantWeight: 0},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			out := Transition(TransitionInput{
+				Current: tt.current, CurrentWeight: tt.weight,
+				ConsecutiveFailures: 2, ConsecutiveSuccesses: 3,
+				ObservingUntil: tt.wantObserving, Now: now,
+				Result: ResultSlowResponse, Policy: Policy{RecoveryStepPercent: 25},
+			})
+			if out.NextState != tt.wantState || out.Weight != tt.wantWeight {
+				t.Fatalf("unexpected slow response transition: %+v", out)
+			}
+			if out.ConsecutiveFailures != 2 || out.ConsecutiveSuccesses != 0 {
+				t.Fatalf("slow response must preserve failures and reset successes: %+v", out)
+			}
+			if out.TriggerRemoteDegrade || out.TriggerRemoteRestore {
+				t.Fatalf("slow response must not trigger remote action: %+v", out)
+			}
+			if tt.wantObserving != nil && (out.ObservingUntil == nil || !out.ObservingUntil.Equal(*tt.wantObserving)) {
+				t.Fatalf("slow response changed observing deadline: %+v", out)
+			}
+		})
+	}
+}
+
+func TestApplyProbeOutcome_SlowResponseIsSuccessfulWithoutOverwritingFailureEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	lastFailure := now.Add(-time.Hour)
+	cooldown := now.Add(10 * time.Minute)
+	current := ConnectionHealthState{
+		State: StateDegraded, CurrentWeight: 75,
+		ConsecutiveFailures: 2, ConsecutiveSuccesses: 4,
+		LastFailureAt: &lastFailure, CooldownUntil: &cooldown,
+		LastErrorKey: string(ResultRateLimited), LastErrorDetail: "previous failure",
+	}
+
+	next, transition := applyProbeOutcome(current, ProbeOutcome{
+		Result: ResultSlowResponse, LatencyMs: 6500,
+	}, Policy{AutoDegradeEnabled: true}, now)
+
+	if next.State != StateDegraded || next.CurrentWeight != 75 {
+		t.Fatalf("slow response changed the wrong health fields: %+v", next)
+	}
+	if next.ConsecutiveFailures != 2 || next.ConsecutiveSuccesses != 0 {
+		t.Fatalf("slow response changed failure counters incorrectly: %+v", next)
+	}
+	if next.LastProbeAt == nil || !next.LastProbeAt.Equal(now) || next.LastSuccessAt == nil || !next.LastSuccessAt.Equal(now) {
+		t.Fatalf("slow response must update probe and success times: %+v", next)
+	}
+	if next.LastFailureAt == nil || !next.LastFailureAt.Equal(lastFailure) {
+		t.Fatalf("slow response overwrote last failure time: %+v", next)
+	}
+	if next.LastLatencyMs == nil || *next.LastLatencyMs != 6500 || next.LastSuccessLatencyMs == nil || *next.LastSuccessLatencyMs != 6500 {
+		t.Fatalf("slow response must persist both latest and latest-success latency: %+v", next)
+	}
+	if next.LastErrorKey != "" || next.LastErrorDetail != "" {
+		t.Fatalf("successful slow response must clear the current error: %+v", next)
+	}
+	if transition.TriggerRemoteDegrade || transition.TriggerRemoteRestore {
+		t.Fatalf("slow response must not trigger a remote action: %+v", transition)
+	}
+}
+
+func TestApplyProbeOutcome_SlowResponseOnlyRecordsWhenAutoDegradeDisabled(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	current := ConnectionHealthState{
+		State: StateHealthy, CurrentWeight: 100,
+		ConsecutiveFailures: 2, ConsecutiveSuccesses: 3,
+	}
+
+	next, transition := applyProbeOutcome(current, ProbeOutcome{
+		Result: ResultSlowResponse, LatencyMs: 7000,
+	}, Policy{AutoDegradeEnabled: false}, now)
+
+	if next.State != current.State || next.CurrentWeight != current.CurrentWeight ||
+		next.ConsecutiveFailures != current.ConsecutiveFailures || next.ConsecutiveSuccesses != current.ConsecutiveSuccesses {
+		t.Fatalf("disabled auto degrade must preserve the health state and counters: %+v", next)
+	}
+	if next.LastSuccessAt == nil || next.LastSuccessLatencyMs == nil || *next.LastSuccessLatencyMs != 7000 {
+		t.Fatalf("disabled auto degrade must still record the successful slow response: %+v", next)
+	}
+	if transition.TriggerRemoteDegrade || transition.TriggerRemoteRestore {
+		t.Fatalf("disabled auto degrade must suppress remote actions: %+v", transition)
+	}
+}
+
 func TestTransition_SoftFailureDegradesGradually(t *testing.T) {
 	policy := testPolicy()
 	now := time.Now()

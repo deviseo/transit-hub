@@ -15,7 +15,13 @@ import (
 // ProbeTimeout 是单次真实探活请求的超时时间，任务书要求默认 10s。
 const ProbeTimeout = 10 * time.Second
 
+const SlowResponseThreshold = 5 * time.Second
+
 const defaultProbePrompt = "hi"
+
+// 探活只需要一个很小的非流式 chat completion。异常上游返回超大响应时，继续读到 EOF
+// 以保持完整延迟口径，但不允许响应体无限占用后端内存。
+const maxProbeResponseBytes = 1024 * 1024
 
 // ProbeRequest 是发起一次真实轻量探活所需的全部参数。UpstreamKey 只用于构造请求凭据，
 // 探活结果（ProbeOutcome）绝不回填明文 key。
@@ -57,14 +63,37 @@ func (r *RealProbeRunner) Probe(ctx context.Context, req ProbeRequest) ProbeOutc
 
 	started := time.Now()
 	resp, err := r.client.Do(httpReq)
-	latencyMs := int(time.Since(started).Milliseconds())
 	if err != nil {
+		latencyMs := int(time.Since(started).Milliseconds())
 		return ProbeOutcome{Result: classifyTransportError(err), LatencyMs: latencyMs, Detail: redact(err.Error(), req.UpstreamKey)}
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, oversized, readErr := readProbeResponseBody(resp.Body)
+	latencyMs := int(time.Since(started).Milliseconds())
+	if readErr != nil {
+		return ProbeOutcome{Result: classifyTransportError(readErr), LatencyMs: latencyMs, Detail: redact(readErr.Error(), req.UpstreamKey)}
+	}
+	if oversized && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated) {
+		return ProbeOutcome{Result: ResultInvalidResponse, LatencyMs: latencyMs, Detail: "probe response exceeds 1 MiB limit"}
+	}
 	return classifyHTTPResponse(resp.StatusCode, body, req.UpstreamKey, latencyMs)
+}
+
+func readProbeResponseBody(body io.Reader) ([]byte, bool, error) {
+	limited := io.LimitReader(body, maxProbeResponseBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, false, err
+	}
+	oversized := len(data) > maxProbeResponseBytes
+	if oversized {
+		data = data[:maxProbeResponseBytes]
+		if _, err := io.Copy(io.Discard, body); err != nil {
+			return nil, true, err
+		}
+	}
+	return data, oversized, nil
 }
 
 // buildProbeRequest 统一走 OpenAI 兼容的 /v1/chat/completions 网关端点。
@@ -140,8 +169,11 @@ func classifyHTTPResponse(status int, body []byte, upstreamKey string, latencyMs
 
 	switch {
 	case status == http.StatusOK || status == http.StatusCreated:
-		if !json.Valid(body) {
+		if !validChatCompletionResponse(body) {
 			return ProbeOutcome{Result: ResultInvalidResponse, LatencyMs: latencyMs, Detail: detail}
+		}
+		if latencyMs > int(SlowResponseThreshold.Milliseconds()) {
+			return ProbeOutcome{Result: ResultSlowResponse, LatencyMs: latencyMs, Detail: ""}
 		}
 		return ProbeOutcome{Result: ResultOK, LatencyMs: latencyMs, Detail: ""}
 
@@ -161,6 +193,40 @@ func classifyHTTPResponse(status int, body []byte, upstreamKey string, latencyMs
 		// 其余 4xx（参数错误等）无法安全归类为上游不可用，按响应无法解析处理，避免误判暂停。
 		return ProbeOutcome{Result: ResultInvalidResponse, LatencyMs: latencyMs, Detail: detail}
 	}
+}
+
+func validChatCompletionResponse(body []byte) bool {
+	var response struct {
+		Choices []struct {
+			Message json.RawMessage `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil || len(response.Choices) == 0 {
+		return false
+	}
+	var message struct {
+		Content          json.RawMessage `json:"content"`
+		ReasoningContent json.RawMessage `json:"reasoning_content"`
+	}
+	if len(response.Choices[0].Message) == 0 || string(response.Choices[0].Message) == "null" {
+		return false
+	}
+	if err := json.Unmarshal(response.Choices[0].Message, &message); err != nil {
+		return false
+	}
+	return validCompletionContent(message.Content) || validCompletionContent(message.ReasoningContent)
+}
+
+func validCompletionContent(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return true
+	}
+	var parts []json.RawMessage
+	return json.Unmarshal(raw, &parts) == nil && len(parts) > 0
 }
 
 // redact 把探活凭据从错误信息/响应体中裁剪掉，事件和日志绝不落地明文 key。

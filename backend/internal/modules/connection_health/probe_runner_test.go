@@ -1,8 +1,11 @@
 package connection_health
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -159,6 +162,118 @@ func TestProbe_InvalidResponseBody(t *testing.T) {
 	})
 	if outcome.Result != ResultInvalidResponse {
 		t.Fatalf("expected invalid_response, got %s", outcome.Result)
+	}
+}
+
+func TestClassifyHTTPResponse_RejectsJSONWithoutChatCompletion(t *testing.T) {
+	invalidBodies := []string{
+		`{}`,
+		`[]`,
+		`{"error":"invalid model"}`,
+		`{"choices":[]}`,
+		`{"choices":[{"message":{}}]}`,
+	}
+	for _, body := range invalidBodies {
+		outcome := classifyHTTPResponse(http.StatusOK, []byte(body), "secret-key", 10)
+		if outcome.Result != ResultInvalidResponse {
+			t.Fatalf("body %s must be invalid_response, got %+v", body, outcome)
+		}
+	}
+}
+
+func TestProbe_OversizedResponseIsDrainedAndRejected(t *testing.T) {
+	finished := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"`))
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxProbeResponseBytes+1))
+		_, _ = w.Write([]byte(`"}}]}`))
+		close(finished)
+	}))
+	defer server.Close()
+
+	runner := NewRealProbeRunner()
+	outcome := runner.Probe(context.Background(), ProbeRequest{BaseURL: server.URL, UpstreamKey: "secret-key", ProviderFamily: ProviderOpenAI})
+	if outcome.Result != ResultInvalidResponse {
+		t.Fatalf("oversized response must be invalid_response, got %+v", outcome)
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("probe returned before the upstream response was completely written")
+	}
+}
+
+func TestClassifyHTTPResponse_SlowSuccessfulResponse(t *testing.T) {
+	outcome := classifyHTTPResponse(
+		http.StatusOK,
+		[]byte(`{"choices":[{"message":{"content":"ok"}}]}`),
+		"secret-key",
+		5001,
+	)
+	if outcome.Result != ResultSlowResponse {
+		t.Fatalf("expected slow_response, got %s", outcome.Result)
+	}
+	if outcome.LatencyMs != 5001 || outcome.Detail != "" {
+		t.Fatalf("unexpected slow response outcome: %+v", outcome)
+	}
+}
+
+func TestProbe_LatencyIncludesReadingCompleteResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		prefix := append([]byte(`{"choices":[{"message":{"content":"ok"}}]}`), bytes.Repeat([]byte(" "), 64*1024)...)
+		_, _ = w.Write(prefix)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(40 * time.Millisecond)
+		_, _ = w.Write([]byte("\n"))
+	}))
+	defer server.Close()
+
+	runner := NewRealProbeRunner()
+	outcome := runner.Probe(context.Background(), ProbeRequest{
+		BaseURL: server.URL, UpstreamKey: "secret-key", ProviderFamily: ProviderOpenAI,
+	})
+	if outcome.Result != ResultOK {
+		t.Fatalf("expected ok, got %s (%s)", outcome.Result, outcome.Detail)
+	}
+	if outcome.LatencyMs < 30 {
+		t.Fatalf("latency stopped before the complete response body was read: %dms", outcome.LatencyMs)
+	}
+}
+
+type failingResponseBody struct {
+	read bool
+}
+
+func (b *failingResponseBody) Read(p []byte) (int, error) {
+	if !b.read {
+		b.read = true
+		return copy(p, []byte(`{"choices":[]}`)), nil
+	}
+	return 0, errors.New("response stream interrupted")
+}
+
+func (b *failingResponseBody) Close() error { return nil }
+
+type responseBodyRoundTripper struct {
+	body io.ReadCloser
+}
+
+func (t responseBodyRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: t.body}, nil
+}
+
+func TestProbe_ResponseReadErrorIsNotSuccessful(t *testing.T) {
+	runner := &RealProbeRunner{client: &http.Client{Transport: responseBodyRoundTripper{body: &failingResponseBody{}}}}
+	outcome := runner.Probe(context.Background(), ProbeRequest{
+		BaseURL: "https://probe.invalid", UpstreamKey: "secret-key", ProviderFamily: ProviderOpenAI,
+	})
+	if outcome.Result != ResultNetworkFluctuation {
+		t.Fatalf("response read error must be a network fluctuation, got %+v", outcome)
 	}
 }
 

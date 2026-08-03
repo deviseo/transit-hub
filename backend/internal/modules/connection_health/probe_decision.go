@@ -44,6 +44,10 @@ type effectiveProbeCandidate struct {
 }
 
 func calculateEffectiveProbeDecisionWithBudgets(policies []Policy, schedulable *bool, state *ConnectionHealthState, now time.Time, budgetUsage map[string]int) EffectiveProbeDecision {
+	return calculateEffectiveProbeDecisionWithBudgetAndReuse(policies, schedulable, state, now, budgetUsage, true)
+}
+
+func calculateEffectiveProbeDecisionWithBudgetAndReuse(policies []Policy, schedulable *bool, state *ConnectionHealthState, now time.Time, budgetUsage map[string]int, reuseProbeInterval bool) EffectiveProbeDecision {
 	decision := EffectiveProbeDecision{SourcePolicies: make([]EffectiveProbePolicySource, 0, len(policies))}
 	candidates := make([]effectiveProbeCandidate, 0, len(policies))
 	for _, policy := range policies {
@@ -54,7 +58,7 @@ func calculateEffectiveProbeDecisionWithBudgets(policies []Policy, schedulable *
 		})
 		if continueAutoProbe {
 			candidate := effectiveProbeCandidate{policy: policy, intervalSec: intervalSeconds, continueProbing: true}
-			candidate.nextProbeAt, candidate.blockedReason = policyNextProbeAt(state, intervalSeconds, now)
+			candidate.nextProbeAt, candidate.blockedReason = policyNextProbeAtForDecision(state, intervalSeconds, now, reuseProbeInterval)
 			if budgetUsage != nil && budgetUsage[policy.ID] >= probeBudgetLimit(policy) {
 				budgetReset := probeBudgetDayStart(now).Add(24 * time.Hour).UTC()
 				if budgetReset.After(candidate.nextProbeAt) {
@@ -111,6 +115,10 @@ func policyProbeCadence(policy Policy, schedulable *bool) (bool, int) {
 }
 
 func policyNextProbeAt(state *ConnectionHealthState, intervalSeconds int, now time.Time) (time.Time, string) {
+	return policyNextProbeAtForDecision(state, intervalSeconds, now, true)
+}
+
+func policyNextProbeAtForDecision(state *ConnectionHealthState, intervalSeconds int, now time.Time, reuseProbeInterval bool) (time.Time, string) {
 	next := now
 	blockedReason := ""
 	var lastAttemptAt *time.Time
@@ -121,13 +129,21 @@ func policyNextProbeAt(state *ConnectionHealthState, intervalSeconds int, now ti
 		}
 	}
 	if lastAttemptAt != nil {
-		interval := time.Duration(intervalSeconds) * time.Second
-		blockedReason = ProbeBlockedInterval
-		if backoff := ProbeBackoff(state.ConsecutiveFailures); backoff > interval {
-			interval = backoff
-			blockedReason = ProbeBlockedFailureBackoff
+		if reuseProbeInterval {
+			interval := time.Duration(intervalSeconds) * time.Second
+			blockedReason = ProbeBlockedInterval
+			if backoff := ProbeBackoff(state.ConsecutiveFailures); backoff > interval {
+				interval = backoff
+				blockedReason = ProbeBlockedFailureBackoff
+			}
+			next = lastAttemptAt.Add(interval)
+		} else if backoff := ProbeBackoff(state.ConsecutiveFailures); backoff > 0 {
+			backoffUntil := lastAttemptAt.Add(backoff)
+			if backoffUntil.After(next) {
+				next = backoffUntil
+				blockedReason = ProbeBlockedFailureBackoff
+			}
 		}
-		next = lastAttemptAt.Add(interval)
 	}
 	if state != nil && state.CooldownUntil != nil && state.CooldownUntil.After(next) {
 		next = *state.CooldownUntil

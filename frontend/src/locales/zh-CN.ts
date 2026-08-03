@@ -1064,6 +1064,10 @@ export default {
         priorityConflict: '检测到 {count} 个上游优先级被人工修改。为避免覆盖人工设置，系统已停止管理这些目标的优先级。重新保存分组策略后可重新接管。',
         priorityConflictShort: '上游优先级已被人工修改，系统已停止自动覆盖',
         priorityConflictTarget: '{target}：当前 {current}，期望 {expected}，发现于 {time}',
+        productionSortHint: '默认按生产调度顺序展示：健康档位优先、有效倍率其次、同倍率再比较最近成功延迟。点击列头只改变当前表格，不会写回主站 priority。',
+        temporarySortHint: '当前是临时查看排序，不会改变主站 priority；重新进入分组后恢复生产调度顺序。',
+        priorityCapacityLimited: '当前健康档位容量已满，末位稳定并列',
+        slowResponse: '高延迟成功',
         empty: '该分组当前没有账号或渠道。',
         metrics: {
           accounts: '账号/渠道',
@@ -1104,12 +1108,27 @@ export default {
           strategy: '生效策略',
           priority: '上游优先级',
           multiplier: '有效倍率',
-          strategyMultiplier: '我的分组倍率',
+          strategyMultiplier: '实际有效倍率',
           upstreamMultiplier: '上游 API Key 倍率',
           latency: '延迟',
           actions: '操作'
         },
         upstreamMultiplierPending: '关联后展示倍率',
+        multiplierSources: {
+          adminGroup: '仅倍率模式：主站分组倍率',
+          upstreamKey: '上游 Key 倍率',
+          missingFallback: '上游倍率缺失，已按本地回退',
+          conflictFallback: '多 Key 冲突，已按本地回退',
+          unavailableHeld: '上游查询暂不可用，保持上次倍率和 priority',
+          unavailableUnmanaged: '首次查询暂不可用，未接管 priority',
+          fallbackRequired: '上游倍率与本地回退都不可用，回退倍率待配置'
+        },
+        upstreamMultiplierStatuses: {
+          unassociated: '未关联真实连接',
+          missing: 'Key 分组或倍率缺失',
+          conflict: '多 Key 或分组冲突',
+          unavailable: '本轮上游查询暂不可用'
+        },
         models: {
           empty: '该目标还没有模型探活结果。',
           latency: '延迟 {value} ms',
@@ -1145,7 +1164,7 @@ export default {
           options: {
             multiplier: {
               title: '倍率优先',
-              description: '健康目标中，倍率越低，上游优先级越高；故障目标仍会优先降级。'
+              description: '健康档位优先；同档使用上游 Key 倍率，缺失或冲突时使用本地回退倍率，同倍率再按成功延迟排序。'
             },
             multiplierOnly: {
               title: '仅倍率优先级',
@@ -1177,7 +1196,11 @@ export default {
           multiplierOnlyTitle: '仅同步倍率优先级',
           multiplierOnlyHelp: '后台约每 30 秒读取一次最新分组倍率；倍率越低，优先级越高。此模式不需要模型或上游探活凭据。',
           multiplierMissingTitle: '当前分组没有有效倍率',
-          multiplierMissingHelp: '请先在上游设置该分组倍率后再启用倍率排序。系统不会用 1x 兜底，也不会修改当前优先级。'
+          multiplierMissingHelp: '请先在上游设置该分组倍率后再启用倍率排序。系统不会用 1x 兜底，也不会修改当前优先级。',
+          fallbackMultiplierLabel: '探活排序回退倍率（可选）',
+          fallbackMultiplierPlaceholder: '例如 1.0',
+          fallbackMultiplierHelp: '只在上游 Key 倍率确定性缺失或多 Key 冲突时使用；查询暂不可用时不会回退，也不会改写主站分组倍率。',
+          fallbackMultiplierInvalid: '回退倍率必须是大于 0 的数字。'
         },
         confirm: {
           title: '确认分组配置',
@@ -1189,9 +1212,11 @@ export default {
           fromPolicy: '由已有策略决定',
           notApplicable: '不需要',
           remoteAction: '上游自动动作',
+          fallbackMultiplier: '本地探活排序回退倍率',
+          notConfigured: '未配置',
           enabled: '已启用',
           disabled: '未启用',
-          multiplierRule: '倍率排序规则：健康状态优先于价格；同一目标属于多个分组时使用最低倍率；倍率越低，写入上游的优先级越高。若检测到人工修改，系统会停止覆盖并提示冲突。',
+          multiplierRule: '健康探活排序：健康档位第一，账号唯一可靠的上游 Key 倍率第二；确定性缺失或多 Key 冲突时使用目标唯一一致的本地回退倍率；同倍率再比较完整响应延迟。>5000 ms 且在 10 秒内完成属于高延迟成功；10 秒超时按失败处理。主站 schedulable=false 时自动探活默认降为 60 分钟一次。一次性测试不留记录，正式手动探活进入共同状态和调度。',
           multiplierOnlyRule: '仅倍率规则：不读取健康状态、不发起模型探活；同一目标属于多个分组时使用最低倍率。停用或解绑策略后会恢复接管前的优先级，人工修改仍受冲突保护。'
         },
         back: '上一步',
@@ -1275,6 +1300,7 @@ export default {
       },
       errorKeys: {
         ok: '正常',
+        slow_response: '高延迟成功',
         network_fluctuation: '网络波动',
         rate_limited: '触发限流',
         server_error: '上游服务异常',
@@ -1313,6 +1339,7 @@ export default {
         card: {
           latencyLabel: '对话延迟',
           availabilityLabel: '可用率',
+          slowResponseCount: '其中 {count} 次为高延迟成功',
           recentRecordsLabel: '近 60 次记录',
           past: 'PAST',
           now: 'NOW',
@@ -1337,6 +1364,12 @@ export default {
           budgetPolicy: '预算归属：{policy}',
           remoteActionLine: '远端动作：{label}',
           actionSource: '动作来源：{source} · {time}',
+          eventSource: '最新事件来源：{source}',
+          eventSources: {
+            manual: '正式手动 / 用户操作',
+            scheduled: '自动调度',
+            legacy: '历史存量'
+          },
           actionSources: {
             userAction: '用户操作',
             upstreamObserved: '上游观测',
@@ -1432,7 +1465,7 @@ export default {
         observationLabel: '观察时间（秒）',
         recoveryStepLabel: '恢复步进百分比',
         autoDegradeLabel: '自动降级',
-        autoDegradeHelp: '探活失败达到阈值时自动降低本地权重或暂停链路。',
+        autoDegradeHelp: '探活失败达到阈值时自动降低本地权重或暂停链路；完整响应超过 5000 ms 但未超过 10 秒时记为 slow_response，并按高延迟状态处理。',
         autoRemoteActionLabel: '自动远端动作',
         autoRemoteActionHelp: 'NewAPI 会修改 channel 权重/状态，Sub2API 会切换 admin 账号 active/inactive。关闭后只记录健康结果，不调用上游。',
         priorityModeLabel: '上游流量优先级',
@@ -1440,7 +1473,7 @@ export default {
           none: '保持上游设置',
           multiplier: '按分组倍率排序'
         },
-        priorityModeHelp: '开启倍率排序后，系统会在健康目标中优先使用更低倍率的上游；故障状态始终优先降级。',
+        priorityModeHelp: '健康探活模式按“健康档位、有效倍率、完整成功延迟、稳定目标 ID”排序；仅倍率模式仍只按主站分组倍率。一次性测试不影响排序，正式手动探活会在既有托管条件成立时刷新排序。',
         multiplierOnlySummaryTitle: '倍率越低，优先级越高',
         multiplierOnlySummary: '系统约每 30 秒读取最新分组倍率并同步上游优先级，不解析探活凭据、不请求模型、不消耗探活预算，也不执行自动降级或远端动作。检测到人工修改时会停止覆盖。',
         providerLabel: '模型 Provider',
@@ -1461,7 +1494,7 @@ export default {
           recoveryStep: '恢复过程中每次探活成功会按该百分比逐步提高本地权重，不是一次性恢复到 100%。',
           autoDegrade: '开启后，探活结果会推进链路的健康状态机并调整本地转发权重；关闭后只记录探活结果，不会自动改变状态或权重。',
           autoRemoteAction: '开启后，状态机触发降级/恢复时会执行受支持的上游动作：Sub2API 切换 admin 账号 active/inactive，NewAPI 调整 channel 权重/状态。关闭后只记录探活和状态结果。',
-          priorityMode: '按分组倍率排序会把较低倍率映射为较高的上游优先级。健康等级先于价格排序；同一目标属于多个分组时取最低倍率；检测到人工修改时会停止自动覆盖。'
+          priorityMode: '健康探活模式先看健康档位，再使用唯一可靠的上游 Key 倍率；确定性缺失或多 Key 冲突时使用分组配置的本地回退倍率，同倍率再按最近成功延迟排序。上游查询暂不可用时保持上次排序。仅倍率模式始终只使用主站分组倍率。'
         },
         runFlow: {
           buttonLabel: '运行流程',
@@ -1479,7 +1512,7 @@ export default {
             },
             schedulerCadence: {
               title: '3. 自动调度规则',
-              description: '后端有一个独立的调度器，大约每 30 秒扫描一次当前 workspace 下所有可探活目标的探活任务。调度的最小粒度是"一个探活目标（账号/渠道）+ 一个模型"，同一个目标下的多个候选模型会被拆成多个独立任务分别判断是否需要探活。'
+              description: '后端大约每 30 秒扫描一次当前 workspace 的探活任务。生产 priority 先按健康档位，再按账号唯一可靠的上游 Key 倍率；确定性缺失或多 Key 冲突时使用本地回退倍率，同倍率再按最近成功延迟，最后用稳定目标 ID。上游查询暂不可用时保持上次排序。multiplier_only 仍只按主站分组倍率。'
             },
             dueCheck: {
               title: '4. 到期判断',
@@ -1491,7 +1524,7 @@ export default {
             },
             stateTransition: {
               title: '6. 状态变化',
-              description: '探活成功会清零该模型的连续失败计数；连续软失败（例如网络波动、限流等可恢复错误）在达到失败阈值前会先进入降级状态、按恢复步进百分比逐步降低本地权重，达到失败阈值后会暂停该模型；部分硬失败（例如鉴权失败、模型不存在）可能会跳过降级直接暂停。'
+              description: '合法响应在 5000 ms 内按正常成功处理。>5000 ms 且在 10 秒超时前完成时记为 slow_response：不增加失败次数、不单独停用；开启自动降级时进入高延迟 degraded，关闭时只记录和提示。10 秒超时仍按原有软失败处理。'
             },
             cooldownObservation: {
               title: '7. 冷却和观察',
@@ -1503,7 +1536,7 @@ export default {
             },
             manualProbe: {
               title: '9. 手动探活',
-              description: '手动探活是一次性即时测试，与策略自动探活完全隔离：打开弹窗后，后端会用该 targetId 重新解析出的凭据临时请求上游 /v1/models 现查可用模型列表，前端不接触 base_url/key。用户选择模型后点击"开始测试"，结果只显示在弹窗内，不写入策略探活状态/事件，不消耗策略预算，不触发自动降级/恢复。自动策略探活只针对已经显式分配了策略的账号/channel；未分配策略的账号/渠道仍可以随时手动一次性探活，只是不会被后台调度器自动探活。'
+              description: '弹窗提供两种模式。一次性测试可使用现查模型，只复用请求和判定，结果不写事件、状态、priority、预算或远端动作。正式手动探活只允许当前生效策略模型，会写共同状态和 source=manual 事件，并进入健康调度；只有既有 priority 托管条件成立且未被 multiplier_only 覆盖时才写主站 priority，不消耗自动预算，也不修改 schedulable。schedulable=false 时自动探活默认降频为 60 分钟一次。当前测试契约只稳定复现 Base URL、API Key 和 OpenAI 兼容请求；上游专有代理、OAuth、TLS 与自定义请求头无法从现有数据取得时不会被复现。'
             },
             nextProbeCopy: {
               title: '10. "下次探活"文案说明',
@@ -1530,12 +1563,23 @@ export default {
         noResults: '探活已执行，但未获取到任何结果，请稍后重试或检查上游站点连通性。'
       },
       manualProbeDialog: {
-        title: '手动一次性探活',
+        title: '手动探活',
         loadingModels: '正在从上游获取可用模型列表...',
         retryLoad: '重新加载',
         empty: '未获取到任何可用模型。',
         selectHint: '默认选择列表中的第一个模型；需要时可继续多选。',
+        formalSelectHint: '只显示当前生效策略内模型；可选择本次需要正式探活的模型。',
+        modes: {
+          formal: '正式手动探活',
+          once: '一次性测试'
+        },
+        modeDescriptions: {
+          formal: '进入共同记录和健康调度，会更新健康状态与 manual 事件；完整响应超过 5000 ms 记为高延迟成功，10 秒超时按失败处理。仅在既有托管条件成立时更新主站 priority，不消耗自动预算，不修改 schedulable；schedulable=false 时自动探活默认降为 60 分钟一次。',
+          once: '只显示本次结果，不写事件、健康状态、priority、策略预算或远端动作。'
+        },
+        contractLimit: '测试契约受限：当前只稳定复现 Base URL、API Key 和 OpenAI 兼容请求；上游专有代理、OAuth、TLS 或自定义请求头无法从现有数据取得时不会被复现。',
         startTest: '开始测试',
+        startFormal: '开始正式探活',
         testing: '测试中...',
         resultTitle: '测试结果',
         resultEmpty: '尚未开始测试，选择模型后点击"开始测试"。',
@@ -1572,7 +1616,12 @@ export default {
         modelListInvalid: '上游模型列表响应格式无法识别。',
         multiplierRequired: '当前分组没有有效倍率，请先在上游设置倍率后再启用倍率排序。',
         manualModelsRequired: '请至少选择一个模型再开始测试。',
-        policyNotFound: '所选策略不存在或不属于当前工作区。'
+        policyNotFound: '所选策略不存在或不属于当前工作区。',
+        probeBlockedHealthDisabled: '该模型健康状态已禁用，正式探活未发出请求。',
+        probeBlockedCooldown: '该模型仍在健康冷却期，正式探活未发出请求。',
+        probeBlockedFailureBackoff: '该模型仍在失败退避期，正式探活未发出请求。',
+        probeConcurrencyLimited: '当前探活并发已满，请稍后再试；本次未发出请求。',
+        probeTargetLeaseBusy: '该目标正在执行其他探活或调度操作，请稍后再试；本次未发出请求。'
       }
     },
       upstream: {

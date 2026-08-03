@@ -280,7 +280,8 @@ export function useConnectionHealth() {
     }
   }
 
-  // manualProbeTarget 触发一次独立目标手动探活（targetId 维度）。返回值语义同 manualProbe：
+  // manualProbeTarget 触发正式手动探活（targetId 维度），进入后端共同状态、事件和调度链路。
+  // 返回值语义同 manualProbe：
   // null=失败（errorKey 已设置，含 credential_unavailable 等结构化不可探活错误）、
   // []=执行成功但无结果、非空=正常结果。
   const manualProbeTarget = async (targetId: string, models?: string[]): Promise<ModelHealth[] | null> => {
@@ -562,6 +563,7 @@ export function connectionHealthStateBadgeClass(state: ConnectionHealthState | s
 // 不支持场景灰色。主视图和链路详情卡片共用同一份映射，避免颜色定义分散、后续不一致。
 const RECORD_COLOR_CLASS: Record<string, string> = {
   ok: 'bg-green-500',
+  slow_response: 'bg-amber-500',
   network_fluctuation: 'bg-amber-500',
   rate_limited: 'bg-amber-500',
   invalid_response: 'bg-amber-500',

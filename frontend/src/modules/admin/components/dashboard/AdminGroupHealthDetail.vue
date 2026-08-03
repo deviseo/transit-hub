@@ -196,6 +196,7 @@ const toggleModels = (targetId: string) => {
 const activeFilter = ref<GroupHealthFilter>({ kind: 'all' })
 const sortField = ref<AccountSortField>('health')
 const sortDirection = ref<SortDirection>('asc')
+const customSortActive = ref(false)
 
 const DEFAULT_SORT_DIRECTIONS: Record<AccountSortField, SortDirection> = {
   account: 'asc',
@@ -273,10 +274,12 @@ const shouldHideUnmonitored = (account: AdminGroupAccount): boolean =>
 
 const accountLatency = (account: AdminGroupAccount): number | null => {
   const values = account.modelHealth
-    .map(model => model.lastLatencyMs)
+    .map(model => model.lastSuccessLatencyMs)
     .filter((value): value is number => value != null && Number.isFinite(value))
   return values.length > 0 ? Math.max(...values) : null
 }
+
+const accountHasSlowResponse = (account: AdminGroupAccount): boolean => (accountLatency(account) ?? 0) > 5000
 
 const accountHealthRank = (account: AdminGroupAccount): number => {
   if (!account.probeAvailable) return 7
@@ -296,7 +299,7 @@ const accountSortValue = (account: AdminGroupAccount, field: AccountSortField): 
     case 'priority':
       return account.priority ?? null
     case 'effectiveMultiplier':
-      return account.effectiveMultiplier ?? props.group.multiplier
+      return effectiveMultiplier(account)
     case 'upstreamMultiplier':
       return account.upstreamKeyGroupMultiplier ?? null
     case 'latency':
@@ -327,6 +330,10 @@ const filteredAccounts = computed(() => props.group.accounts.filter(account =>
 ))
 
 const sortedAccounts = computed(() => [...filteredAccounts.value].sort((first, second) => {
+  if (!customSortActive.value) {
+    const orderDiff = compareSortValues(first.productionSortOrder ?? null, second.productionSortOrder ?? null, 'asc')
+    return orderDiff !== 0 ? orderDiff : first.targetId.localeCompare(second.targetId)
+  }
   const valueDiff = compareSortValues(
     accountSortValue(first, sortField.value),
     accountSortValue(second, sortField.value),
@@ -350,6 +357,7 @@ const filteredUnprobedModels = (account: AdminGroupAccount) => {
 }
 
 const toggleSort = (field: AccountSortField) => {
+  customSortActive.value = true
   if (sortField.value === field) {
     sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
     return
@@ -359,7 +367,7 @@ const toggleSort = (field: AccountSortField) => {
 }
 
 const ariaSort = (field: AccountSortField): 'ascending' | 'descending' | 'none' => {
-  if (sortField.value !== field) return 'none'
+  if (!customSortActive.value || sortField.value !== field) return 'none'
   return sortDirection.value === 'asc' ? 'ascending' : 'descending'
 }
 
@@ -367,11 +375,43 @@ watch(() => props.group.id, () => {
   activeFilter.value = { kind: 'all' }
   sortField.value = 'health'
   sortDirection.value = 'asc'
+  customSortActive.value = false
   expandedTargetId.value = ''
 })
 
 const formatNumber = (value: number | null | undefined): string => value == null ? '-' : String(value)
 const formatMultiplier = (value: number | null | undefined): string => value == null ? '-' : `${value}x`
+
+const usesMultiplierOnly = (account: AdminGroupAccount): boolean =>
+  (account.assignedPolicies ?? []).some(policy => policy.enabled && policy.strategyMode === 'multiplier_only')
+
+const effectiveMultiplier = (account: AdminGroupAccount): number | null => {
+  if (account.effectiveMultiplier != null) return account.effectiveMultiplier
+  if (usesMultiplierOnly(account)) return props.group.multiplier
+  return null
+}
+
+const multiplierSourceLabel = (account: AdminGroupAccount): string => {
+  if (usesMultiplierOnly(account)) return t(`${detailPrefix}.multiplierSources.adminGroup`)
+  if (account.multiplierSource === 'upstream_key') return t(`${detailPrefix}.multiplierSources.upstreamKey`)
+  if (account.multiplierSource === 'local_fallback') {
+    if (account.multiplierResolutionStatus === 'conflict') return t(`${detailPrefix}.multiplierSources.conflictFallback`)
+    return t(`${detailPrefix}.multiplierSources.missingFallback`)
+  }
+  if (account.multiplierResolutionStatus === 'unavailable') {
+    return account.priorityManaged
+      ? t(`${detailPrefix}.multiplierSources.unavailableHeld`)
+      : t(`${detailPrefix}.multiplierSources.unavailableUnmanaged`)
+  }
+  return t(`${detailPrefix}.multiplierSources.fallbackRequired`)
+}
+
+const upstreamMultiplierStatusLabel = (account: AdminGroupAccount): string => {
+  if (account.multiplierResolutionStatus === 'conflict') return t(`${detailPrefix}.upstreamMultiplierStatuses.conflict`)
+  if (account.multiplierResolutionStatus === 'unavailable') return t(`${detailPrefix}.upstreamMultiplierStatuses.unavailable`)
+  if (account.multiplierResolutionStatus === 'unassociated') return t(`${detailPrefix}.upstreamMultiplierStatuses.unassociated`)
+  return t(`${detailPrefix}.upstreamMultiplierStatuses.missing`)
+}
 </script>
 
 <template>
@@ -495,6 +535,9 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
     </section>
 
     <div class="px-5 py-5">
+      <p class="mb-3 text-xs text-muted-foreground">
+        {{ customSortActive ? t(`${detailPrefix}.temporarySortHint`) : t(`${detailPrefix}.productionSortHint`) }}
+      </p>
       <div v-if="activeFilter.kind !== 'all'" class="mb-3 flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/[0.06] px-3 py-2 text-xs text-primary">
         <span>{{ t(`${detailPrefix}.filters.active`, { label: filterLabel }) }}</span>
         <button
@@ -521,56 +564,56 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('account')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('account')">
                   {{ t(`${detailPrefix}.columns.account`) }}
-                  <ChevronUp v-if="sortField === 'account' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'account'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'account' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'account'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('health')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('health')">
                   {{ t(`${detailPrefix}.columns.health`) }}
-                  <ChevronUp v-if="sortField === 'health' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'health'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'health' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'health'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('strategy')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('strategy')">
                   {{ t(`${detailPrefix}.columns.strategy`) }}
-                  <ChevronUp v-if="sortField === 'strategy' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'strategy'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'strategy' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'strategy'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('priority')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('priority')">
                   {{ t(`${detailPrefix}.columns.priority`) }}
-                  <ChevronUp v-if="sortField === 'priority' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'priority'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'priority' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'priority'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('effectiveMultiplier')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('effectiveMultiplier')">
                   {{ t(`${detailPrefix}.columns.strategyMultiplier`) }}
-                  <ChevronUp v-if="sortField === 'effectiveMultiplier' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'effectiveMultiplier'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'effectiveMultiplier' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'effectiveMultiplier'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('upstreamMultiplier')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('upstreamMultiplier')">
                   {{ t(`${detailPrefix}.columns.upstreamMultiplier`) }}
-                  <ChevronUp v-if="sortField === 'upstreamMultiplier' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'upstreamMultiplier'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'upstreamMultiplier' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'upstreamMultiplier'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
               <th class="px-3 py-2.5 font-medium" :aria-sort="ariaSort('latency')">
                 <button type="button" class="inline-flex items-center gap-1.5 text-left hover:text-foreground" @click="toggleSort('latency')">
                   {{ t(`${detailPrefix}.columns.latency`) }}
-                  <ChevronUp v-if="sortField === 'latency' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
-                  <ChevronDown v-else-if="sortField === 'latency'" class="h-3.5 w-3.5" />
+                  <ChevronUp v-if="customSortActive && sortField === 'latency' && sortDirection === 'asc'" class="h-3.5 w-3.5" />
+                  <ChevronDown v-else-if="customSortActive && sortField === 'latency'" class="h-3.5 w-3.5" />
                   <ArrowDownUp v-else class="h-3.5 w-3.5 opacity-50" />
                 </button>
               </th>
@@ -647,13 +690,19 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                     <ArrowDownUp v-else-if="account.priorityManaged" class="h-3.5 w-3.5 text-primary" />
                   </div>
                   <p class="mt-0.5 text-[11px] text-muted-foreground">{{ priorityStateLabel(account) }}</p>
+                  <p v-if="account.priorityCapacityLimited" class="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    {{ t(`${detailPrefix}.priorityCapacityLimited`) }}
+                  </p>
                 </td>
-                <td class="px-3 py-3 tabular-nums text-muted-foreground">
-                  {{ account.effectiveMultiplier == null ? (group.multiplierDisplay || '-') : `${account.effectiveMultiplier}x` }}
+                <td class="px-3 py-3 tabular-nums text-foreground">
+                  <span>{{ formatMultiplier(effectiveMultiplier(account)) }}</span>
+                  <span class="mt-0.5 block max-w-40 text-[11px] leading-4 text-muted-foreground">
+                    {{ multiplierSourceLabel(account) }}
+                  </span>
                 </td>
                 <td class="px-3 py-3 tabular-nums text-foreground">
                   <span v-if="account.upstreamKeyGroupMultiplier == null" class="text-xs text-muted-foreground">
-                    {{ t(`${detailPrefix}.upstreamMultiplierPending`) }}
+                    {{ upstreamMultiplierStatusLabel(account) }}
                   </span>
                   <span v-else>{{ formatMultiplier(account.upstreamKeyGroupMultiplier) }}</span>
                   <span v-if="account.upstreamKeyGroupName" class="mt-0.5 block max-w-32 truncate text-[11px] text-muted-foreground">
@@ -663,7 +712,12 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                 <td class="px-3 py-3 tabular-nums">
                   <span v-if="aggregateState(account) === 'suspended'" class="text-destructive">-</span>
                   <span v-else-if="accountLatency(account) == null" class="text-muted-foreground">-</span>
-                  <span v-else class="text-foreground">{{ accountLatency(account) }} ms</span>
+                  <span v-else :class="accountHasSlowResponse(account) ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'">
+                    {{ accountLatency(account) }} ms
+                  </span>
+                  <span v-if="accountHasSlowResponse(account)" class="mt-0.5 block text-[11px] text-amber-600 dark:text-amber-400">
+                    {{ t(`${detailPrefix}.slowResponse`) }}
+                  </span>
                 </td>
                 <td class="px-3 py-3">
                   <div class="flex items-center justify-end gap-1">
