@@ -1,7 +1,7 @@
 // 仪表盘共用的展示工具：主题色类名映射、CNY 金额格式化、环比变化计算。
 // 颜色类使用「字面量字符串」写法，确保 Tailwind JIT 能扫描到对应工具类。
 
-import type { DashboardColorToken } from '../types/dashboard'
+import type { DashboardColorToken, TrendPoint } from '../types/dashboard'
 
 /** 指标图标底色 + 文字色。 */
 export const METRIC_ICON_CLASSES: Record<DashboardColorToken, string> = {
@@ -66,7 +66,9 @@ export interface DeltaResult {
 export function computeDelta(
   values: { value: number | null; date?: string; status?: string }[] | number[],
 ): DeltaResult {
-  if (!values || values.length < 2) return { amount: 0, direction: 'flat' }
+  if (!values || values.length < 2) {
+    return { amount: 0, direction: 'flat', unavailable: true, reason: 'missing_data' }
+  }
 
   // 兼容旧版 number[] 调用。
   if (typeof values[0] === 'number') {
@@ -108,4 +110,66 @@ export function computeDelta(
   const amount = last.value - prev.value
   const direction: DeltaDirection = amount > 0 ? 'up' : amount < 0 ? 'down' : 'flat'
   return { amount, direction }
+}
+
+export type ProfitMarginMode = 'exact' | 'ceiling' | 'unavailable'
+
+export interface ProfitMarginResult {
+  value: number | null
+  mode: ProfitMarginMode
+}
+
+export interface ProfitMarginInput {
+  revenue: number | null | undefined
+  netProfit: number | null | undefined
+  costComplete: boolean | undefined
+  confirmedCost: number | undefined
+  collectedSites: number | undefined
+}
+
+/** 计算今日利润率，并明确区分正式值、部分成本上限和不可用。 */
+export function calculateProfitMargin(input: ProfitMarginInput): ProfitMarginResult {
+  const { revenue, netProfit, costComplete, confirmedCost, collectedSites } = input
+  if (revenue == null || !Number.isFinite(revenue) || revenue <= 0) {
+    return { value: null, mode: 'unavailable' }
+  }
+
+  if (costComplete === false) {
+    if (collectedSites == null || collectedSites <= 0 || confirmedCost == null || !Number.isFinite(confirmedCost)) {
+      return { value: null, mode: 'unavailable' }
+    }
+    return {
+      value: (revenue - confirmedCost) / revenue * 100,
+      mode: 'ceiling',
+    }
+  }
+
+  if (netProfit == null || !Number.isFinite(netProfit)) {
+    return { value: null, mode: 'unavailable' }
+  }
+
+  return {
+    value: netProfit / revenue * 100,
+    mode: 'exact',
+  }
+}
+
+/** 由营收和净利润趋势生成利润率趋势，缺失值保持为 null。 */
+export function buildProfitMarginSeries(revenue: TrendPoint[], profit: TrendPoint[]): TrendPoint[] {
+  const profitByDate = new Map(profit.filter(point => point.date).map(point => [point.date, point]))
+
+  return revenue.map((revenuePoint, index) => {
+    const profitPoint = revenuePoint.date ? profitByDate.get(revenuePoint.date) : profit[index]
+    const value = revenuePoint.value != null
+      && revenuePoint.value > 0
+      && profitPoint?.value != null
+      ? profitPoint.value / revenuePoint.value * 100
+      : null
+
+    return {
+      label: revenuePoint.label,
+      date: revenuePoint.date,
+      value,
+    }
+  })
 }

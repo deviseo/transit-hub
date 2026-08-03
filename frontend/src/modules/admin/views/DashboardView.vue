@@ -51,7 +51,13 @@ import { useAdminAccounts } from '../composables/useAdminAccounts'
 import type { ConnectionHealthStoredSummary } from '../types/connectionHealth'
 import type { DashboardColorToken, DashboardMetricData, DashboardMetricKey, DashboardPeriod } from '../types/dashboard'
 import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
-import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
+import {
+  buildProfitMarginSeries,
+  calculateProfitMargin,
+  computeDelta,
+  formatCny,
+  formatDateTime,
+} from '../utils/dashboard'
 
 import { t, te, locale } from '@/locales'
 const router = useRouter()
@@ -281,21 +287,21 @@ const percentFormatter = computed(() => new Intl.NumberFormat(locale, {
 }))
 const numberFormatter = computed(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }))
 
-const profitMargin = computed(() => {
-  const revenue = metric('todayProfit')?.current ?? 0
+const profitMarginState = computed(() => {
   const cq = liveData.value?.costQuality
-  if (cq && !cq.complete && revenue > 0) {
-    // 成本不完整：利润率暂估上限 = (营收 - 已确认成本) / 营收
-    return (revenue - cq.confirmedCost) / revenue * 100
-  }
-  const profit = metric('netProfit')?.current ?? 0
-  return revenue > 0 ? (profit / revenue) * 100 : 0
+  return calculateProfitMargin({
+    revenue: metric('todayProfit')?.current,
+    netProfit: metric('netProfit')?.current,
+    costComplete: cq?.complete,
+    confirmedCost: cq?.confirmedCost,
+    collectedSites: cq?.collectedSites,
+  })
 })
 
 const marginSeries = computed(() => {
   const revenue = metric('todayProfit')?.series.month ?? []
   const profit = metric('netProfit')?.series.month ?? []
-  return revenue.map((point, index) => (point.value ?? 0) > 0 ? ((profit[index]?.value ?? 0) / (point.value as number)) * 100 : 0)
+  return buildProfitMarginSeries(revenue, profit)
 })
 
 interface DashboardCoreCard {
@@ -321,19 +327,22 @@ const cards = computed<DashboardCoreCard[]>(() => {
 
     // todayPurchase：成本不完整时展示已确认成本 + 站点覆盖数
     if (key === 'todayPurchase' && costIncomplete) {
+      const hasConfirmedCost = cq!.collectedSites > 0
       return [{
         key,
         label: t('admin.dashboard.metrics.todayPurchase'),
         icon: METRIC_META[key].icon,
         color: METRIC_META[key].color,
-        value: formatCny(cq!.confirmedCost),
-        deltaDirection: delta.direction,
-        deltaText: formatCny(Math.abs(delta.amount)),
-        statusText: t('admin.dashboard.costQuality.partial', {
-          cost: formatCny(cq!.confirmedCost),
-          collected: cq!.collectedSites,
-          expected: cq!.expectedSites,
-        }),
+        value: formatCny(hasConfirmedCost ? cq!.confirmedCost : null),
+        deltaDirection: 'flat',
+        deltaText: '',
+        statusText: hasConfirmedCost
+          ? t('admin.dashboard.costQuality.partial', {
+              cost: formatCny(cq!.confirmedCost),
+              collected: cq!.collectedSites,
+              expected: cq!.expectedSites,
+            })
+          : t('admin.dashboard.costQuality.costUnavailable'),
         clickable: true,
         negativeWhenUp: true,
       }]
@@ -342,7 +351,8 @@ const cards = computed<DashboardCoreCard[]>(() => {
     // netProfit：成本不完整时展示暂估上限
     if (key === 'netProfit' && costIncomplete) {
       const revenue = metric('todayProfit')?.current
-      const ceiling = revenue != null ? revenue - cq!.confirmedCost : null
+      const hasConfirmedCost = cq!.collectedSites > 0
+      const ceiling = revenue != null && hasConfirmedCost ? revenue - cq!.confirmedCost : null
       return [{
         key,
         label: t('admin.dashboard.metrics.netProfit'),
@@ -351,12 +361,15 @@ const cards = computed<DashboardCoreCard[]>(() => {
         value: formatCny(ceiling),
         deltaDirection: 'flat',
         deltaText: '',
-        statusText: t('admin.dashboard.costQuality.netProfitCeiling', { value: formatCny(ceiling) }),
+        statusText: hasConfirmedCost
+          ? t('admin.dashboard.costQuality.netProfitCeiling', { value: formatCny(ceiling) })
+          : t('admin.dashboard.costQuality.costUnavailable'),
         clickable: false,
         negativeWhenUp: false,
       }]
     }
 
+    const deltaUnavailable = key === 'netProfit' && delta.unavailable
     return [{
       key,
       label: t(METRIC_META[key].labelKey),
@@ -364,23 +377,41 @@ const cards = computed<DashboardCoreCard[]>(() => {
       color: METRIC_META[key].color,
       value: formatCny(current.current),
       deltaDirection: delta.direction,
-      deltaText: formatCny(Math.abs(delta.amount)),
-      statusText: metricErrorText(current.error),
+      deltaText: deltaUnavailable ? '' : formatCny(Math.abs(delta.amount)),
+      statusText: metricErrorText(current.error)
+        || (deltaUnavailable ? t('admin.dashboard.costQuality.deltaUnsettled') : ''),
       clickable: key === 'todayProfit' || key === 'todayPurchase',
       negativeWhenUp: key === 'todayPurchase',
     }]
   })
-  const marginDelta = computeDelta(marginSeries.value)
+  const marginState = profitMarginState.value
+  const marginDelta = marginState.mode === 'exact'
+    ? computeDelta(marginSeries.value)
+    : { amount: 0, direction: 'flat' as const, unavailable: true }
   const marginError = metric('netProfit')?.error || metric('todayProfit')?.error
+  const marginStatusText = metricErrorText(marginError)
+    || (marginState.mode === 'ceiling' && marginState.value != null
+      ? t('admin.dashboard.costQuality.marginCeiling', { value: numberFormatter.value.format(marginState.value) })
+      : marginState.mode === 'unavailable'
+        ? (costIncomplete
+            ? t('admin.dashboard.costQuality.costUnavailable')
+            : t('admin.dashboard.common.unavailable'))
+        : marginDelta.unavailable
+          ? t('admin.dashboard.costQuality.deltaUnsettled')
+          : '')
   result.push({
     key: 'profitMargin',
     label: t('admin.dashboard.metrics.profitMargin'),
     icon: Gauge,
     color: 'accent',
-    value: percentFormatter.value.format(profitMargin.value / 100),
+    value: marginState.value == null
+      ? t('admin.dashboard.common.unavailable')
+      : percentFormatter.value.format(marginState.value / 100),
     deltaDirection: marginDelta.direction,
-    deltaText: t('admin.dashboard.delta.percentagePoints', { value: numberFormatter.value.format(Math.abs(marginDelta.amount)) }),
-    statusText: metricErrorText(marginError),
+    deltaText: marginDelta.unavailable
+      ? ''
+      : t('admin.dashboard.delta.percentagePoints', { value: numberFormatter.value.format(Math.abs(marginDelta.amount)) }),
+    statusText: marginStatusText,
     clickable: false,
     negativeWhenUp: false,
   })
