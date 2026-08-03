@@ -789,7 +789,12 @@ export default {
       targetsDrawer: {
         titleWithGroup: '{group} · 编辑调价数据源', selectedCount: '已选择 {count} 个上游分组',
         searchLabel: '搜索上游分组', searchPlaceholder: '搜索站点、平台或分组...',
-        emptyTitle: '没有匹配的上游分组', emptyDescription: '请调整搜索条件或先同步上游站点。',
+        manageSites: '管理站点显示', siteDisplayTitle: '站点显示顺序', siteDisplayEmpty: '暂无可管理站点',
+        siteGroupCount: '{count} 个分组', moveUp: '上移', moveDown: '下移',
+        moveSiteUp: '{site} 上移', moveSiteDown: '{site} 下移', targetLabel: '{site} · {group}',
+        noOptionsTitle: '暂无可选上游分组', noOptionsDescription: '请先同步上游站点。',
+        noVisibleSitesTitle: '没有可显示的上游站点', noVisibleSitesDescription: '请在站点显示管理中恢复。',
+        emptyTitle: '没有匹配的上游分组', emptyDescription: '请调整搜索条件。',
         unknownMultiplier: '暂无倍率', autoMultiplier: '自动', multiplier: '{value}x', stale: '已失效',
         close: '关闭数据源编辑', cancel: '取消', save: '保存数据源', saving: '保存中...'
       },

@@ -1553,6 +1553,7 @@ onBeforeUnmount(() => {
       :own-group="selectedRow?.ownGroup ?? ''"
       :options="targetOptions"
       :selected="selectedTargets"
+      :preference-scope="preferenceScope"
       :saving="savingOwnGroup === selectedRow?.ownGroup"
       @close="targetsDrawerOpen = false"
       @save="saveTargets"
