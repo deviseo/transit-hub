@@ -56,7 +56,7 @@ import type {
   LotterySubscriptionGroup,
 } from './types'
 
-import { t, locale } from '@/locales'
+import { t, te, locale } from '@/locales'
 const campaigns = ref<LotteryCampaign[]>([])
 const selectedCampaign = ref<LotteryCampaign | null>(null)
 const entries = ref<LotteryEntry[]>([])
@@ -161,6 +161,11 @@ const formatDateTime = (value?: string): string => {
     hour: '2-digit',
     minute: '2-digit',
   }).format(date)
+}
+
+const auditEventLabel = (event: string): string => {
+  const key = `admin.lottery.audit.${event}`
+  return te(key) ? t(key) : event
 }
 
 const toLocalInput = (value?: string): string => {
@@ -685,7 +690,7 @@ onMounted(async () => {
 
               <div v-if="activeTab === 'audit'" class="space-y-3">
                 <div v-for="log in auditLogs" :key="log.ID" class="rounded-lg border border-border/60 bg-surface p-3 text-sm">
-                  <div class="flex flex-wrap items-center justify-between gap-2"><span class="flex items-center gap-2 font-semibold"><History class="h-4 w-4 text-primary" aria-hidden="true" />{{ t(`admin.lottery.audit.${log.Event}`, log.Event) }}</span><span class="text-xs text-muted-foreground">{{ formatDateTime(log.CreatedAt) }}</span></div>
+                  <div class="flex flex-wrap items-center justify-between gap-2"><span class="flex items-center gap-2 font-semibold"><History class="h-4 w-4 text-primary" aria-hidden="true" />{{ auditEventLabel(log.Event) }}</span><span class="text-xs text-muted-foreground">{{ formatDateTime(log.CreatedAt) }}</span></div>
                   <pre v-if="log.Detail" class="mt-2 overflow-auto rounded-lg bg-background p-2 text-xs text-muted-foreground">{{ JSON.stringify(log.Detail, null, 2) }}</pre>
                 </div>
                 <div v-if="!auditLogs.length" class="p-6 text-center text-sm text-muted-foreground">{{ t('admin.lottery.audit.empty') }}</div>

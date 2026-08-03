@@ -384,7 +384,7 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
 
     <div v-if="(group.priorityConflictCount ?? 0) > 0" class="flex items-start gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-5 py-3 text-sm text-amber-700 dark:text-amber-400">
       <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
-      <span>{{ t(`${detailPrefix}.priorityConflict`, { count: group.priorityConflictCount }) }}</span>
+      <span>{{ t(`${detailPrefix}.priorityConflict`, { count: group.priorityConflictCount ?? 0 }) }}</span>
     </div>
 
     <section class="border-b border-border/50 bg-surface/20 px-5 py-4" :aria-label="t(`${detailPrefix}.statusBreakdown.title`)">

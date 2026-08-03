@@ -387,6 +387,31 @@ const cards = computed<DashboardCoreCard[]>(() => {
   return result
 })
 
+type GroupMetricMode = 'profit' | 'revenue'
+
+const groupMetricMode = ref<GroupMetricMode>('profit')
+const groupMetricModes: GroupMetricMode[] = ['profit', 'revenue']
+const groupProfitAvailable = computed(() => groupUsage.value?.profitAvailable === true)
+const groupMetricLabel = computed(() => t(
+  groupMetricMode.value === 'profit'
+    ? 'admin.dashboard.groups.profitAmount'
+    : 'admin.dashboard.groups.revenueAmount',
+))
+const groupSubtitle = computed(() => t(
+  groupMetricMode.value === 'profit'
+    ? 'admin.dashboard.groups.subtitleProfit'
+    : 'admin.dashboard.groups.subtitleRevenue',
+))
+const groupTopThreeLabel = computed(() => t(
+  groupMetricMode.value === 'profit'
+    ? 'admin.dashboard.groups.topThreeProfitShare'
+    : 'admin.dashboard.groups.topThreeRevenueShare',
+))
+const groupMetricValue = (item: GroupUsageTodayResponse['groups'][number]): number | null => {
+  if (groupMetricMode.value === 'profit') return item.todayProfit ?? null
+  return item.todayRevenue ?? item.todayAmount
+}
+
 const period = ref<DashboardPeriod>('week')
 const periods: DashboardPeriod[] = ['week', 'month']
 const selectedSeries = (key: DashboardMetricKey) => metric(key)?.series[period.value] ?? []
@@ -456,12 +481,20 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
   }
 })
 
-const sortedGroups = computed(() => [...(groupUsage.value?.groups ?? [])].sort((a, b) => b.todayAmount - a.todayAmount))
+const sortedGroups = computed(() => {
+  if (groupMetricMode.value === 'profit' && !groupProfitAvailable.value) return []
+  return [...(groupUsage.value?.groups ?? [])]
+    .filter((item) => groupMetricValue(item) != null)
+    .sort((a, b) => (groupMetricValue(b) ?? 0) - (groupMetricValue(a) ?? 0))
+})
 const topGroups = computed(() => sortedGroups.value.slice(0, 6))
 const groupConcentration = computed(() => {
-  const total = groupUsage.value?.total ?? 0
-  if (total <= 0) return 0
-  return sortedGroups.value.slice(0, 3).reduce((sum, item) => sum + item.todayAmount, 0) / total
+  if (groupMetricMode.value === 'profit' && !groupProfitAvailable.value) return null
+  const total = groupMetricMode.value === 'profit'
+    ? groupUsage.value?.totalProfit
+    : (groupUsage.value?.totalRevenue ?? groupUsage.value?.total)
+  if (total == null || total <= 0) return null
+  return sortedGroups.value.slice(0, 3).reduce((sum, item) => sum + (groupMetricValue(item) ?? 0), 0) / total
 })
 
 const escapeTooltipHtml = (value: string) => {
@@ -481,7 +514,7 @@ const groupTooltipContent = (params: unknown, mutedColor: string, foregroundColo
   const name = escapeTooltipHtml(String(point.name ?? ''))
   const amount = Number(point.value)
   const value = escapeTooltipHtml(formatCny(Number.isFinite(amount) ? amount : 0))
-  const label = escapeTooltipHtml(t('admin.dashboard.groups.amount'))
+  const label = escapeTooltipHtml(groupMetricLabel.value)
   return `<div style="margin-bottom:6px;color:${foregroundColor};font-weight:600">${name}</div>`
     + `<div style="display:flex;min-width:160px;justify-content:space-between;gap:20px;color:${mutedColor}">`
     + `<span>${label}</span><strong style="color:${foregroundColor}">${value}</strong></div>`
@@ -520,9 +553,9 @@ const groupChartOption = computed<EChartsCoreOption>(() => {
       },
     },
     series: [{
-      name: t('admin.dashboard.groups.amount'),
+      name: groupMetricLabel.value,
       type: 'bar',
-      data: topGroups.value.map(item => item.todayAmount),
+      data: topGroups.value.map(item => groupMetricValue(item) ?? 0),
       barMaxWidth: 20,
       itemStyle: { color: theme.primary, borderRadius: [0, 4, 4, 0] },
       emphasis: { itemStyle: { color: theme.primary, opacity: 0.88 } },
@@ -859,16 +892,35 @@ const lastProbeLabel = computed(() => {
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2 class="text-base font-semibold text-foreground">{{ t('admin.dashboard.groups.title') }}</h2>
-                <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.dashboard.groups.subtitle') }}</p>
+                <p class="mt-1 text-sm text-muted-foreground">{{ groupSubtitle }}</p>
               </div>
-              <button
-                type="button"
-                class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-                @click="openGroupList"
-              >
-                <Layers3 class="h-4 w-4" />
-                {{ t('admin.dashboard.groups.total', { count: groupCount ?? 0 }) }}
-              </button>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <div
+                  class="inline-flex items-center rounded-lg border border-border/60 bg-surface/50 p-1"
+                  role="group"
+                  :aria-label="t('admin.dashboard.groups.modeLabel')"
+                >
+                  <button
+                    v-for="mode in groupMetricModes"
+                    :key="mode"
+                    type="button"
+                    :aria-pressed="groupMetricMode === mode"
+                    class="rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:text-sm"
+                    :class="groupMetricMode === mode ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+                    @click="groupMetricMode = mode"
+                  >
+                    {{ t(`admin.dashboard.groups.mode${mode === 'profit' ? 'Profit' : 'Revenue'}`) }}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                  @click="openGroupList"
+                >
+                  <Layers3 class="h-4 w-4" />
+                  {{ t('admin.dashboard.groups.total', { count: groupCount ?? 0 }) }}
+                </button>
+              </div>
             </div>
 
             <div v-if="operationalLoading && !groupUsage" class="flex h-[280px] items-center justify-center text-muted-foreground">
@@ -881,16 +933,25 @@ const lastProbeLabel = computed(() => {
                 {{ t('admin.dashboard.retry') }}
               </button>
             </div>
+            <div v-else-if="groupMetricMode === 'profit' && !groupProfitAvailable" class="flex h-[280px] flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+              <AlertTriangle class="h-5 w-5 text-warning" />
+              <span>{{ t('admin.dashboard.groups.profitUnavailable') }}</span>
+            </div>
             <div v-else-if="topGroups.length > 0" class="mt-4 h-[280px]">
-              <DashboardEChart :option="groupChartOption" :accessible-label="t('admin.dashboard.groups.chartAria')" />
+              <DashboardEChart
+                :option="groupChartOption"
+                :accessible-label="t(groupMetricMode === 'profit' ? 'admin.dashboard.groups.chartAriaProfit' : 'admin.dashboard.groups.chartAriaRevenue')"
+              />
             </div>
             <div v-else class="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
               {{ t('admin.dashboard.groups.empty') }}
             </div>
 
             <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-4 text-sm">
-              <span class="text-muted-foreground">{{ t('admin.dashboard.groups.topThreeShare') }}</span>
-              <span class="font-semibold tabular-nums text-foreground">{{ percentFormatter.format(groupConcentration) }}</span>
+              <span class="text-muted-foreground">{{ groupTopThreeLabel }}</span>
+              <span class="font-semibold tabular-nums text-foreground">
+                {{ groupConcentration == null ? t('admin.dashboard.common.unavailable') : percentFormatter.format(groupConcentration) }}
+              </span>
             </div>
           </article>
 

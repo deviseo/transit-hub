@@ -169,20 +169,28 @@ export const getDashboardMetrics = async (): Promise<DashboardMetricsResponse> =
 export const getDashboardTrends = async (days: number): Promise<DashboardTrendsResponse> =>
   requestJson<DashboardTrendsResponse>(`/dashboard/trends?days=${days}`)
 
-/** 单个分组的今日使用额度。 */
+/** 单个分组的今日营收、成本与利润。todayAmount 保留为营收兼容字段。 */
 export interface GroupUsageTodayItem {
   groupName: string
   todayAmount: number
+  todayRevenue: number
+  todayCost?: number | null
+  todayProfit?: number | null
 }
 
-/** 分组今日用量明细响应。 */
+/** 分组今日营收明细，以及在成本口径完整时实时派生的利润明细。 */
 export interface GroupUsageTodayResponse {
   date: string
   total: number
+  totalRevenue: number
+  totalCost?: number | null
+  totalProfit?: number | null
+  profitAvailable: boolean
+  profitUnavailableReason?: string
   groups: GroupUsageTodayItem[]
 }
 
-/** 获取当前工作区「我的站点」所有分组今日的使用额度明细。仅在弹窗打开时按需调用。 */
+/** 获取当前工作区「我的站点」所有分组今日营收及实时利润。首页运营区和弹窗按需调用。 */
 export const getGroupUsageToday = async (): Promise<GroupUsageTodayResponse> =>
   requestJson<GroupUsageTodayResponse>('/dashboard/group-usage-today')
 

@@ -449,13 +449,21 @@ export default {
       },
       groups: {
         title: '分组贡献',
-        subtitle: '今日营收最高的分组',
+        subtitleRevenue: '今日营收最高的分组',
+        subtitleProfit: '今日利润最高的分组',
         total: '{count} 个分组',
-        amount: '今日营收',
-        topThreeShare: '前三分组营收占比',
+        modeLabel: '分组贡献显示方式',
+        modeRevenue: '营收',
+        modeProfit: '利润',
+        revenueAmount: '今日营收',
+        profitAmount: '今日利润',
+        topThreeRevenueShare: '前三分组营收占比',
+        topThreeProfitShare: '前三分组利润占比',
+        profitUnavailable: '利润数据暂不可用，请先查看营收。',
         empty: '暂无分组营收数据。',
         loadError: '分组贡献数据暂时无法加载。',
-        chartAria: '今日分组营收贡献排名图'
+        chartAriaRevenue: '今日分组营收贡献排名图',
+        chartAriaProfit: '今日分组利润贡献排名图'
       },
       attention: {
         title: '需要关注',

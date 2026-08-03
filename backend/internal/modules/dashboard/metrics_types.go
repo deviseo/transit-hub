@@ -154,17 +154,25 @@ type AdminGroupItem struct {
 	Multiplier string `json:"multiplier"`
 }
 
-// GroupUsageTodayResponse 是 GET /api/dashboard/group-usage-today 返回的分组今日用量明细。
+// GroupUsageTodayResponse 是 GET /api/dashboard/group-usage-today 返回的分组今日营收及实时利润明细。
 type GroupUsageTodayResponse struct {
-	Date   string                `json:"date"`
-	Total  float64               `json:"total"`
-	Groups []GroupUsageTodayItem `json:"groups"`
+	Date                    string                `json:"date"`
+	Total                   float64               `json:"total"` // 兼容字段：今日营收
+	TotalRevenue            float64               `json:"totalRevenue"`
+	TotalCost               *float64              `json:"totalCost,omitempty"`
+	TotalProfit             *float64              `json:"totalProfit,omitempty"`
+	ProfitAvailable         bool                  `json:"profitAvailable"`
+	ProfitUnavailableReason string                `json:"profitUnavailableReason,omitempty"`
+	Groups                  []GroupUsageTodayItem `json:"groups"`
 }
 
-// GroupUsageTodayItem 是单个分组的今日使用额度。
+// GroupUsageTodayItem 是单个分组的今日营收、成本及实时利润。
 type GroupUsageTodayItem struct {
-	GroupName   string  `json:"groupName"`
-	TodayAmount float64 `json:"todayAmount"`
+	GroupName    string   `json:"groupName"`
+	TodayAmount  float64  `json:"todayAmount"` // 兼容字段：今日营收
+	TodayRevenue float64  `json:"todayRevenue"`
+	TodayCost    *float64 `json:"todayCost,omitempty"`
+	TodayProfit  *float64 `json:"todayProfit,omitempty"`
 }
 
 // UpstreamKeyUsageTodayResponse 是 GET /api/dashboard/upstream-key-usage-today 返回的

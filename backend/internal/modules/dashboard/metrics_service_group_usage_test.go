@@ -315,6 +315,178 @@ func TestGroupUsageToday_TotalEqualsSumOfGroups(t *testing.T) {
 	}
 }
 
+func TestGroupUsageToday_CalculatesMatchedGroupProfit(t *testing.T) {
+	store := newFakeSessionStore()
+	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
+	accounts := &fakeAdminAccounts{current: map[string]string{"user-1": "account-1"}}
+	platform := &fakePlatformClient{
+		dailyStats: []upstream.GroupDailyStat{
+			{GroupName: "vip", TodayActualCost: 100},
+			{GroupName: " stable ", TodayActualCost: 50},
+		},
+	}
+	upstreams := &fakeUpstreamLister{
+		cachedSites: []upstream.Response{{
+			RechargeRate: 1,
+			Status:       upstream.StatusConnected,
+			Metrics: upstream.Metrics{
+				TodayConsume: todayCachedMetrics(12).TodayConsume,
+				Groups: []upstream.GroupInfo{
+					{Name: "vip"},
+					{Name: "stable"},
+				},
+			},
+		}},
+		keyUsageItems: []upstream.KeyUsageTodayItem{
+			{GroupName: "vip", TodayAmount: 40},
+			{GroupName: " stable ", TodayAmount: 10},
+		},
+	}
+	service := NewMetricsService(store, platform, upstreams, nil, accounts)
+
+	response, err := service.GroupUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GroupUsageToday() error: %v", err)
+	}
+	if !response.ProfitAvailable {
+		t.Fatalf("profit should be available: %+v", response)
+	}
+	byName := map[string]GroupUsageTodayItem{}
+	for _, group := range response.Groups {
+		byName[group.GroupName] = group
+	}
+	if got := *byName["vip"].TodayProfit; got != 60 {
+		t.Fatalf("vip profit = %.2f, want 60.00", got)
+	}
+	if got := *byName["vip"].TodayCost; got != 40 {
+		t.Fatalf("vip cost = %.2f, want 40.00", got)
+	}
+	if got := *byName["stable"].TodayProfit; got != 40 {
+		t.Fatalf("stable profit = %.2f, want 40.00", got)
+	}
+	if got := byName["stable"].TodayRevenue; got != 50 {
+		t.Fatalf("stable revenue = %.2f, want 50.00", got)
+	}
+	if response.TotalCost == nil || *response.TotalCost != 50 {
+		t.Fatalf("total cost = %v, want 50.00", response.TotalCost)
+	}
+	if response.TotalProfit == nil || *response.TotalProfit != 100 {
+		t.Fatalf("total profit = %v, want 100.00", response.TotalProfit)
+	}
+}
+
+func TestGroupUsageToday_AllowsKnownGroupWithZeroCost(t *testing.T) {
+	store := newFakeSessionStore()
+	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
+	accounts := &fakeAdminAccounts{current: map[string]string{"user-1": "account-1"}}
+	platform := &fakePlatformClient{
+		dailyStats: []upstream.GroupDailyStat{
+			{GroupName: "vip", TodayActualCost: 100},
+			{GroupName: "stable", TodayActualCost: 50},
+		},
+	}
+	upstreams := &fakeUpstreamLister{
+		cachedSites: []upstream.Response{{
+			RechargeRate: 1,
+			Status:       upstream.StatusConnected,
+			Metrics: upstream.Metrics{
+				TodayConsume: todayCachedMetrics(12).TodayConsume,
+				Groups: []upstream.GroupInfo{
+					{Name: "vip"},
+					{Name: "stable"},
+				},
+			},
+		}},
+		keyUsageItems: []upstream.KeyUsageTodayItem{{GroupName: "vip", TodayAmount: 40}},
+	}
+	service := NewMetricsService(store, platform, upstreams, nil, accounts)
+
+	response, err := service.GroupUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GroupUsageToday() error: %v", err)
+	}
+	if !response.ProfitAvailable {
+		t.Fatalf("profit should be available when a known group has zero cost: %+v", response)
+	}
+	byName := map[string]GroupUsageTodayItem{}
+	for _, group := range response.Groups {
+		byName[group.GroupName] = group
+	}
+	if got := *byName["stable"].TodayCost; got != 0 {
+		t.Fatalf("stable cost = %.2f, want 0.00", got)
+	}
+	if got := *byName["stable"].TodayProfit; got != 50 {
+		t.Fatalf("stable profit = %.2f, want 50.00", got)
+	}
+}
+
+func TestGroupUsageToday_DoesNotShowProfitWhenCostCollectionIsPartial(t *testing.T) {
+	store := newFakeSessionStore()
+	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
+	accounts := &fakeAdminAccounts{current: map[string]string{"user-1": "account-1"}}
+	platform := &fakePlatformClient{dailyStats: []upstream.GroupDailyStat{{GroupName: "vip", TodayActualCost: 100}}}
+	upstreams := &fakeUpstreamLister{
+		cachedSites: []upstream.Response{
+			{RechargeRate: 1, Status: upstream.StatusConnected, Metrics: todayCachedMetrics(12)},
+			{RechargeRate: 1, Status: upstream.StatusError},
+		},
+		keyUsageItems: []upstream.KeyUsageTodayItem{{GroupName: "vip", TodayAmount: 40}},
+		keyUsageErr: &upstream.KeyUsageCollectionError{
+			FailedSites: 1,
+			TotalSites:  2,
+			Cause:       errors.New("one upstream failed"),
+		},
+	}
+	service := NewMetricsService(store, platform, upstreams, nil, accounts)
+
+	response, err := service.GroupUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GroupUsageToday() error: %v", err)
+	}
+	if response.ProfitAvailable {
+		t.Fatalf("profit should be unavailable on partial cost data: %+v", response)
+	}
+	if response.TotalProfit != nil || response.Groups[0].TodayProfit != nil {
+		t.Fatalf("partial cost must not produce a profit value: %+v", response.Groups[0])
+	}
+	if response.ProfitUnavailableReason != "upstream_cost_unavailable" {
+		t.Fatalf("partial cost reason = %q, want upstream_cost_unavailable", response.ProfitUnavailableReason)
+	}
+}
+
+func TestGroupUsageToday_DoesNotShowProfitWhenGroupNamesDoNotAlign(t *testing.T) {
+	store := newFakeSessionStore()
+	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
+	accounts := &fakeAdminAccounts{current: map[string]string{"user-1": "account-1"}}
+	platform := &fakePlatformClient{dailyStats: []upstream.GroupDailyStat{{GroupName: "vip", TodayActualCost: 100}}}
+	upstreams := &fakeUpstreamLister{
+		cachedSites: []upstream.Response{{
+			RechargeRate: 1,
+			Status:       upstream.StatusConnected,
+			Metrics: upstream.Metrics{
+				TodayConsume: todayCachedMetrics(12).TodayConsume,
+				Groups:       []upstream.GroupInfo{{Name: "stable"}},
+			},
+		}},
+		keyUsageItems: []upstream.KeyUsageTodayItem{{GroupName: "stable", TodayAmount: 40}},
+	}
+	service := NewMetricsService(store, platform, upstreams, nil, accounts)
+
+	response, err := service.GroupUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("GroupUsageToday() error: %v", err)
+	}
+	if response.ProfitAvailable {
+		t.Fatalf("profit should be unavailable for unmatched groups: %+v", response)
+	}
+	if response.TotalProfit != nil || response.Groups[0].TodayProfit != nil {
+		t.Fatalf("unmatched group must not produce a profit value: %+v", response.Groups[0])
+	}
+	if response.ProfitUnavailableReason != "group_name_unmatched" {
+		t.Fatalf("unmatched reason = %q, want group_name_unmatched", response.ProfitUnavailableReason)
+	}
+}
+
 func TestGroupUsageTodayUsesOneExplicitBusinessDate(t *testing.T) {
 	store := newFakeSessionStore()
 	store.set("user-1", "account-1", AdminSession{Session: authenticatedSession()})
