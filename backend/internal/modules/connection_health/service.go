@@ -24,6 +24,9 @@ type healthRepository interface {
 	InsertEvent(ctx context.Context, e ConnectionHealthEvent) error
 	ListEventsByConnection(ctx context.Context, connectionID string, userID string, adminAccountID string, limit int) ([]ConnectionHealthEvent, error)
 	ListRecentEventsByWorkspace(ctx context.Context, userID string, adminAccountID string, limit int) ([]ConnectionHealthEvent, error)
+	ListLatestProbeFailureEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error)
+	ListLatestSchedulableActionEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error)
+	ListLatestSuccessfulSchedulableActionEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error)
 	CountFailureEventsSince(ctx context.Context, userID string, adminAccountID string, since time.Time) (int, error)
 	CountProbesToday(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time) (int, error)
 	TryConsumeProbeBudget(ctx context.Context, userID string, adminAccountID string, policyID string, dayStart time.Time, limit int) (bool, error)
@@ -55,15 +58,16 @@ type healthRepository interface {
 // Service 组装 connection_health 模块的全部业务逻辑：聚合查询、策略管理、手动动作、
 // 真实探活执行。所有对外可见字段都不含 upstream_key，符合任务书的敏感信息约束。
 type Service struct {
-	repo            healthRepository
-	mySites         MySitesReader
-	sites           SiteLookup
-	accounts        AdminAccountResolver
-	dispatcher      RemoteActionRunner
-	probeRunner     *RealProbeRunner
-	modelDiscovery  *ModelDiscoveryRunner
-	platformGroups  PlatformGroupReader
-	priorityActions TargetPriorityActioner
+	repo               healthRepository
+	mySites            MySitesReader
+	sites              SiteLookup
+	accounts           AdminAccountResolver
+	dispatcher         RemoteActionRunner
+	probeRunner        *RealProbeRunner
+	modelDiscovery     *ModelDiscoveryRunner
+	platformGroups     PlatformGroupReader
+	priorityActions    TargetPriorityActioner
+	schedulableActions TargetSchedulableActioner
 }
 
 func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platform PlatformActioner) *Service {
@@ -79,6 +83,9 @@ func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platf
 	// 安全跳过远端写入，不影响既有探活/降级流程。
 	if actions, ok := platform.(TargetPriorityActioner); ok {
 		service.priorityActions = actions
+	}
+	if actions, ok := platform.(TargetSchedulableActioner); ok {
+		service.schedulableActions = actions
 	}
 	return service
 }
@@ -100,21 +107,27 @@ func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (str
 
 // ModelHealth 是单个模型在某条对接链路上的健康状态展示数据，绝不包含 upstream_key。
 type ModelHealth struct {
-	ModelName            string     `json:"modelName"`
-	ProviderFamily       string     `json:"providerFamily"`
-	Configured           bool       `json:"configured"`
-	State                State      `json:"state"`
-	CurrentWeight        int        `json:"currentWeight"`
-	ConsecutiveFailures  int        `json:"consecutiveFailures"`
-	ConsecutiveSuccesses int        `json:"consecutiveSuccesses"`
-	LastProbeAt          *time.Time `json:"lastProbeAt"`
-	LastSuccessAt        *time.Time `json:"lastSuccessAt"`
-	LastFailureAt        *time.Time `json:"lastFailureAt"`
-	LastLatencyMs        *int       `json:"lastLatencyMs"`
-	LastErrorKey         string     `json:"lastErrorKey"`
-	LastErrorDetail      string     `json:"lastErrorDetail"`
-	LastRemoteAction     string     `json:"lastRemoteAction"`
-	UpdatedAt            *time.Time `json:"updatedAt"`
+	ModelName                string                       `json:"modelName"`
+	ProviderFamily           string                       `json:"providerFamily"`
+	Configured               bool                         `json:"configured"`
+	State                    State                        `json:"state"`
+	CurrentWeight            int                          `json:"currentWeight"`
+	ConsecutiveFailures      int                          `json:"consecutiveFailures"`
+	ConsecutiveSuccesses     int                          `json:"consecutiveSuccesses"`
+	LastProbeAt              *time.Time                   `json:"lastProbeAt"`
+	LastSuccessAt            *time.Time                   `json:"lastSuccessAt"`
+	LastFailureAt            *time.Time                   `json:"lastFailureAt"`
+	LastLatencyMs            *int                         `json:"lastLatencyMs"`
+	LastErrorKey             string                       `json:"lastErrorKey"`
+	LastErrorDetail          string                       `json:"lastErrorDetail"`
+	LastRemoteAction         string                       `json:"lastRemoteAction"`
+	ElapsedSeconds           *int64                       `json:"elapsedSeconds,omitempty"`
+	NextProbeAt              *time.Time                   `json:"nextProbeAt,omitempty"`
+	BlockedReason            string                       `json:"blockedReason,omitempty"`
+	EffectiveIntervalSeconds int                          `json:"effectiveIntervalSeconds,omitempty"`
+	EffectivePolicySources   []EffectiveProbePolicySource `json:"effectivePolicySources,omitempty"`
+	BudgetPolicyID           string                       `json:"budgetPolicyId,omitempty"`
+	UpdatedAt                *time.Time                   `json:"updatedAt"`
 }
 
 // ConnectionHealth 是一条已对接上游分组链路的健康展示数据。UpstreamKeyID 只保留 ID 辅助排障，
@@ -151,7 +164,9 @@ type EventView struct {
 	ToState           string    `json:"toState"`
 	LatencyMs         *int      `json:"latencyMs"`
 	ErrorKey          string    `json:"errorKey"`
+	ErrorDetail       string    `json:"errorDetail"`
 	RemoteAction      string    `json:"remoteAction"`
+	ActionSource      string    `json:"actionSource"`
 	CreatedAt         time.Time `json:"createdAt"`
 }
 
@@ -332,7 +347,7 @@ func (s *Service) Groups(ctx context.Context, userID string) ([]OwnGroupHealth, 
 }
 
 func toModelHealth(modelName string, st ConnectionHealthState) ModelHealth {
-	updatedAt := st.UpdatedAt
+	updatedAt := st.UpdatedAt.UTC()
 	return ModelHealth{
 		ModelName:            modelName,
 		Configured:           !isCredentialUnavailableReason(st.LastErrorKey),
@@ -340,15 +355,23 @@ func toModelHealth(modelName string, st ConnectionHealthState) ModelHealth {
 		CurrentWeight:        st.CurrentWeight,
 		ConsecutiveFailures:  st.ConsecutiveFailures,
 		ConsecutiveSuccesses: st.ConsecutiveSuccesses,
-		LastProbeAt:          st.LastProbeAt,
-		LastSuccessAt:        st.LastSuccessAt,
-		LastFailureAt:        st.LastFailureAt,
+		LastProbeAt:          utcTimePointer(st.LastProbeAt),
+		LastSuccessAt:        utcTimePointer(st.LastSuccessAt),
+		LastFailureAt:        utcTimePointer(st.LastFailureAt),
 		LastLatencyMs:        st.LastLatencyMs,
 		LastErrorKey:         st.LastErrorKey,
 		LastErrorDetail:      st.LastErrorDetail,
 		LastRemoteAction:     st.LastRemoteAction,
 		UpdatedAt:            &updatedAt,
 	}
+}
+
+func utcTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	utc := value.UTC()
+	return &utc
 }
 
 // Overview 汇总当前 admin workspace 下已纳入策略的账号/渠道，而不是继续统计旧
@@ -519,9 +542,10 @@ func (s *Service) filterToAssignedTargetEvents(ctx context.Context, userID strin
 	out := make([]ConnectionHealthEvent, 0, len(events))
 	for _, e := range events {
 		if _, ok := parseTargetID(e.ConnectionID); ok {
-			if e.Result == "policy_unmanaged_restore" {
+			if e.Result == "policy_unmanaged_restore" || e.ActionSource == ActionSourceUser {
 				// This event is emitted after the final assignment is removed. Filtering it by
-				// current assignments would make the automatic upstream restore impossible to audit.
+				// current assignments would make the automatic upstream restore or an explicit
+				// user scheduling action impossible to audit.
 				out = append(out, e)
 				continue
 			}
@@ -615,7 +639,7 @@ func toEventViews(events []ConnectionHealthEvent) []EventView {
 			ID: e.ID, ConnectionID: e.ConnectionID, ModelName: e.ModelName, OwnGroupName: e.OwnGroupName,
 			UpstreamSiteID: e.UpstreamSiteID, UpstreamGroupName: e.UpstreamGroupName, Result: e.Result,
 			FromState: e.FromState, ToState: e.ToState, LatencyMs: e.LatencyMs, ErrorKey: e.ErrorKey,
-			RemoteAction: e.RemoteAction, CreatedAt: e.CreatedAt,
+			ErrorDetail: e.ErrorDetail, RemoteAction: e.RemoteAction, ActionSource: e.ActionSource, CreatedAt: e.CreatedAt.UTC(),
 		})
 	}
 	return views
@@ -633,24 +657,26 @@ type ModelTargetInput struct {
 }
 
 type PolicyInput struct {
-	ID                      string             `json:"id"`
-	Name                    string             `json:"name"`
-	Enabled                 bool               `json:"enabled"`
-	OwnGroupID              string             `json:"ownGroupId"`
-	OwnGroupName            string             `json:"ownGroupName"`
-	ModelPattern            string             `json:"modelPattern"`
-	ProbeIntervalSeconds    int                `json:"probeIntervalSeconds"`
-	FailureThreshold        int                `json:"failureThreshold"`
-	SuccessThreshold        int                `json:"successThreshold"`
-	CooldownSeconds         int                `json:"cooldownSeconds"`
-	ObservationSeconds      int                `json:"observationSeconds"`
-	RecoveryStepPercent     int                `json:"recoveryStepPercent"`
-	AutoDegradeEnabled      bool               `json:"autoDegradeEnabled"`
-	AutoRemoteActionEnabled bool               `json:"autoRemoteActionEnabled"`
-	PriorityMode            string             `json:"priorityMode"`
-	StrategyMode            string             `json:"strategyMode"`
-	DailyProbeBudget        int                `json:"dailyProbeBudget"`
-	ModelTargets            []ModelTargetInput `json:"modelTargets"`
+	ID                                string             `json:"id"`
+	Name                              string             `json:"name"`
+	Enabled                           bool               `json:"enabled"`
+	OwnGroupID                        string             `json:"ownGroupId"`
+	OwnGroupName                      string             `json:"ownGroupName"`
+	ModelPattern                      string             `json:"modelPattern"`
+	ProbeIntervalSeconds              int                `json:"probeIntervalSeconds"`
+	ContinueProbeWhenUnschedulable    *bool              `json:"continueProbeWhenUnschedulable"`
+	UnschedulableProbeIntervalMinutes *int               `json:"unschedulableProbeIntervalMinutes"`
+	FailureThreshold                  int                `json:"failureThreshold"`
+	SuccessThreshold                  int                `json:"successThreshold"`
+	CooldownSeconds                   int                `json:"cooldownSeconds"`
+	ObservationSeconds                int                `json:"observationSeconds"`
+	RecoveryStepPercent               int                `json:"recoveryStepPercent"`
+	AutoDegradeEnabled                bool               `json:"autoDegradeEnabled"`
+	AutoRemoteActionEnabled           bool               `json:"autoRemoteActionEnabled"`
+	PriorityMode                      string             `json:"priorityMode"`
+	StrategyMode                      string             `json:"strategyMode"`
+	DailyProbeBudget                  int                `json:"dailyProbeBudget"`
+	ModelTargets                      []ModelTargetInput `json:"modelTargets"`
 }
 
 func (s *Service) ListPolicies(ctx context.Context, userID string) ([]Policy, error) {
@@ -687,6 +713,14 @@ func (s *Service) SavePolicy(ctx context.Context, userID string, in PolicyInput)
 		// 旧客户端把 multiplier_only 静默改回探活模式。
 		if strings.TrimSpace(in.StrategyMode) == "" {
 			in.StrategyMode = existing.StrategyMode
+		}
+		if in.ContinueProbeWhenUnschedulable == nil {
+			value := existing.ContinueProbeWhenUnschedulable
+			in.ContinueProbeWhenUnschedulable = &value
+		}
+		if in.UnschedulableProbeIntervalMinutes == nil {
+			value := defaultInt(existing.UnschedulableProbeIntervalMinutes, 60)
+			in.UnschedulableProbeIntervalMinutes = &value
 		}
 	}
 
@@ -726,12 +760,25 @@ func (s *Service) DeletePolicy(ctx context.Context, userID string, id string) er
 }
 
 func buildPolicyAndTargets(userID string, adminAccountID string, id string, in PolicyInput) (Policy, []ModelTarget, error) {
+	continueWhenUnschedulable := true
+	if in.ContinueProbeWhenUnschedulable != nil {
+		continueWhenUnschedulable = *in.ContinueProbeWhenUnschedulable
+	}
+	unschedulableIntervalMinutes := 60
+	if in.UnschedulableProbeIntervalMinutes != nil {
+		if *in.UnschedulableProbeIntervalMinutes <= 0 {
+			return Policy{}, nil, requestError(ErrorRequest)
+		}
+		unschedulableIntervalMinutes = *in.UnschedulableProbeIntervalMinutes
+	}
 	strategyMode := normalizeStrategyMode(in.StrategyMode)
 	policy := Policy{
 		ID: id, UserID: userID, AdminAccountID: adminAccountID, Name: strings.TrimSpace(in.Name), Enabled: in.Enabled,
 		OwnGroupID: in.OwnGroupID, OwnGroupName: in.OwnGroupName, ModelPattern: defaultString(in.ModelPattern, "*"),
 		ProbeMode: "real_model", ProbeIntervalSeconds: defaultInt(in.ProbeIntervalSeconds, 60),
-		FailureThreshold: defaultInt(in.FailureThreshold, 3), SuccessThreshold: defaultInt(in.SuccessThreshold, 2),
+		ContinueProbeWhenUnschedulable:    continueWhenUnschedulable,
+		UnschedulableProbeIntervalMinutes: unschedulableIntervalMinutes,
+		FailureThreshold:                  defaultInt(in.FailureThreshold, 3), SuccessThreshold: defaultInt(in.SuccessThreshold, 2),
 		CooldownSeconds: defaultInt(in.CooldownSeconds, 300), ObservationSeconds: defaultInt(in.ObservationSeconds, 300),
 		RecoveryStepPercent: defaultInt(in.RecoveryStepPercent, 25), AutoDegradeEnabled: in.AutoDegradeEnabled,
 		AutoRemoteActionEnabled: in.AutoDegradeEnabled && in.AutoRemoteActionEnabled, PriorityMode: normalizePriorityMode(in.PriorityMode),

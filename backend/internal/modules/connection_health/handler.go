@@ -32,10 +32,32 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("DELETE /api/connection-health/policies/{id}", handler.deletePolicy)
 	mux.HandleFunc("GET /api/connection-health/targets/{id}/models", handler.discoverTargetModels)
 	mux.HandleFunc("POST /api/connection-health/targets/{id}/manual-probe", handler.manualProbeTarget)
+	mux.HandleFunc("POST /api/connection-health/targets/{id}/schedulable", handler.setTargetSchedulable)
 	mux.HandleFunc("GET /api/connection-health/targets/{id}/policy-assignments", handler.getPolicyAssignments)
 	mux.HandleFunc("PUT /api/connection-health/targets/{id}/policy-assignments", handler.putPolicyAssignments)
 	mux.HandleFunc("GET /api/connection-health/admin-groups/{id}/policy-configuration", handler.getAdminGroupPolicyConfiguration)
 	mux.HandleFunc("PUT /api/connection-health/admin-groups/{id}/policy-configuration", handler.putAdminGroupPolicyConfiguration)
+}
+
+func (h *Handler) setTargetSchedulable(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var input struct {
+		Schedulable *bool `json:"schedulable"`
+	}
+	if err := httpjson.Decode(r, &input); err != nil || input.Schedulable == nil {
+		httpjson.WriteError(w, http.StatusBadRequest, ErrorRequest)
+		return
+	}
+	result, err := h.service.SetTargetSchedulable(r.Context(), userID, r.PathValue("id"), *input.Schedulable)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
 }
 
 func (h *Handler) storedSummary(w http.ResponseWriter, r *http.Request) {

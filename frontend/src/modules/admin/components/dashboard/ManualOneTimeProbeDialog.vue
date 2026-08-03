@@ -42,7 +42,7 @@ const testErrorKey = ref('')
 let loadSequence = 0
 
 const defaultSelection = (options: ManualProbeModelOption[]): Set<string> =>
-  new Set(options.length > 0 ? [options[0].id] : [])
+  new Set(options.length > 0 ? [options.find((option) => option.id === 'gpt-5.6-sol')?.id ?? options[0].id] : [])
 
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
 
@@ -71,7 +71,7 @@ watch(
       return
     }
     models.value = outcome.models
-    // 手动一次性探活默认只选择首个模型，避免首次操作误触发大批量探活；用户仍可自行多选。
+    // 精确优先选择 gpt-5.6-sol；目标不提供时回退第一项。每次打开都会重新执行。
     selected.value = defaultSelection(outcome.models)
     phase.value = 'ready'
   },

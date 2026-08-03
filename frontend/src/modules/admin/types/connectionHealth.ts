@@ -24,7 +24,20 @@ export interface ModelHealth {
   lastErrorKey: string
   lastErrorDetail: string
   lastRemoteAction: string
+  elapsedSeconds?: number | null
+  nextProbeAt?: string | null
+  blockedReason?: string
+  effectiveIntervalSeconds?: number
+  effectivePolicySources?: EffectiveProbePolicySource[]
+  budgetPolicyId?: string
   updatedAt: string | null
+}
+
+export interface EffectiveProbePolicySource {
+  policyId: string
+  policyName: string
+  continueAutoProbe: boolean
+  effectiveIntervalSeconds: number
 }
 
 export interface ConnectionHealth {
@@ -71,6 +84,7 @@ export interface AdminGroupHealthSummary {
   recoveringModels?: number
   suspendedModels: number
   disabledModels: number
+  pendingModels?: number
   unconfiguredModels: number
   lastProbeAt: string | null
 }
@@ -93,6 +107,11 @@ export interface TargetPolicyAssignments {
 export interface AdminGroupUnprobedModel {
   modelName: string
   providerFamily: string
+  nextProbeAt?: string | null
+  blockedReason?: string
+  effectiveIntervalSeconds?: number
+  effectivePolicySources?: EffectiveProbePolicySource[]
+  budgetPolicyId?: string
 }
 
 export interface AdminGroupAccount {
@@ -102,6 +121,14 @@ export interface AdminGroupAccount {
   type: string
   status: string
   schedulable?: boolean
+  schedulableSource?: string
+  schedulableChangedAt?: string | null
+  lastSchedulableAction?: string
+  lastSchedulableActionAt?: string | null
+  lastSchedulableActionResult?: string
+  lastSchedulableActionErrorKey?: string
+  upstreamStatusSource?: string
+  healthStatusSource?: string
   priority?: number
   concurrency?: number
   // Sub2API admin 转发账号记录自身的 rate_multiplier；保留用于兼容既有接口。
@@ -132,6 +159,11 @@ export interface AdminGroupAccount {
   excludedFromGroupPolicy?: boolean
   priorityManaged?: boolean
   priorityConflict?: boolean
+  priorityOriginal?: number
+  priorityExpected?: number
+  priorityConflictValue?: number
+  priorityConflictAt?: string | null
+  probeModelsConfigured?: boolean
   effectiveMultiplier?: number | null
 }
 
@@ -155,10 +187,20 @@ export interface AdminGroupHealth {
   hasEnabledProbePolicy?: boolean
   priorityMode?: ConnectionHealthPriorityMode
   priorityConflictCount?: number
+  priorityConflicts?: AdminPriorityConflict[]
+  probeModelsConfigured?: boolean
   healthSummary: AdminGroupHealthSummary
   // accountsError 非空（i18n key）表示该分组账号列表加载失败，其余分组不受影响。
   accountsError?: string
   accounts: AdminGroupAccount[]
+}
+
+export interface AdminPriorityConflict {
+  targetId: string
+  accountName: string
+  currentPriority?: number
+  expectedPriority?: number
+  conflictAt?: string | null
 }
 
 export interface ConnectionHealthEvent {
@@ -173,7 +215,9 @@ export interface ConnectionHealthEvent {
   toState: string
   latencyMs: number | null
   errorKey: string
+  errorDetail?: string
   remoteAction: string
+  actionSource?: string
   createdAt: string
 }
 
@@ -227,6 +271,8 @@ export interface ConnectionHealthPolicy {
   modelPattern: string
   probeMode: string
   probeIntervalSeconds: number
+  continueProbeWhenUnschedulable: boolean
+  unschedulableProbeIntervalMinutes: number
   failureThreshold: number
   successThreshold: number
   cooldownSeconds: number
@@ -283,6 +329,8 @@ export interface PolicyInput {
   ownGroupName: string
   modelPattern?: string
   probeIntervalSeconds?: number
+  continueProbeWhenUnschedulable?: boolean
+  unschedulableProbeIntervalMinutes?: number
   failureThreshold?: number
   successThreshold?: number
   cooldownSeconds?: number

@@ -984,6 +984,7 @@ export default {
       notConnected: '未对接',
       notProbed: '尚未探活',
       notConfigured: '未配置探活模型',
+      budgetExhausted: '今日预算已用尽',
       groupTypes: {
         public: '公开',
         exclusive: '专属',
@@ -1030,8 +1031,39 @@ export default {
         unprobeable: '暂不可探活',
         upstreamStatus: '上游状态：{status}',
         unknownUpstreamStatus: '未知',
+        statusSources: '来源：上游 {upstream} · 健康 {health} · 调度 {schedulable}',
+        schedulableOn: '主站调度开启',
+        schedulableOff: '主站调度关闭',
+        schedulableUnknown: '主站调度未知',
+        upstreamAccountActive: '主站账号启用',
+        upstreamAccountInactive: '主站账号停用',
+        strategyDisabled: '策略停用',
+        priorityUnmanaged: '优先级未托管',
+        priorityManaged: '优先级已托管',
+        priorityPendingProbe: '待探活优先级档',
+        healthSuspended: '健康暂停',
+        probeModelsNotConfigured: '未配置探活模型',
+        schedulableChangedAt: '调度状态记录于 {time}',
+        lastSchedulableAction: '最近动作：{action} · {result} · {time}{error}',
+        schedulableActionSucceeded: '成功',
+        schedulableActionFailed: '失败',
+        notApplicable: '不适用',
+        statusSourceLabels: {
+          upstream_observed: '主站观察',
+          health_probe: '健康探活',
+          unprobed: '待探活',
+          unconfigured: '未配置',
+          user_action: '用户动作',
+          none: '无',
+          unknown: '未知'
+        },
+        actions: {
+          disableScheduling: '关闭主站调度',
+          enableScheduling: '恢复主站调度'
+        },
         priorityConflict: '检测到 {count} 个上游优先级被人工修改。为避免覆盖人工设置，系统已停止管理这些目标的优先级。重新保存分组策略后可重新接管。',
         priorityConflictShort: '上游优先级已被人工修改，系统已停止自动覆盖',
+        priorityConflictTarget: '{target}：当前 {current}，期望 {expected}，发现于 {time}',
         empty: '该分组当前没有账号或渠道。',
         metrics: {
           accounts: '账号/渠道',
@@ -1041,7 +1073,7 @@ export default {
         },
         statusBreakdown: {
           title: '当前分组探活状态',
-          hint: '健康状态按模型统计；待首次探活和不可探活按账号/渠道统计，不代表上游原始启停状态。',
+          hint: '健康状态和待首次探活按模型统计；未配置模型和不可探活按账号/渠道统计，不代表上游原始启停状态。',
           healthy: '健康模型',
           degraded: '降级模型',
           suspended: '探活暂停',
@@ -1049,6 +1081,7 @@ export default {
           recovering: '逐步恢复',
           disabled: '手动禁用',
           notProbed: '待首次探活',
+          unconfigured: '未配置探活模型',
           unprobeable: '不可探活目标'
         },
         filters: {
@@ -1081,7 +1114,11 @@ export default {
           empty: '该目标还没有模型探活结果。',
           latency: '延迟 {value} ms',
           lastProbe: '最近 {value}',
-          weight: '健康权重 {value}%'
+          weight: '健康权重 {value}%',
+          nextProbe: '下一次可探活 {value}',
+          policySource: '{name} · {state} · {interval} 秒',
+          policyContinues: '继续自动探活',
+          policyStops: '停止自动探活'
         }
       },
       setup: {
@@ -1092,8 +1129,8 @@ export default {
           '2': '运行策略',
           '3': '确认启用'
         },
-		generatedPolicyName: '{group} - 分组自动化策略',
-		retry: '重新加载',
+        generatedPolicyName: '{group} - 分组自动化策略',
+        retry: '重新加载',
         scope: {
           title: '选择策略生效目标',
           description: '默认选择当前分组的全部账号或渠道。取消勾选的目标不会自动探活、自动降级或调整优先级。',
@@ -1248,6 +1285,8 @@ export default {
         manual_disable: '人工禁用',
         manual_restore: '人工恢复',
         policy_unmanaged_restore: '策略已解绑，恢复上游原始状态',
+        schedulable_user_action_succeeded: '用户调度动作成功',
+        schedulable_user_action_failed: '用户调度动作失败',
         credential_unavailable: '无法安全获取上游凭据，暂不可探活',
         secure_verification_required: '需要完成上游 Root 安全验证后才能读取渠道密钥',
         base_url_unavailable: '缺少可用的 Base URL，暂不可探活',
@@ -1270,9 +1309,9 @@ export default {
         subtitle: '查看该探活目标（账号/渠道）各模型的探活健康状态。',
         globalSubtitle: '最近的探活与远端动作事件。',
         viewingConnection: '正在查看该目标事件',
+        accountAction: '账号调度动作',
         card: {
           latencyLabel: '对话延迟',
-          pingLabel: '节点 PING',
           availabilityLabel: '可用率',
           recentRecordsLabel: '近 60 次记录',
           past: 'PAST',
@@ -1282,8 +1321,27 @@ export default {
           nextProbeDue: '下次探活：已到期，等待调度',
           nextProbeNoPolicy: '下次探活：未配置策略',
           nextProbeNeverProbed: '下次探活：尚未探活',
+          nextProbeUnknown: '下次探活：调度状态未知',
           nextProbeDisabled: '下次探活：已禁用，不自动探活',
-          remoteActionLine: '远端动作：{label}'
+          nextProbeBlocked: '下次探活：{reason}',
+          nextProbeWaiting: '{countdown} · 等待原因：{reason}',
+          nextProbeActionOnly: '此记录是账号调度动作，不产生探活时间',
+          lastProbe: '最后探活：{value}',
+          lastFailure: '最后失败：{value}',
+          elapsed: '距今 {seconds}s',
+          errorDetail: '错误详情：{value}',
+          effectiveDecision: '有效探活间隔：{interval}s · 决策来源：{sources}',
+          decisionSource: '{name}（{state}，{interval}s）',
+          sourceContinues: '继续监测',
+          sourceStops: '停止监测',
+          budgetPolicy: '预算归属：{policy}',
+          remoteActionLine: '远端动作：{label}',
+          actionSource: '动作来源：{source} · {time}',
+          actionSources: {
+            userAction: '用户操作',
+            upstreamObserved: '上游观测',
+            automatic: '系统自动'
+          }
         }
       },
       remoteActions: {
@@ -1295,10 +1353,24 @@ export default {
         sub2apiActive: 'Sub2API 账号已切换为 active',
         sub2apiInactiveFailed: 'Sub2API 账号切换 inactive 失败',
         sub2apiActiveFailed: 'Sub2API 账号切换 active 失败',
+        sub2apiSchedulableEnabled: '用户已恢复 Sub2API 主站调度',
+        sub2apiSchedulableDisabled: '用户已关闭 Sub2API 主站调度',
+        sub2apiSchedulableEnableFailed: '用户恢复 Sub2API 主站调度失败',
+        sub2apiSchedulableDisableFailed: '用户关闭 Sub2API 主站调度失败',
+        skippedUpstreamScheduling: '主站调度关闭，未执行自动远端动作',
         newapiDisabled: 'NewAPI channel 已禁用',
         newapiUpdateFailed: 'NewAPI channel 权重或状态更新失败',
         newapiWeight: 'NewAPI channel 权重已调整为 {weight}',
         other: '{action}'
+      },
+      probeBlockedReasons: {
+        probe_interval: '探活间隔未到',
+        cooldown: '健康冷却中',
+        failure_backoff: '连续失败退避中',
+        health_disabled: '健康已禁用',
+        upstream_scheduling_disabled: '主站调度关闭且策略停止自动探活',
+        daily_probe_budget_exhausted: '当日探活预算已耗尽',
+        daily_probe_budget_unavailable: '当日探活预算暂不可读取'
       },
       policies: {
         title: '自动化策略',
@@ -1351,6 +1423,8 @@ export default {
         maxProbeTokensLabel: '最大 token',
         probePromptPlaceholder: '探活 prompt（留空使用默认值）',
         probeIntervalLabel: '探活间隔（秒）',
+        continueProbeWhenUnschedulableLabel: '主站关闭调度后继续自动探活',
+        unschedulableProbeIntervalLabel: '关闭调度间隔（分钟）',
         dailyBudgetLabel: '每日探活预算',
         failureThresholdLabel: '失败阈值',
         successThresholdLabel: '恢复成功阈值',
@@ -1440,7 +1514,8 @@ export default {
         errors: {
           nameRequired: '请输入策略名称。',
           modelTargetRequired: '至少需要一个已填写模型名称的探活目标。',
-          providerRequired: '请选择该策略的 provider。'
+          providerRequired: '请选择该策略的 provider。',
+          unschedulableIntervalInvalid: '关闭调度后的探活间隔必须是正整数分钟。'
         }
       },
       probeDialog: {
@@ -1483,6 +1558,10 @@ export default {
         noMatchingModels: '所选模型未匹配当前探活策略。',
         accountsFetch: '该分组账号列表加载失败。',
         targetNotFound: '探活目标不存在或不属于当前工作区。',
+        schedulableActionFailed: '主站调度开关修改失败，实际状态未确认。',
+        schedulableReadbackFailed: '主站已返回但调度状态回读失败或不一致，未显示为成功。',
+        schedulableAuditFailed: '主站状态已修改，但动作记录保存失败，请刷新后核对。',
+        schedulableUnsupported: '当前目标不是可操作的 Sub2API 账号。',
         credentialUnavailable: '无法安全获取上游凭据，暂不可探活。',
         secureVerificationRequired: '需要上游 root 安全验证后才能读取 channel key。',
         baseUrlUnavailable: '缺少可用的 Base URL，暂不可探活。',

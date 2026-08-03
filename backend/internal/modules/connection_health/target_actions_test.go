@@ -157,6 +157,54 @@ func TestReconcileTargetRemoteAction_DoesNotEnableInitiallyDisabledTarget(t *tes
 	}
 }
 
+func TestReconcileTargetRemoteAction_SkipsWhenUpstreamSchedulingDisabled(t *testing.T) {
+	repo := newFakeRepository()
+	platform := &fakePlatformActioner{}
+	service := &Service{repo: repo, dispatcher: newRemoteActionDispatcher(nil, nil, platform)}
+	targetID := "sub2api:ws1:acc-1"
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: targetID, ModelName: "model-a", State: StateSuspended, CurrentWeight: 0},
+	}
+	policy := Policy{ID: "p1", Enabled: true, AutoDegradeEnabled: true, AutoRemoteActionEnabled: true}
+	schedulable := false
+	target := AdminProbeTarget{
+		TargetID: targetID, Platform: string(upstream.PlatformSub2API), AccountID: "acc-1",
+		AccountStatus: "active", Schedulable: &schedulable,
+	}
+
+	action, err := service.reconcileTargetRemoteAction(context.Background(), "user1", "ws1", upstream.Session{Platform: upstream.PlatformSub2API}, target, []probeModelSpec{{modelName: "model-a", policy: policy}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if action != RemoteActionSkippedUpstreamScheduling || len(platform.sub2APICalls) != 0 {
+		t.Fatalf("upstream scheduling disabled must skip automatic remote action, action=%q calls=%+v", action, platform.sub2APICalls)
+	}
+}
+
+func TestReconcileTargetRemoteAction_DoesNotReportSchedulingSkipWithoutRequestedAction(t *testing.T) {
+	repo := newFakeRepository()
+	platform := &fakePlatformActioner{}
+	service := &Service{repo: repo, dispatcher: newRemoteActionDispatcher(nil, nil, platform)}
+	targetID := "sub2api:ws1:acc-1"
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"model-a": {ConnectionID: targetID, ModelName: "model-a", State: StateHealthy, CurrentWeight: 100},
+	}
+	policy := Policy{ID: "p1", Enabled: true, AutoDegradeEnabled: true, AutoRemoteActionEnabled: true}
+	schedulable := false
+	target := AdminProbeTarget{
+		TargetID: targetID, Platform: string(upstream.PlatformSub2API), AccountID: "acc-1",
+		AccountStatus: "active", Schedulable: &schedulable,
+	}
+
+	action, err := service.reconcileTargetRemoteAction(context.Background(), "user1", "ws1", upstream.Session{Platform: upstream.PlatformSub2API}, target, []probeModelSpec{{modelName: "model-a", policy: policy}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if action != "" || len(platform.sub2APICalls) != 0 {
+		t.Fatalf("ordinary healthy probe must not invent a skipped remote action, action=%q calls=%+v", action, platform.sub2APICalls)
+	}
+}
+
 func TestReconcileTargetRemoteAction_ConfirmsPendingSystemWrite(t *testing.T) {
 	repo := newFakeRepository()
 	platform := &fakePlatformActioner{}

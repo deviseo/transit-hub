@@ -51,12 +51,15 @@ const {
   events,
   policies,
   isLoading,
+  isActionLoading,
   errorKey,
   loadAll,
+  loadAdminGroups,
   loadEvents,
   loadPolicies,
   removePolicy,
   savePolicy,
+  updateTargetSchedulable,
 } = useConnectionHealth()
 const { currentAccount } = useAdminAccounts()
 
@@ -65,6 +68,7 @@ const selectedType = ref('')
 const selectedGroupId = ref('')
 const selectedConnectionId = ref('')
 const eventsDialogOpen = ref(false)
+let eventsOpenRequestSequence = 0
 const siteNameMap = ref<Map<string, string>>(new Map())
 const preferences = ref<ConnectionHealthPreferences>(createDefaultConnectionHealthPreferences())
 const groupManagerOpen = ref(false)
@@ -259,20 +263,35 @@ const onProbeAccount = (account: AdminGroupAccount) => {
 
 // 策略探活事件。
 const openAllEvents = async () => {
+  const requestSequence = ++eventsOpenRequestSequence
+  const previousConnectionId = selectedConnectionId.value
   selectedConnectionId.value = ''
-  await loadEvents()
-  eventsDialogOpen.value = true
+  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents()])
+  if (requestSequence !== eventsOpenRequestSequence) return
+  if (statusLoaded && eventsLoaded) eventsDialogOpen.value = true
+  else selectedConnectionId.value = previousConnectionId
 }
 
 const onViewEventsAccount = async (account: AdminGroupAccount) => {
+  const requestSequence = ++eventsOpenRequestSequence
+  const previousConnectionId = selectedConnectionId.value
   selectedConnectionId.value = account.targetId
-  await loadEvents(account.targetId)
-  eventsDialogOpen.value = true
+  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents(account.targetId)])
+  if (requestSequence !== eventsOpenRequestSequence) return
+  if (statusLoaded && eventsLoaded) eventsDialogOpen.value = true
+  else selectedConnectionId.value = previousConnectionId
+}
+
+const onSetTargetSchedulable = async (account: AdminGroupAccount) => {
+  if (!account.targetId || !account.targetId.toLowerCase().startsWith('sub2api:') || account.schedulable == null) return
+  await updateTargetSchedulable(account.targetId, !account.schedulable)
 }
 
 const showAllEvents = async () => {
-  selectedConnectionId.value = ''
-  await loadEvents()
+  const requestSequence = ++eventsOpenRequestSequence
+  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents()])
+  if (requestSequence !== eventsOpenRequestSequence) return
+  if (statusLoaded && eventsLoaded) selectedConnectionId.value = ''
 }
 
 // 高级策略列表/编辑继续保留，但退出首次主流程。
@@ -314,6 +333,8 @@ const togglePolicyEnabled = async (policy: ConnectionHealthPolicy) => {
     observationSeconds: policy.observationSeconds,
     recoveryStepPercent: policy.recoveryStepPercent,
     dailyProbeBudget: policy.dailyProbeBudget,
+    continueProbeWhenUnschedulable: policy.continueProbeWhenUnschedulable,
+    unschedulableProbeIntervalMinutes: policy.unschedulableProbeIntervalMinutes,
     autoDegradeEnabled: policy.autoDegradeEnabled,
     autoRemoteActionEnabled: policy.autoRemoteActionEnabled,
     priorityMode: policy.priorityMode ?? 'none',
@@ -527,9 +548,11 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
           :key="selectedGroup.id"
           :group="selectedGroup"
           :hide-unmonitored-accounts="preferences.hideUnmonitoredAccounts"
+          :action-loading="isActionLoading"
           @setup="openSetup"
           @probe="onProbeAccount"
           @view-events="onViewEventsAccount"
+          @set-schedulable="onSetTargetSchedulable"
           @update:hide-unmonitored-accounts="setHideUnmonitoredAccounts"
         />
       </div>
@@ -574,7 +597,6 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
       :events="events"
       :groups="groups"
       :admin-groups="adminGroups"
-      :policies="policies"
       :selected-connection-id="selectedConnectionId"
       :site-name="siteName"
       @close="eventsDialogOpen = false"

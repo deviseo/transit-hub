@@ -14,6 +14,7 @@ import {
   Settings2,
   ShieldCheck,
   ShieldQuestion,
+  Power,
   X,
   Zap,
 } from 'lucide-vue-next'
@@ -22,6 +23,7 @@ import {
   connectionHealthMessageKey,
   connectionHealthStateBadgeClass,
   formatConnectionHealthTime,
+  remoteActionLabelKey,
 } from '../../composables/useConnectionHealth'
 import type {
   AdminGroupAccount,
@@ -32,6 +34,7 @@ import type {
 const props = defineProps<{
   group: AdminGroupHealth
   hideUnmonitoredAccounts: boolean
+  actionLoading: boolean
 }>()
 
 const emit = defineEmits<{
@@ -39,6 +42,7 @@ const emit = defineEmits<{
   (event: 'probe', account: AdminGroupAccount): void
   (event: 'view-events', account: AdminGroupAccount): void
   (event: 'update:hide-unmonitored-accounts', value: boolean): void
+  (event: 'set-schedulable', account: AdminGroupAccount): void
 }>()
 
 import { t, te } from '@/locales'
@@ -51,6 +55,7 @@ type GroupHealthFilter =
   | { kind: 'monitored' }
   | { kind: 'probeable' }
   | { kind: 'unprobeable' }
+  | { kind: 'unconfigured' }
   | { kind: 'modelState'; state: ConnectionHealthState }
   | { kind: 'notProbed' }
 
@@ -94,7 +99,8 @@ const stateBreakdown = computed<StateBreakdownItem[]>(() => [
   { key: 'observing', count: props.group.healthSummary.observingModels ?? 0, filter: modelStateFilter('observing'), tone: 'text-blue-600 dark:text-blue-400' },
   { key: 'recovering', count: props.group.healthSummary.recoveringModels ?? 0, filter: modelStateFilter('recovering'), tone: 'text-cyan-600 dark:text-cyan-400' },
   { key: 'disabled', count: props.group.healthSummary.disabledModels ?? 0, filter: modelStateFilter('disabled'), tone: 'text-muted-foreground' },
-  { key: 'notProbed', count: props.group.healthSummary.unconfiguredModels ?? 0, filter: { kind: 'notProbed' }, tone: 'text-muted-foreground' },
+  { key: 'notProbed', count: props.group.healthSummary.pendingModels ?? 0, filter: { kind: 'notProbed' }, tone: 'text-muted-foreground' },
+  { key: 'unconfigured', count: props.group.healthSummary.unconfiguredModels ?? 0, filter: { kind: 'unconfigured' }, tone: 'text-muted-foreground' },
   { key: 'unprobeable', count: props.group.healthSummary.unprobeableAccounts ?? 0, filter: { kind: 'unprobeable' }, tone: 'text-amber-600 dark:text-amber-400' },
 ])
 
@@ -108,7 +114,24 @@ const aggregateState = (account: AdminGroupAccount): ConnectionHealthState | '' 
 
 const unprobedModels = (account: AdminGroupAccount) => account.unprobedModels ?? []
 const isNotProbed = (account: AdminGroupAccount): boolean =>
-  account.probeAvailable && (unprobedModels(account).length > 0 || account.modelHealth.length === 0)
+  account.probeAvailable && account.probeModelsConfigured !== false && (unprobedModels(account).length > 0 || account.modelHealth.length === 0)
+
+const isSub2API = (account: AdminGroupAccount): boolean => account.targetId.toLowerCase().startsWith('sub2api:')
+const schedulableLabel = (account: AdminGroupAccount): string => {
+  if (!isSub2API(account)) return t(`${detailPrefix}.notApplicable`)
+  if (account.schedulable == null) return t(`${detailPrefix}.schedulableUnknown`)
+  return account.schedulable ? t(`${detailPrefix}.schedulableOn`) : t(`${detailPrefix}.schedulableOff`)
+}
+
+const upstreamStatusLabel = (account: AdminGroupAccount): string => {
+  const status = account.status?.toLowerCase()
+  if (status === 'active' || status === '1') return t(`${detailPrefix}.upstreamAccountActive`)
+  if (status === 'inactive' || status === '0' || status === 'disabled') return t(`${detailPrefix}.upstreamAccountInactive`)
+  return t(`${detailPrefix}.upstreamStatus`, { status: account.status || t(`${detailPrefix}.unknownUpstreamStatus`) })
+}
+
+const statusSourceLabel = (source: string | null | undefined): string =>
+  t(`${detailPrefix}.statusSourceLabels.${source || 'unknown'}`)
 
 const assignmentLabel = (account: AdminGroupAccount): string => {
   const policies = account.assignedPolicies ?? []
@@ -119,6 +142,52 @@ const assignmentLabel = (account: AdminGroupAccount): string => {
 
 const assignmentSourceLabel = (account: AdminGroupAccount): string =>
   t(`${detailPrefix}.assignmentSources.${account.policyAssignmentSource ?? 'none'}`)
+
+const strategyStateLabel = (account: AdminGroupAccount): string => {
+  if (account.hasAssignedPolicy && !account.hasEnabledPolicy) return t(`${detailPrefix}.strategyDisabled`)
+  return assignmentSourceLabel(account)
+}
+
+const priorityStateLabel = (account: AdminGroupAccount): string => {
+  if (!account.priorityManaged) return t(`${detailPrefix}.priorityUnmanaged`)
+  if (account.hasEnabledProbePolicy && account.probeModelsConfigured === false) return t(`${detailPrefix}.probeModelsNotConfigured`)
+  if (isNotProbed(account)) return t(`${detailPrefix}.priorityPendingProbe`)
+  const state = aggregateState(account)
+  if (state === 'suspended' || state === 'disabled') return t(`${detailPrefix}.healthSuspended`)
+  return t(`${detailPrefix}.priorityManaged`)
+}
+
+const lastSchedulableActionLabel = (account: AdminGroupAccount): string => {
+  const action = remoteActionLabelKey(account.lastSchedulableAction ?? '')
+  if (!action) return ''
+  const result = account.lastSchedulableActionResult === 'schedulable_user_action_succeeded'
+    ? t(`${detailPrefix}.schedulableActionSucceeded`)
+    : t(`${detailPrefix}.schedulableActionFailed`)
+  const error = account.lastSchedulableActionErrorKey
+    ? ` · ${t(connectionHealthMessageKey(account.lastSchedulableActionErrorKey, te))}`
+    : ''
+  return t(`${detailPrefix}.lastSchedulableAction`, {
+    action: t(action.key, action.params),
+    result,
+    time: formatConnectionHealthTime(account.lastSchedulableActionAt ?? null),
+    error,
+  })
+}
+
+const blockedReasonLabel = (reason: string | null | undefined): string => {
+  if (!reason) return ''
+  const key = `${prefix}.probeBlockedReasons.${reason}`
+  return te(key) ? t(key) : reason
+}
+
+const effectiveSourcesLabel = (accountModel: AdminGroupAccount['modelHealth'][number] | NonNullable<AdminGroupAccount['unprobedModels']>[number]): string =>
+  (accountModel.effectivePolicySources ?? [])
+    .map(source => t(`${detailPrefix}.models.policySource`, {
+      name: source.policyName || source.policyId,
+      interval: source.effectiveIntervalSeconds,
+      state: source.continueAutoProbe ? t(`${detailPrefix}.models.policyContinues`) : t(`${detailPrefix}.models.policyStops`),
+    }))
+    .join('；')
 
 const toggleModels = (targetId: string) => {
   expandedTargetId.value = expandedTargetId.value === targetId ? '' : targetId
@@ -161,6 +230,8 @@ const filterLabel = computed(() => {
       return t(`${detailPrefix}.statusBreakdown.unprobeable`)
     case 'notProbed':
       return t(`${detailPrefix}.statusBreakdown.notProbed`)
+    case 'unconfigured':
+      return t(`${detailPrefix}.statusBreakdown.unconfigured`)
     case 'modelState':
       return t(`${prefix}.stateLabels.${activeFilter.value.state}`)
     default:
@@ -188,6 +259,8 @@ const matchesFilter = (account: AdminGroupAccount): boolean => {
       return !account.probeAvailable
     case 'notProbed':
       return isNotProbed(account)
+    case 'unconfigured':
+      return Boolean(account.hasEnabledProbePolicy) && account.probeModelsConfigured === false
     case 'modelState':
       return account.modelHealth.some(model => model.state === filter.state)
     default:
@@ -264,7 +337,7 @@ const sortedAccounts = computed(() => [...filteredAccounts.value].sort((first, s
 
 const filteredModelHealth = (account: AdminGroupAccount) => {
   const filter = activeFilter.value
-  if (filter.kind === 'notProbed') return []
+  if (filter.kind === 'notProbed' || filter.kind === 'unconfigured') return []
   if (filter.kind !== 'modelState') return account.modelHealth
   return account.modelHealth.filter(model => model.state === filter.state)
 }
@@ -272,6 +345,7 @@ const filteredModelHealth = (account: AdminGroupAccount) => {
 const filteredUnprobedModels = (account: AdminGroupAccount) => {
   if (activeFilter.value.kind === 'modelState') return []
   if (activeFilter.value.kind === 'notProbed') return unprobedModels(account)
+  if (activeFilter.value.kind === 'unconfigured') return []
   return unprobedModels(account)
 }
 
@@ -384,7 +458,19 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
 
     <div v-if="(group.priorityConflictCount ?? 0) > 0" class="flex items-start gap-2 border-b border-amber-500/25 bg-amber-500/[0.07] px-5 py-3 text-sm text-amber-700 dark:text-amber-400">
       <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
-      <span>{{ t(`${detailPrefix}.priorityConflict`, { count: group.priorityConflictCount ?? 0 }) }}</span>
+      <div class="min-w-0">
+        <p>{{ t(`${detailPrefix}.priorityConflict`, { count: group.priorityConflictCount ?? 0 }) }}</p>
+        <ul v-if="group.priorityConflicts?.length" class="mt-1 space-y-0.5 text-xs">
+          <li v-for="conflict in group.priorityConflicts" :key="conflict.targetId">
+            {{ t(`${detailPrefix}.priorityConflictTarget`, {
+              target: conflict.accountName || conflict.targetId,
+              current: conflict.currentPriority ?? '-',
+              expected: conflict.expectedPriority ?? '-',
+              time: formatConnectionHealthTime(conflict.conflictAt ?? null),
+            }) }}
+          </li>
+        </ul>
+      </div>
     </div>
 
     <section class="border-b border-border/50 bg-surface/20 px-5 py-4" :aria-label="t(`${detailPrefix}.statusBreakdown.title`)">
@@ -514,14 +600,25 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                   <div class="max-w-56">
                     <p class="truncate font-medium text-foreground">{{ account.name || account.id }}</p>
                     <p class="mt-0.5 truncate text-xs text-muted-foreground">
-                      {{ account.platform || account.type || '-' }} · {{ t(`${detailPrefix}.upstreamStatus`, { status: account.status || t(`${detailPrefix}.unknownUpstreamStatus`) }) }}
+                      {{ account.platform || account.type || '-' }} · {{ upstreamStatusLabel(account) }} · {{ schedulableLabel(account) }}
                     </p>
+                    <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {{ t(`${detailPrefix}.statusSources`, { upstream: statusSourceLabel(account.upstreamStatusSource), health: statusSourceLabel(account.healthStatusSource), schedulable: statusSourceLabel(account.schedulableSource) }) }}
+                    </p>
+                    <p v-if="account.schedulableChangedAt" class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ t(`${detailPrefix}.schedulableChangedAt`, { time: formatConnectionHealthTime(account.schedulableChangedAt) }) }}</p>
+                    <p v-if="account.lastSchedulableAction" class="mt-0.5 max-w-72 truncate text-[11px] text-muted-foreground" :title="lastSchedulableActionLabel(account)">{{ lastSchedulableActionLabel(account) }}</p>
                   </div>
                 </td>
                 <td class="px-3 py-3">
                   <div class="flex flex-col items-start gap-1">
-                    <span v-if="!account.probeAvailable" class="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    <span v-if="!account.hasEnabledProbePolicy" class="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                      <ShieldQuestion class="h-3 w-3" />{{ t(`${detailPrefix}.notApplicable`) }}
+                    </span>
+                    <span v-else-if="!account.probeAvailable" class="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                       <AlertTriangle class="h-3 w-3" />{{ t(`${detailPrefix}.unprobeable`) }}
+                    </span>
+                    <span v-else-if="account.probeModelsConfigured === false" class="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                      <Settings2 class="h-3 w-3" />{{ t(`${prefix}.notConfigured`) }}
                     </span>
                     <span v-else-if="!aggregateState(account)" class="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
                       <ShieldQuestion class="h-3 w-3" />{{ t(`${prefix}.notProbed`) }}
@@ -539,16 +636,17 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                   <Tooltip :text="assignmentLabel(account)" wide>
                     <div class="max-w-52">
                       <p class="truncate text-xs font-medium" :class="monitoringEnabled(account) ? 'text-foreground' : 'text-muted-foreground'">{{ assignmentLabel(account) }}</p>
-                      <p class="mt-0.5 text-[11px] text-muted-foreground">{{ assignmentSourceLabel(account) }}</p>
+                      <p class="mt-0.5 text-[11px] text-muted-foreground">{{ strategyStateLabel(account) }}</p>
                     </div>
                   </Tooltip>
                 </td>
                 <td class="px-3 py-3 tabular-nums text-foreground">
                   <div class="flex items-center gap-1.5">
                     <span>{{ formatNumber(account.priority) }}</span>
-                    <span v-if="account.priorityConflict" class="h-2 w-2 rounded-full bg-amber-500" :title="t(`${detailPrefix}.priorityConflictShort`)" />
+                    <span v-if="account.priorityConflict" class="text-[11px] text-amber-600 dark:text-amber-400" :title="t(`${detailPrefix}.priorityConflictShort`)">{{ account.priorityConflictValue ?? account.priority }} → {{ account.priorityExpected ?? '-' }}</span>
                     <ArrowDownUp v-else-if="account.priorityManaged" class="h-3.5 w-3.5 text-primary" />
                   </div>
+                  <p class="mt-0.5 text-[11px] text-muted-foreground">{{ priorityStateLabel(account) }}</p>
                 </td>
                 <td class="px-3 py-3 tabular-nums text-muted-foreground">
                   {{ account.effectiveMultiplier == null ? (group.multiplierDisplay || '-') : `${account.effectiveMultiplier}x` }}
@@ -580,12 +678,22 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                         <Zap class="h-4 w-4" />
                       </button>
                     </Tooltip>
+                    <Tooltip v-if="isSub2API(account) && account.schedulable != null" :text="account.schedulable ? t(`${detailPrefix}.actions.disableScheduling`) : t(`${detailPrefix}.actions.enableScheduling`)" wide>
+                      <button
+                        type="button"
+                        class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                        :aria-label="account.schedulable ? t(`${detailPrefix}.actions.disableScheduling`) : t(`${detailPrefix}.actions.enableScheduling`)"
+                        :disabled="actionLoading"
+                        @click="emit('set-schedulable', account)"
+                      >
+                        <Power class="h-4 w-4" />
+                      </button>
+                    </Tooltip>
                     <Tooltip :text="t(`${prefix}.actions.viewEvents`)">
                       <button
                         type="button"
-                        class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground disabled:opacity-35"
+                        class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
                         :aria-label="t(`${prefix}.actions.viewEvents`)"
-                        :disabled="!account.hasAssignedPolicy"
                         @click="emit('view-events', account)"
                       >
                         <Eye class="h-4 w-4" />
@@ -601,25 +709,31 @@ const formatMultiplier = (value: number | null | undefined): string => value == 
                     <div v-for="model in filteredModelHealth(account)" :key="model.modelName" class="rounded-lg border border-border/50 bg-background px-3 py-2.5">
                       <div class="flex items-center justify-between gap-3">
                         <span class="truncate text-sm font-medium text-foreground">{{ model.modelName }}</span>
-                        <span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="connectionHealthStateBadgeClass(model.state)">{{ t(`${prefix}.stateLabels.${model.state}`) }}</span>
+                        <span class="rounded-md px-2 py-0.5 text-xs font-medium" :class="model.configured ? connectionHealthStateBadgeClass(model.state) : 'bg-muted text-muted-foreground'">{{ model.configured ? t(`${prefix}.stateLabels.${model.state}`) : t(`${prefix}.notConfigured`) }}</span>
                       </div>
                       <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span :class="model.state === 'suspended' ? 'text-destructive' : ''">{{ t(`${detailPrefix}.models.latency`, { value: model.state === 'suspended' ? '-' : (model.lastLatencyMs ?? '-') }) }}</span>
+                        <span :class="model.state === 'suspended' ? 'text-destructive' : ''">{{ t(`${detailPrefix}.models.latency`, { value: !model.configured || model.state === 'suspended' ? '-' : (model.lastLatencyMs ?? '-') }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.lastProbe`, { value: formatConnectionHealthTime(model.lastProbeAt) }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.weight`, { value: model.currentWeight }) }}</span>
+                        <span v-if="model.nextProbeAt">{{ t(`${detailPrefix}.models.nextProbe`, { value: formatConnectionHealthTime(model.nextProbeAt) }) }}</span>
+                        <span v-if="model.blockedReason">{{ blockedReasonLabel(model.blockedReason) }}</span>
                       </div>
                       <p v-if="model.lastErrorKey" class="mt-2 truncate text-xs text-destructive">{{ readableMessage(model.lastErrorKey) }}</p>
+                      <p v-if="effectiveSourcesLabel(model)" class="mt-1 text-xs text-muted-foreground">{{ effectiveSourcesLabel(model) }}</p>
                     </div>
                     <div v-for="model in filteredUnprobedModels(account)" :key="`unprobed:${model.modelName}`" class="rounded-lg border border-border/50 bg-background px-3 py-2.5">
                       <div class="flex items-center justify-between gap-3">
                         <span class="truncate text-sm font-medium text-foreground">{{ model.modelName }}</span>
-                        <span class="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ t(`${prefix}.notProbed`) }}</span>
+                        <span class="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">{{ account.probeModelsConfigured === false ? t(`${prefix}.notConfigured`) : t(`${prefix}.notProbed`) }}</span>
                       </div>
                       <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                         <span>{{ t(`${detailPrefix}.models.latency`, { value: '-' }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.lastProbe`, { value: formatConnectionHealthTime(null) }) }}</span>
                         <span>{{ t(`${detailPrefix}.models.weight`, { value: '-' }) }}</span>
+                        <span v-if="model.nextProbeAt">{{ t(`${detailPrefix}.models.nextProbe`, { value: formatConnectionHealthTime(model.nextProbeAt) }) }}</span>
+                        <span v-if="model.blockedReason">{{ blockedReasonLabel(model.blockedReason) }}</span>
                       </div>
+                      <p v-if="effectiveSourcesLabel(model)" class="mt-1 text-xs text-muted-foreground">{{ effectiveSourcesLabel(model) }}</p>
                     </div>
                   </div>
                 </td>

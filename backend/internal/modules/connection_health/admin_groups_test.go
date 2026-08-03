@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
@@ -138,6 +139,110 @@ func TestAdminGroups_TargetIDProbeAvailableAndModelHealth(t *testing.T) {
 	}
 	if groups[0].HealthSummary.HealthyModels != 1 {
 		t.Fatalf("healthyModels = %d, want 1", groups[0].HealthSummary.HealthyModels)
+	}
+}
+
+func TestAdminGroups_PairsLastFailureTimeWithLatestFailureDetailsAfterRecovery(t *testing.T) {
+	repo := newFakeRepository()
+	policy := probePolicy()
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "vip", PolicyID: policy.ID,
+	}}
+	failureAt := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC)
+	successAt := failureAt.Add(5 * time.Minute)
+	targetID := "newapi:ws1:100"
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"gpt-4o": {
+			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
+			State: StateHealthy, CurrentWeight: 100, LastFailureAt: &failureAt, LastSuccessAt: &successAt,
+			LastProbeAt: &successAt, LastErrorKey: "", LastErrorDetail: "",
+		},
+	}
+	repo.events = []ConnectionHealthEvent{{
+		ID: "failure-1", ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
+		Result: string(ResultServerError), ErrorKey: string(ResultServerError), ErrorDetail: "upstream returned 503", CreatedAt: failureAt,
+	}}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", BaseURL: "https://up.example.com", Models: "gpt-4o"}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	model := groups[0].Accounts[0].ModelHealth[0]
+	if model.LastFailureAt == nil || !model.LastFailureAt.Equal(failureAt) {
+		t.Fatalf("last failure time = %v, want %v", model.LastFailureAt, failureAt)
+	}
+	if model.LastErrorKey != string(ResultServerError) || model.LastErrorDetail != "upstream returned 503" {
+		t.Fatalf("last failure details must remain paired after recovery: %+v", model)
+	}
+}
+
+func TestApplyLatestProbeFailureDetails_RejectsEventOlderThanLastFailure(t *testing.T) {
+	newFailureAt := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	models := []ModelHealth{{ModelName: "gpt-4o", LastFailureAt: &newFailureAt}}
+	applyLatestProbeFailureDetails(models, map[string]ConnectionHealthEvent{
+		"gpt-4o": {
+			ModelName: "gpt-4o", Result: string(ResultAuth), ErrorKey: string(ResultAuth),
+			ErrorDetail: "stale credential failure", CreatedAt: newFailureAt.Add(-time.Minute),
+		},
+	})
+	if models[0].LastErrorKey != "" || models[0].LastErrorDetail != "" {
+		t.Fatalf("an older persisted event must not explain a newer failure timestamp: %+v", models[0])
+	}
+}
+
+func TestHealthStatusSource_DoesNotReportCredentialFailureAsHealthProbe(t *testing.T) {
+	if got := healthStatusSource([]ModelHealth{{ModelName: "gpt-4o", Configured: false, State: StateHealthy}}, nil); got != "unconfigured" {
+		t.Fatalf("health status source = %q, want unconfigured", got)
+	}
+}
+
+func TestAdminGroups_UsesLatestAttemptButSuccessfulActionForSchedulableSource(t *testing.T) {
+	repo := newFakeRepository()
+	policy := probePolicy()
+	repo.policies = []Policy{policy}
+	repo.groupAssignments = []GroupPolicyAssignment{{
+		UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "vip", PolicyID: policy.ID,
+	}}
+	successAt := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	repo.events = []ConnectionHealthEvent{
+		{
+			ID: "success", ConnectionID: "sub2api:ws1:100", ModelName: "*", UserID: "user1", AdminAccountID: "ws1",
+			Result: SchedulableActionSucceeded, RemoteAction: RemoteActionSchedulableDisabled, ActionSource: ActionSourceUser, CreatedAt: successAt,
+		},
+		{
+			ID: "failed-retry", ConnectionID: "sub2api:ws1:100", ModelName: "*", UserID: "user1", AdminAccountID: "ws1",
+			Result: SchedulableActionFailed, ErrorKey: ErrorSchedulableActionFailed,
+			RemoteAction: RemoteActionSchedulableDisableFailed, ActionSource: ActionSourceUser, CreatedAt: successAt.Add(time.Minute),
+		},
+	}
+	schedulable := false
+	observedAt := successAt.Add(-time.Second)
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", BaseURL: "https://up.example.com", Models: "gpt-4o", Schedulable: &schedulable, UpdatedAt: &observedAt}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	account := groups[0].Accounts[0]
+	if account.SchedulableSource != ActionSourceUser {
+		t.Fatalf("matching successful action must remain the current source after a failed retry: %+v", account)
+	}
+	if account.LastSchedulableActionResult != SchedulableActionFailed || account.LastSchedulableActionErrorKey != ErrorSchedulableActionFailed {
+		t.Fatalf("latest failed retry must remain visible as the latest attempt: %+v", account)
 	}
 }
 
@@ -376,7 +481,7 @@ func TestAdminGroups_PreservesConfiguredModelsWithoutProbeState(t *testing.T) {
 	if len(account.UnprobedModels) != 1 || account.UnprobedModels[0].ModelName != "gpt-4.1" {
 		t.Fatalf("configured model without state must remain visible: %+v", account.UnprobedModels)
 	}
-	if groups[0].HealthSummary.HealthyModels != 1 || groups[0].HealthSummary.UnconfiguredModels != 1 {
+	if groups[0].HealthSummary.HealthyModels != 1 || groups[0].HealthSummary.PendingModels != 1 || groups[0].HealthSummary.UnconfiguredModels != 0 {
 		t.Fatalf("partially-probed models must be counted independently: %+v", groups[0].HealthSummary)
 	}
 }
@@ -409,6 +514,53 @@ func TestOverview_MergesModelsForTargetSharedAcrossGroups(t *testing.T) {
 	}
 	if overview.TotalConnections != 1 || overview.Healthy != 1 || overview.Degraded != 1 {
 		t.Fatalf("shared target overview must merge both groups' models: %+v", overview)
+	}
+}
+
+func TestAdminGroups_SharedTargetUsesOneMergedDecisionAcrossGroups(t *testing.T) {
+	repo := newFakeRepository()
+	stop := probePolicy()
+	stop.ID = "stop"
+	stop.Name = "stop"
+	stop.ContinueProbeWhenUnschedulable = false
+	stop.ModelTargets[0].PolicyID = stop.ID
+	keep := probePolicy()
+	keep.ID = "keep"
+	keep.Name = "keep"
+	keep.ContinueProbeWhenUnschedulable = true
+	keep.UnschedulableProbeIntervalMinutes = 120
+	keep.ModelTargets[0].PolicyID = keep.ID
+	repo.policies = []Policy{stop, keep}
+	repo.groupAssignments = []GroupPolicyAssignment{
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: stop.ID},
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g2", PolicyID: keep.ID},
+	}
+	account := upstream.AdminGroupAccountInfo{ID: "1515", Models: "gpt-4o", Schedulable: boolPointer(false)}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{
+			{ID: "g1", Name: "first", Platform: string(upstream.PlatformSub2API)},
+			{ID: "g2", Name: "second", Platform: string(upstream.PlatformSub2API)},
+		},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {account}, "g2": {account}},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(groups) != 2 || len(groups[0].Accounts) != 1 || len(groups[1].Accounts) != 1 {
+		t.Fatalf("unexpected shared-target response: %+v", groups)
+	}
+	for _, group := range groups {
+		got := group.Accounts[0]
+		if len(got.AssignedPolicyIDs) != 2 || len(got.UnprobedModels) != 1 {
+			t.Fatalf("group %s did not expose the merged target decision: %+v", group.ID, got)
+		}
+		decision := got.UnprobedModels[0]
+		if decision.BudgetPolicyID != keep.ID || decision.EffectiveIntervalSeconds != 120*60 || len(decision.EffectivePolicySources) != 2 {
+			t.Fatalf("group %s has a non-authoritative decision: %+v", group.ID, decision)
+		}
 	}
 }
 
@@ -622,6 +774,71 @@ func TestHasEnabledProbePolicyExcludesMultiplierOnly(t *testing.T) {
 	policies[1].Enabled = true
 	if !hasEnabledProbePolicy(policies) {
 		t.Fatal("an enabled health-probe policy must mark an account as monitored")
+	}
+}
+
+func TestAdminGroups_ExposesEffectiveUnschedulableDecisionAndAllSources(t *testing.T) {
+	repo := newFakeRepository()
+	stop := probePolicy()
+	stop.ID = "stop"
+	stop.Name = "stop policy"
+	stop.ContinueProbeWhenUnschedulable = false
+	stop.UnschedulableProbeIntervalMinutes = 60
+	stop.ModelTargets[0].PolicyID = stop.ID
+	keep := probePolicy()
+	keep.ID = "keep"
+	keep.Name = "keep policy"
+	keep.ContinueProbeWhenUnschedulable = true
+	keep.UnschedulableProbeIntervalMinutes = 120
+	keep.ModelTargets[0].PolicyID = keep.ID
+	repo.policies = []Policy{stop, keep}
+	repo.groupAssignments = []GroupPolicyAssignment{
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "default", PolicyID: stop.ID},
+		{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", AdminGroupName: "default", PolicyID: keep.ID},
+	}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "default", Platform: string(upstream.PlatformSub2API)}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "1515", Name: "account", Models: "gpt-4o", Schedulable: boolPointer(false)}},
+		},
+	}
+	service := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	groups, err := service.AdminGroups(context.Background(), "user1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(groups) != 1 || len(groups[0].Accounts) != 1 || len(groups[0].Accounts[0].UnprobedModels) != 1 {
+		t.Fatalf("unexpected admin group response: %+v", groups)
+	}
+	decision := groups[0].Accounts[0].UnprobedModels[0]
+	if decision.BudgetPolicyID != keep.ID || decision.EffectiveIntervalSeconds != 120*60 || decision.NextProbeAt == nil {
+		t.Fatalf("unexpected effective decision: %+v", decision)
+	}
+	if len(decision.EffectivePolicySources) != 2 {
+		t.Fatalf("all policy sources must be exposed: %+v", decision.EffectivePolicySources)
+	}
+}
+
+func TestModelHealthForSpecs_BudgetUnavailableIsBlocked(t *testing.T) {
+	policy := probePolicy()
+	spec := probeModelSpec{modelName: "gpt-4o", providerFamily: "openai", policy: policy, policies: []Policy{policy}}
+	_, unprobed := modelHealthForSpecs(nil, []probeModelSpec{spec}, boolPointer(true), time.Now().UTC(), nil, false)
+	if len(unprobed) != 1 {
+		t.Fatalf("expected one unprobed model, got %+v", unprobed)
+	}
+	if unprobed[0].NextProbeAt != nil || unprobed[0].BlockedReason != ProbeBlockedBudgetUnavailable {
+		t.Fatalf("budget read failure must block the displayed decision: %+v", unprobed[0])
+	}
+}
+
+func TestElapsedSinceUsesFailureTimestamp(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	failure := now.Add(-10 * time.Minute)
+	laterProbe := now.Add(-2 * time.Minute)
+	got := elapsedSince(&failure, &laterProbe, now)
+	if got == nil || *got != 600 {
+		t.Fatalf("elapsed seconds = %v, want 600 from last failure", got)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 const (
 	RemoteActionSkippedTargetConflict          = "skipped_target_conflict"
 	RemoteActionSkippedTargetInitiallyDisabled = "skipped_target_initially_disabled"
+	RemoteActionSkippedUpstreamScheduling      = "skipped_upstream_scheduling_disabled"
 )
 
 // reconcileTargetRemoteAction 把同一账号当前仍启用的全部模型状态聚合成一次上游动作。
@@ -62,6 +63,9 @@ func (s *Service) reconcileTargetRemoteAction(
 	// 但如果已有模型明确进入暂停，仍需允许下面的 blocked 分支继续执行降级动作。
 	if stored != nil && !statesComplete && !blocked {
 		return "", nil
+	}
+	if target.Schedulable != nil && !*target.Schedulable {
+		return RemoteActionSkippedUpstreamScheduling, nil
 	}
 
 	currentStatus := normalizeTargetStatus(target.Platform, target.AccountStatus)
@@ -413,6 +417,14 @@ func cloneIntPointer(value *int) *int {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneBoolPointer(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func equalIntPointers(left *int, right *int) bool {

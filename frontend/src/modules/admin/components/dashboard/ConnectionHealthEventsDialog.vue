@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Activity, ArrowRight, X } from 'lucide-vue-next'
-import { matchingProbeIntervalSeconds, remoteActionLabelKey } from '../../composables/useConnectionHealth'
+import { remoteActionLabelKey } from '../../composables/useConnectionHealth'
 import ConnectionHealthLinkDetailCard from './ConnectionHealthLinkDetailCard.vue'
 import type {
   ConnectionHealthEvent,
-  ConnectionHealthPolicy,
   ConnectionHealthState,
   AdminGroupHealth,
+  EffectiveProbePolicySource,
   OwnGroupHealth,
 } from '../../types/connectionHealth'
 
@@ -16,7 +16,6 @@ const props = defineProps<{
   events: ConnectionHealthEvent[]
   groups: OwnGroupHealth[]
   adminGroups: AdminGroupHealth[]
-  policies: ConnectionHealthPolicy[]
   selectedConnectionId: string
   siteName: (id: string) => string
 }>()
@@ -32,7 +31,7 @@ const cardPrefix = `${prefix}.eventsDialog.card`
 
 // 探活结果分类：用于近 60 次记录条着色和可用率计算分母。人工禁用/恢复不算一次探活结果，
 // 不计入可用率分母，只在记录条里以中性色展示这个动作发生过。
-const PROBE_RESULTS = new Set(['ok', 'network_fluctuation', 'rate_limited', 'server_error', 'auth', 'model_not_found', 'invalid_response', 'unsupported'])
+const PROBE_RESULTS = new Set(['ok', 'network_fluctuation', 'rate_limited', 'server_error', 'auth', 'model_not_found', 'invalid_response'])
 const VALID_STATES = new Set<ConnectionHealthState>(['healthy', 'degraded', 'suspended', 'observing', 'recovering', 'disabled'])
 
 interface StatusCard {
@@ -41,11 +40,23 @@ interface StatusCard {
   modelName: string
   upstreamSiteId: string
   upstreamGroupName: string
+  accountName: string
   provider: string
   state: ConnectionHealthState | ''
   latestLatencyMs: number | null
   lastProbeAt: string | null
-  intervalSeconds: number | null
+  nextProbeAt: string | null
+  blockedReason: string
+  lastFailureAt: string | null
+  lastErrorKey: string
+  lastErrorDetail: string
+  elapsedSeconds: number | null
+  effectiveIntervalSeconds: number
+  effectivePolicySources: EffectiveProbePolicySource[]
+  budgetPolicyId: string
+  actionSource: string
+  actionAt: string | null
+  scheduleKnown: boolean
   availabilityPct: number | null
   records: ConnectionHealthEvent[]
   // 最近一次远端动作（newapi_channel_disabled / sub2api_account_status_inactive / unsupported /
@@ -64,12 +75,51 @@ interface GroupBlock {
 // 用它关联出真实的当前状态和 provider，而不是从事件的 fromState/toState 猜测——
 // 事件本身只记录状态迁移，不等于「当前」状态。
 const connectionMeta = computed(() => {
-  const map = new Map<string, { ownGroupId: string; models: Map<string, { providerFamily: string; state: ConnectionHealthState; lastProbeAt: string | null }> }>()
+  const map = new Map<string, { ownGroupId: string; models: Map<string, {
+    providerFamily: string
+    state: ConnectionHealthState
+    lastProbeAt: string | null
+    nextProbeAt: string | null
+    blockedReason: string
+    lastFailureAt: string | null
+    lastErrorKey: string
+    lastErrorDetail: string
+    elapsedSeconds: number | null
+    effectiveIntervalSeconds: number
+    effectivePolicySources: EffectiveProbePolicySource[]
+    budgetPolicyId: string
+  }> }>()
   for (const group of props.groups) {
     for (const conn of group.connections) {
-      const models = new Map<string, { providerFamily: string; state: ConnectionHealthState; lastProbeAt: string | null }>()
+      const models = new Map<string, {
+        providerFamily: string
+        state: ConnectionHealthState
+        lastProbeAt: string | null
+        nextProbeAt: string | null
+        blockedReason: string
+        lastFailureAt: string | null
+        lastErrorKey: string
+        lastErrorDetail: string
+        elapsedSeconds: number | null
+        effectiveIntervalSeconds: number
+        effectivePolicySources: EffectiveProbePolicySource[]
+        budgetPolicyId: string
+      }>()
       for (const model of conn.models) {
-        models.set(model.modelName, { providerFamily: model.providerFamily, state: model.state, lastProbeAt: model.lastProbeAt })
+        models.set(model.modelName, {
+          providerFamily: model.providerFamily,
+          state: model.state,
+          lastProbeAt: model.lastProbeAt,
+          nextProbeAt: model.nextProbeAt ?? null,
+          blockedReason: model.blockedReason ?? '',
+          lastFailureAt: model.lastFailureAt,
+          lastErrorKey: model.lastErrorKey,
+          lastErrorDetail: model.lastErrorDetail,
+          elapsedSeconds: model.elapsedSeconds ?? null,
+          effectiveIntervalSeconds: model.effectiveIntervalSeconds ?? 0,
+          effectivePolicySources: model.effectivePolicySources ?? [],
+          budgetPolicyId: model.budgetPolicyId ?? '',
+        })
       }
       map.set(conn.connectionId, { ownGroupId: group.ownGroupId, models })
     }
@@ -79,14 +129,24 @@ const connectionMeta = computed(() => {
 
 type AdminTargetModelMeta = {
   providerFamily: string
+  configured: boolean
   state: ConnectionHealthState | ''
   lastProbeAt: string | null
   lastLatencyMs: number | null
   lastRemoteAction: string
+  nextProbeAt: string | null
+  blockedReason: string
+  lastFailureAt: string | null
+  lastErrorKey: string
+  lastErrorDetail: string
+  elapsedSeconds: number | null
+  effectiveIntervalSeconds: number
+  effectivePolicySources: EffectiveProbePolicySource[]
+  budgetPolicyId: string
 }
 
 type AdminTargetMeta = {
-  groupName: string
+  groupNames: string[]
   accountName: string
   platform: string
   models: Map<string, AdminTargetModelMeta>
@@ -102,25 +162,46 @@ const adminTargetMeta = computed(() => {
       for (const model of account.modelHealth ?? []) {
         models.set(model.modelName, {
           providerFamily: model.providerFamily || account.platform || 'custom',
-          state: model.state,
+          configured: model.configured,
+          state: model.configured ? model.state : '',
           lastProbeAt: model.lastProbeAt,
           lastLatencyMs: model.lastLatencyMs,
           lastRemoteAction: model.lastRemoteAction ?? '',
+          nextProbeAt: model.nextProbeAt ?? null,
+          blockedReason: model.blockedReason ?? '',
+          lastFailureAt: model.lastFailureAt ?? null,
+          lastErrorKey: model.lastErrorKey ?? '',
+          lastErrorDetail: model.lastErrorDetail ?? '',
+          elapsedSeconds: model.elapsedSeconds ?? null,
+          effectiveIntervalSeconds: model.effectiveIntervalSeconds ?? 0,
+          effectivePolicySources: model.effectivePolicySources ?? [],
+          budgetPolicyId: model.budgetPolicyId ?? '',
         })
       }
       for (const model of account.unprobedModels ?? []) {
         if (models.has(model.modelName)) continue
         models.set(model.modelName, {
           providerFamily: model.providerFamily || account.platform || 'custom',
+          configured: true,
           state: '',
           lastProbeAt: null,
           lastLatencyMs: null,
           lastRemoteAction: '',
+          nextProbeAt: model.nextProbeAt ?? null,
+          blockedReason: model.blockedReason ?? '',
+          lastFailureAt: null,
+          lastErrorKey: '',
+          lastErrorDetail: '',
+          elapsedSeconds: null,
+          effectiveIntervalSeconds: model.effectiveIntervalSeconds ?? 0,
+          effectivePolicySources: model.effectivePolicySources ?? [],
+          budgetPolicyId: model.budgetPolicyId ?? '',
         })
       }
       const existing = map.get(account.targetId)
       if (existing) {
         for (const [modelName, model] of models) existing.models.set(modelName, model)
+        if (group.name && !existing.groupNames.includes(group.name)) existing.groupNames.push(group.name)
         existing.policyIds = Array.from(new Set([
           ...existing.policyIds,
           ...(account.assignedPolicyIds ?? []),
@@ -129,9 +210,9 @@ const adminTargetMeta = computed(() => {
         continue
       }
       map.set(account.targetId, {
-        groupName: group.name,
+        groupNames: group.name ? [group.name] : [],
         accountName: account.name || account.id,
-        platform: account.platform || group.platform || 'custom',
+        platform: account.targetId.toLowerCase().startsWith('sub2api:') ? 'Sub2API' : account.targetId.toLowerCase().startsWith('newapi:') ? 'NewAPI' : 'custom',
         models,
         policyIds: [...(account.assignedPolicyIds ?? []), ...(group.assignedPolicyIds ?? [])],
       })
@@ -139,14 +220,6 @@ const adminTargetMeta = computed(() => {
   }
   return map
 })
-
-const adminProbeInterval = (meta: AdminTargetMeta, modelName: string): number | null => {
-  const policyIds = new Set(meta.policyIds)
-  const intervals = props.policies
-    .filter((policy) => policy.enabled && policyIds.has(policy.id) && policy.modelTargets.some((target) => target.enabled && target.modelName === modelName))
-    .map((policy) => policy.probeIntervalSeconds > 0 ? policy.probeIntervalSeconds : 60)
-  return intervals.length > 0 ? Math.min(...intervals) : null
-}
 
 const findConnectionContext = (connectionId: string) => {
   for (const group of props.groups) {
@@ -173,13 +246,44 @@ const buildFocusedCards = (connectionId: string): StatusCard[] => {
   const eventsByModel = new Map<string, ConnectionHealthEvent[]>()
   for (const ev of props.events) {
     if (ev.connectionId !== connectionId) continue
+    if (ev.modelName === '*' || ev.modelName === '') continue
     if (!eventsByModel.has(ev.modelName)) eventsByModel.set(ev.modelName, [])
     eventsByModel.get(ev.modelName)!.push(ev)
   }
 
+  const actionEvents = props.events.filter((ev) => ev.connectionId === connectionId && (ev.modelName === '*' || ev.modelName === ''))
+  const buildActionCard = (event: ConnectionHealthEvent, provider: string, upstreamGroupName: string, upstreamSiteId: string, accountName = ''): StatusCard => ({
+    key: `${connectionId}::action::${event.id}`,
+    connectionId,
+    modelName: t(`${prefix}.eventsDialog.accountAction`),
+    upstreamSiteId,
+    upstreamGroupName,
+    accountName,
+    provider,
+    state: '',
+    latestLatencyMs: null,
+    lastProbeAt: null,
+    nextProbeAt: null,
+    blockedReason: '',
+    lastFailureAt: null,
+    lastErrorKey: event.errorKey ?? '',
+    lastErrorDetail: event.errorDetail ?? '',
+    elapsedSeconds: null,
+    effectiveIntervalSeconds: 0,
+    effectivePolicySources: [],
+    budgetPolicyId: '',
+    actionSource: event.actionSource ?? (event.remoteAction ? 'user_action' : ''),
+    actionAt: event.createdAt,
+    scheduleKnown: false,
+    availabilityPct: null,
+    records: [event],
+    remoteAction: event.remoteAction ?? '',
+  })
+
   if (ctx) {
-    return ctx.conn.models.map((model) => {
+    const modelCards = ctx.conn.models.map((model) => {
       const eventsDesc = eventsByModel.get(model.modelName) ?? []
+      const latestAction = eventsDesc.find((event) => Boolean(event.remoteAction))
       const { records, availabilityPct } = buildRecords(eventsDesc)
       return {
         key: `${connectionId}::${model.modelName}`,
@@ -187,63 +291,106 @@ const buildFocusedCards = (connectionId: string): StatusCard[] => {
         modelName: model.modelName,
         upstreamSiteId: ctx.conn.upstreamSiteId,
         upstreamGroupName: ctx.conn.upstreamGroupName,
+        accountName: '',
         provider: model.providerFamily,
         state: model.state,
         latestLatencyMs: eventsDesc[0]?.latencyMs ?? model.lastLatencyMs,
         lastProbeAt: model.lastProbeAt,
-        intervalSeconds: matchingProbeIntervalSeconds(ctx.group.ownGroupId, model.modelName, props.policies),
+        nextProbeAt: model.nextProbeAt ?? null,
+        blockedReason: model.blockedReason ?? '',
+        lastFailureAt: model.lastFailureAt,
+        lastErrorKey: model.lastErrorKey,
+        lastErrorDetail: model.lastErrorDetail,
+        elapsedSeconds: model.elapsedSeconds ?? null,
+        effectiveIntervalSeconds: model.effectiveIntervalSeconds ?? 0,
+        effectivePolicySources: model.effectivePolicySources ?? [],
+        budgetPolicyId: model.budgetPolicyId ?? '',
+        actionSource: latestAction?.actionSource ?? '',
+        actionAt: latestAction?.createdAt ?? null,
+        scheduleKnown: model.nextProbeAt != null || Boolean(model.blockedReason) || model.state === 'disabled',
         availabilityPct,
         records,
-        remoteAction: eventsDesc[0]?.remoteAction ?? model.lastRemoteAction ?? '',
+        remoteAction: latestAction?.remoteAction ?? '',
       }
     })
+    return [...actionEvents.map((event) => buildActionCard(event, ctx.conn.models[0]?.providerFamily ?? 'custom', ctx.conn.upstreamGroupName, ctx.conn.upstreamSiteId)), ...modelCards]
   }
 
   const adminMeta = adminTargetMeta.value.get(connectionId)
   if (adminMeta) {
-    return Array.from(adminMeta.models.entries()).map(([modelName, modelMeta]) => {
+    const groupName = adminMeta.groupNames.join('、')
+    const modelCards = Array.from(adminMeta.models.entries()).map(([modelName, modelMeta]) => {
       const eventsDesc = eventsByModel.get(modelName) ?? []
+      const latestAction = eventsDesc.find((event) => Boolean(event.remoteAction))
       const { records, availabilityPct } = buildRecords(eventsDesc)
       return {
         key: `${connectionId}::${modelName}`,
         connectionId,
         modelName,
-        upstreamSiteId: '',
-        upstreamGroupName: adminMeta.groupName,
+        upstreamSiteId: adminMeta.platform,
+        upstreamGroupName: groupName,
+        accountName: adminMeta.accountName,
         provider: modelMeta.providerFamily,
         state: modelMeta.state,
         latestLatencyMs: eventsDesc[0]?.latencyMs ?? modelMeta.lastLatencyMs,
         lastProbeAt: modelMeta.lastProbeAt,
-        intervalSeconds: adminProbeInterval(adminMeta, modelName),
+        nextProbeAt: modelMeta.nextProbeAt,
+        blockedReason: modelMeta.blockedReason,
+        lastFailureAt: modelMeta.lastFailureAt,
+        lastErrorKey: modelMeta.lastErrorKey,
+        lastErrorDetail: modelMeta.lastErrorDetail,
+        elapsedSeconds: modelMeta.elapsedSeconds,
+        effectiveIntervalSeconds: modelMeta.effectiveIntervalSeconds,
+        effectivePolicySources: modelMeta.effectivePolicySources,
+        budgetPolicyId: modelMeta.budgetPolicyId,
+        actionSource: latestAction?.actionSource ?? '',
+        actionAt: latestAction?.createdAt ?? null,
+        scheduleKnown: true,
         availabilityPct,
         records,
-        remoteAction: eventsDesc[0]?.remoteAction ?? modelMeta.lastRemoteAction,
+        remoteAction: latestAction?.remoteAction ?? '',
       }
     })
+    const actionProvider = adminMeta.models.values().next().value?.providerFamily ?? 'custom'
+    return [...actionEvents.map((event) => buildActionCard(event, actionProvider, groupName, adminMeta.platform, adminMeta.accountName)), ...modelCards]
   }
 
   // 兜底：groups 数据还没跟上时（极少见的时序问题），退化为纯粹从事件推导，
   // 保证弹窗至少不是空的；此时无法解析 ownGroupId，探活间隔只能显示「未配置策略」。
-  return Array.from(eventsByModel.entries()).map(([modelName, eventsDesc]) => {
+  const modelCards = Array.from(eventsByModel.entries()).map(([modelName, eventsDesc]) => {
     const latest = eventsDesc[0]
+    const latestAction = eventsDesc.find((event) => Boolean(event.remoteAction))
     const { records, availabilityPct } = buildRecords(eventsDesc)
-    const state = VALID_STATES.has(latest.toState as ConnectionHealthState) ? (latest.toState as ConnectionHealthState) : ''
+    const state: ConnectionHealthState | '' = VALID_STATES.has(latest.toState as ConnectionHealthState) ? (latest.toState as ConnectionHealthState) : ''
     return {
       key: `${connectionId}::${modelName}`,
       connectionId,
       modelName,
       upstreamSiteId: latest.upstreamSiteId,
       upstreamGroupName: latest.upstreamGroupName,
+      accountName: '',
       provider: 'custom',
       state,
       latestLatencyMs: latest.latencyMs,
       lastProbeAt: latest.createdAt,
-      intervalSeconds: null,
+      nextProbeAt: null,
+      blockedReason: '',
+      lastFailureAt: null,
+      lastErrorKey: latest.errorKey,
+      lastErrorDetail: latest.errorDetail ?? '',
+      elapsedSeconds: null,
+      effectiveIntervalSeconds: 0,
+      effectivePolicySources: [],
+      budgetPolicyId: '',
+      actionSource: latestAction?.actionSource ?? '',
+      actionAt: latestAction?.createdAt ?? null,
+      scheduleKnown: false,
       availabilityPct,
       records,
-      remoteAction: latest.remoteAction ?? '',
+      remoteAction: latestAction?.remoteAction ?? '',
     }
   })
+  return [...actionEvents.map((event) => buildActionCard(event, 'custom', event.upstreamGroupName, event.upstreamSiteId)), ...modelCards]
 }
 
 const focusedCards = computed<StatusCard[]>(() =>
@@ -280,6 +427,8 @@ const globalGroups = computed<GroupBlock[]>(() => {
       const legacyModelMeta = meta?.models.get(latest.modelName)
       const adminMeta = adminTargetMeta.value.get(latest.connectionId)
       const adminModelMeta = adminMeta?.models.get(latest.modelName)
+      const failureMeta = adminModelMeta ?? legacyModelMeta
+      const latestAction = eventsDesc.find((event) => Boolean(event.remoteAction))
       const state: ConnectionHealthState | '' = legacyModelMeta?.state ?? adminModelMeta?.state
         ?? (VALID_STATES.has(latest.toState as ConnectionHealthState) ? (latest.toState as ConnectionHealthState) : '')
       const { records, availabilityPct } = buildRecords(eventsDesc)
@@ -287,19 +436,31 @@ const globalGroups = computed<GroupBlock[]>(() => {
       return {
         key: cardKey,
         connectionId: latest.connectionId,
-        modelName: latest.modelName,
-        upstreamSiteId: latest.upstreamSiteId,
-        upstreamGroupName: latest.upstreamGroupName,
+        modelName: latest.modelName === '*' || latest.modelName === ''
+          ? t(`${prefix}.eventsDialog.accountAction`)
+          : latest.modelName,
+        upstreamSiteId: latest.upstreamSiteId || adminMeta?.platform || '',
+        upstreamGroupName: adminMeta?.groupNames.join('、') || latest.upstreamGroupName,
+        accountName: adminMeta?.accountName ?? '',
         provider: legacyModelMeta?.providerFamily ?? adminModelMeta?.providerFamily ?? 'custom',
         state,
         latestLatencyMs: latest.latencyMs ?? adminModelMeta?.lastLatencyMs ?? null,
-        lastProbeAt: legacyModelMeta?.lastProbeAt ?? adminModelMeta?.lastProbeAt ?? latest.createdAt,
-        intervalSeconds: adminMeta
-          ? adminProbeInterval(adminMeta, latest.modelName)
-          : matchingProbeIntervalSeconds(meta?.ownGroupId ?? '', latest.modelName, props.policies),
+        lastProbeAt: legacyModelMeta?.lastProbeAt ?? adminModelMeta?.lastProbeAt ?? null,
+        nextProbeAt: legacyModelMeta?.nextProbeAt ?? adminModelMeta?.nextProbeAt ?? null,
+        blockedReason: legacyModelMeta?.blockedReason ?? adminModelMeta?.blockedReason ?? '',
+        lastFailureAt: failureMeta?.lastFailureAt ?? null,
+        lastErrorKey: failureMeta?.lastErrorKey ?? latest.errorKey ?? '',
+        lastErrorDetail: failureMeta?.lastErrorDetail ?? latest.errorDetail ?? '',
+        elapsedSeconds: failureMeta?.elapsedSeconds ?? null,
+        effectiveIntervalSeconds: legacyModelMeta?.effectiveIntervalSeconds ?? adminModelMeta?.effectiveIntervalSeconds ?? 0,
+        effectivePolicySources: legacyModelMeta?.effectivePolicySources ?? adminModelMeta?.effectivePolicySources ?? [],
+        budgetPolicyId: legacyModelMeta?.budgetPolicyId ?? adminModelMeta?.budgetPolicyId ?? '',
+        actionSource: latestAction?.actionSource ?? '',
+        actionAt: latestAction?.createdAt ?? null,
+        scheduleKnown: adminModelMeta != null || legacyModelMeta?.nextProbeAt != null || Boolean(legacyModelMeta?.blockedReason) || legacyModelMeta?.state === 'disabled',
         availabilityPct,
         records,
-        remoteAction: latest.remoteAction || adminModelMeta?.lastRemoteAction || '',
+        remoteAction: latestAction?.remoteAction ?? '',
       }
     })
 
@@ -318,11 +479,10 @@ const selectedConnectionMeta = computed(() => {
     }
   }
   const adminMeta = adminTargetMeta.value.get(props.selectedConnectionId)
-  return adminMeta ? { siteLabel: adminMeta.platform, upstreamGroupName: adminMeta.groupName, ownGroupName: adminMeta.accountName } : null
+  return adminMeta ? { siteLabel: adminMeta.platform, upstreamGroupName: adminMeta.groupNames.join('、'), ownGroupName: adminMeta.accountName } : null
 })
 
-// nowMs 每秒滚动一次，仅在弹窗打开时计时，用来把「探活间隔 + 上次探活时间」换算成
-// 动态的"下次探活"倒计时（而不是弹窗打开瞬间的静态快照）。
+// nowMs 只把后端给出的权威 nextProbeAt 渲染为动态倒计时，不参与调度时间计算。
 const nowMs = ref(Date.now())
 let tickTimer: ReturnType<typeof window.setInterval> | null = null
 
@@ -344,17 +504,28 @@ onBeforeUnmount(() => {
   if (tickTimer) window.clearInterval(tickTimer)
 })
 
-// 下次探活倒计时：disabled 链路不会自动探活，直接说明原因；没有探活过、或者没有命中
-// 任何启用策略时都不编造时间，分别给出明确文案；否则用「上次探活时间 + 策略探活间隔」
-// 算出下次时间，到期但调度还没跑到时展示"已到期"而不是负数或 0s。
+// 下次探活只消费后端返回的 nextProbeAt / blockedReason，不在浏览器重建调度规则。
 const nextProbeLabel = (card: StatusCard): string => {
+  if (card.actionSource && !card.lastProbeAt && !card.nextProbeAt) return t(`${cardPrefix}.nextProbeActionOnly`)
+  if (!card.scheduleKnown) return t(`${cardPrefix}.nextProbeUnknown`)
   if (card.state === 'disabled') return t(`${cardPrefix}.nextProbeDisabled`)
-  if (!card.lastProbeAt) return t(`${cardPrefix}.nextProbeNeverProbed`)
-  const lastAt = new Date(card.lastProbeAt).getTime()
-  if (Number.isNaN(lastAt)) return t(`${cardPrefix}.nextProbeNeverProbed`)
-  if (!card.intervalSeconds) return t(`${cardPrefix}.nextProbeNoPolicy`)
-  const remainingMs = card.intervalSeconds * 1000 - (nowMs.value - lastAt)
-  if (remainingMs > 0) return t(`${cardPrefix}.nextProbeIn`, { seconds: Math.ceil(remainingMs / 1000) })
+  if (!card.nextProbeAt) {
+    if (card.blockedReason === 'upstream_scheduling_disabled') return t(`${cardPrefix}.nextProbeBlocked`, { reason: t(`${prefix}.groupDetail.schedulableOff`) })
+    if (card.blockedReason === 'health_disabled') return t(`${cardPrefix}.nextProbeBlocked`, { reason: t(`${prefix}.groupDetail.healthSuspended`) })
+    if (card.blockedReason) return t(`${cardPrefix}.nextProbeBlocked`, { reason: t(`${prefix}.probeBlockedReasons.${card.blockedReason}`) })
+    return card.lastProbeAt ? t(`${cardPrefix}.nextProbeDue`) : t(`${cardPrefix}.nextProbeNeverProbed`)
+  }
+  const nextAt = new Date(card.nextProbeAt).getTime()
+  if (Number.isNaN(nextAt)) return t(`${cardPrefix}.nextProbeNeverProbed`)
+  const remainingMs = nextAt - nowMs.value
+  if (remainingMs > 0) {
+    const countdown = t(`${cardPrefix}.nextProbeIn`, { seconds: Math.ceil(remainingMs / 1000) })
+    if (!card.blockedReason) return countdown
+    return t(`${cardPrefix}.nextProbeWaiting`, {
+      countdown,
+      reason: t(`${prefix}.probeBlockedReasons.${card.blockedReason}`),
+    })
+  }
   return t(`${cardPrefix}.nextProbeDue`)
 }
 </script>
@@ -420,15 +591,26 @@ const nextProbeLabel = (card: StatusCard): string => {
                   v-for="card in focusedCards"
                   :key="card.key"
                   :site-label="siteName(card.upstreamSiteId)"
+                  :account-name="card.accountName"
                   :upstream-group-name="card.upstreamGroupName"
                   :model-name="card.modelName"
                   :provider="card.provider"
                   :state="card.state"
                   :latest-latency-ms="card.latestLatencyMs"
+                  :last-probe-at="card.lastProbeAt"
+                  :last-failure-at="card.lastFailureAt"
+                  :last-error-key="card.lastErrorKey"
+                  :last-error-detail="card.lastErrorDetail"
+                  :elapsed-seconds="card.elapsedSeconds"
+                  :effective-interval-seconds="card.effectiveIntervalSeconds"
+                  :effective-policy-sources="card.effectivePolicySources"
+                  :budget-policy-id="card.budgetPolicyId"
                   :availability-pct="card.availabilityPct"
                   :records="card.records"
                   :next-probe-text="nextProbeLabel(card)"
                   :remote-action="card.remoteAction"
+                  :action-source="card.actionSource"
+                  :action-at="card.actionAt"
                 />
               </div>
             </template>
@@ -449,15 +631,26 @@ const nextProbeLabel = (card: StatusCard): string => {
                       v-for="card in group.cards"
                       :key="card.key"
                       :site-label="siteName(card.upstreamSiteId)"
+                      :account-name="card.accountName"
                       :upstream-group-name="card.upstreamGroupName"
                       :model-name="card.modelName"
                       :provider="card.provider"
                       :state="card.state"
                       :latest-latency-ms="card.latestLatencyMs"
+                      :last-probe-at="card.lastProbeAt"
+                      :last-failure-at="card.lastFailureAt"
+                      :last-error-key="card.lastErrorKey"
+                      :last-error-detail="card.lastErrorDetail"
+                      :elapsed-seconds="card.elapsedSeconds"
+                      :effective-interval-seconds="card.effectiveIntervalSeconds"
+                      :effective-policy-sources="card.effectivePolicySources"
+                      :budget-policy-id="card.budgetPolicyId"
                       :availability-pct="card.availabilityPct"
                       :records="card.records"
                       :next-probe-text="nextProbeLabel(card)"
                       :remote-action="card.remoteAction"
+                      :action-source="card.actionSource"
+                      :action-at="card.actionAt"
                     />
                   </div>
                 </div>

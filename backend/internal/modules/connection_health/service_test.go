@@ -27,6 +27,7 @@ type fakeRepository struct {
 	priorityStates     map[string]PrioritySyncState
 	targetActionStates map[string]TargetActionState
 	budgetClaims       map[string]int
+	insertEventErr     error
 	savePolicyErr      error
 	deletePolicyErr    error
 }
@@ -254,6 +255,45 @@ func TestSavePolicy_OmittedStrategyModePreservesExistingMultiplierOnlyMode(t *te
 	}
 }
 
+func TestBuildPolicyAndTargets_DefaultsUnschedulableProbeSettings(t *testing.T) {
+	policy, _, err := buildPolicyAndTargets("user1", "ws1", "p1", PolicyInput{Name: "default policy"})
+	if err != nil {
+		t.Fatalf("buildPolicyAndTargets() error = %v", err)
+	}
+	if !policy.ContinueProbeWhenUnschedulable || policy.UnschedulableProbeIntervalMinutes != 60 {
+		t.Fatalf("unexpected unschedulable probe defaults: %+v", policy)
+	}
+}
+
+func TestSavePolicy_OmittedUnschedulableProbeSettingsPreservesExistingValues(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Name: "existing", Enabled: true,
+		ContinueProbeWhenUnschedulable: false, UnschedulableProbeIntervalMinutes: 180,
+	}}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	saved, err := service.SavePolicy(context.Background(), "user1", PolicyInput{
+		ID: "p1", Name: "old client update", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("SavePolicy() error = %v", err)
+	}
+	if saved.ContinueProbeWhenUnschedulable || saved.UnschedulableProbeIntervalMinutes != 180 {
+		t.Fatalf("omitted fields must preserve existing values: %+v", saved)
+	}
+}
+
+func TestBuildPolicyAndTargets_RejectsNonPositiveUnschedulableProbeInterval(t *testing.T) {
+	invalid := 0
+	_, _, err := buildPolicyAndTargets("user1", "ws1", "p1", PolicyInput{
+		Name: "invalid", UnschedulableProbeIntervalMinutes: &invalid,
+	})
+	if err != requestError(ErrorRequest) {
+		t.Fatalf("buildPolicyAndTargets() error = %v, want %s", err, ErrorRequest)
+	}
+}
+
 func (f *fakeRepository) ListStatesByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthState, error) {
 	out := make([]ConnectionHealthState, 0)
 	for _, byModel := range f.states {
@@ -293,6 +333,9 @@ func (f *fakeRepository) UpsertState(ctx context.Context, s ConnectionHealthStat
 }
 
 func (f *fakeRepository) InsertEvent(ctx context.Context, e ConnectionHealthEvent) error {
+	if f.insertEventErr != nil {
+		return f.insertEventErr
+	}
 	f.events = append(f.events, e)
 	return nil
 }
@@ -313,6 +356,65 @@ func (f *fakeRepository) ListRecentEventsByWorkspace(ctx context.Context, userID
 		if e.UserID == userID && e.AdminAccountID == adminAccountID {
 			out = append(out, e)
 		}
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListLatestProbeFailureEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error) {
+	type eventKey struct {
+		connectionID string
+		modelName    string
+	}
+	latest := make(map[eventKey]ConnectionHealthEvent)
+	for _, event := range f.events {
+		if event.UserID != userID || event.AdminAccountID != adminAccountID || !slices.Contains(probeFailureResultKeys(), event.Result) {
+			continue
+		}
+		key := eventKey{connectionID: event.ConnectionID, modelName: event.ModelName}
+		current, exists := latest[key]
+		if !exists || event.CreatedAt.After(current.CreatedAt) {
+			latest[key] = event
+		}
+	}
+	out := make([]ConnectionHealthEvent, 0, len(latest))
+	for _, event := range latest {
+		out = append(out, event)
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListLatestSchedulableActionEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error) {
+	latest := make(map[string]ConnectionHealthEvent)
+	for _, event := range f.events {
+		if event.UserID != userID || event.AdminAccountID != adminAccountID || event.ActionSource != ActionSourceUser {
+			continue
+		}
+		current, exists := latest[event.ConnectionID]
+		if !exists || event.CreatedAt.After(current.CreatedAt) {
+			latest[event.ConnectionID] = event
+		}
+	}
+	out := make([]ConnectionHealthEvent, 0, len(latest))
+	for _, event := range latest {
+		out = append(out, event)
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListLatestSuccessfulSchedulableActionEventsByWorkspace(ctx context.Context, userID string, adminAccountID string) ([]ConnectionHealthEvent, error) {
+	latest := make(map[string]ConnectionHealthEvent)
+	for _, event := range f.events {
+		if event.UserID != userID || event.AdminAccountID != adminAccountID || event.ActionSource != ActionSourceUser || event.Result != SchedulableActionSucceeded {
+			continue
+		}
+		current, exists := latest[event.ConnectionID]
+		if !exists || event.CreatedAt.After(current.CreatedAt) {
+			latest[event.ConnectionID] = event
+		}
+	}
+	out := make([]ConnectionHealthEvent, 0, len(latest))
+	for _, event := range latest {
+		out = append(out, event)
 	}
 	return out, nil
 }

@@ -36,6 +36,7 @@ const DEFAULTS = {
   observationSeconds: 300,
   recoveryStepPercent: 25,
   dailyProbeBudget: 1000,
+  unschedulableProbeIntervalMinutes: 60,
   maxProbeTokens: 1,
 }
 
@@ -49,6 +50,8 @@ const cooldownSeconds = ref(DEFAULTS.cooldownSeconds)
 const observationSeconds = ref(DEFAULTS.observationSeconds)
 const recoveryStepPercent = ref(DEFAULTS.recoveryStepPercent)
 const dailyProbeBudget = ref(DEFAULTS.dailyProbeBudget)
+const continueProbeWhenUnschedulable = ref(true)
+const unschedulableProbeIntervalMinutes = ref(DEFAULTS.unschedulableProbeIntervalMinutes)
 const autoDegradeEnabled = ref(true)
 const autoRemoteActionEnabled = ref(false)
 const priorityMode = ref<ConnectionHealthPriorityMode>('none')
@@ -78,6 +81,8 @@ const resetForm = () => {
   observationSeconds.value = p?.observationSeconds ?? DEFAULTS.observationSeconds
   recoveryStepPercent.value = p?.recoveryStepPercent ?? DEFAULTS.recoveryStepPercent
   dailyProbeBudget.value = p?.dailyProbeBudget ?? DEFAULTS.dailyProbeBudget
+  continueProbeWhenUnschedulable.value = p?.continueProbeWhenUnschedulable ?? true
+  unschedulableProbeIntervalMinutes.value = p?.unschedulableProbeIntervalMinutes ?? DEFAULTS.unschedulableProbeIntervalMinutes
   autoDegradeEnabled.value = p?.autoDegradeEnabled ?? true
   autoRemoteActionEnabled.value = autoDegradeEnabled.value && (p?.autoRemoteActionEnabled ?? false)
   priorityMode.value = p?.priorityMode === 'multiplier' ? 'multiplier' : 'none'
@@ -153,6 +158,10 @@ const handleSave = () => {
     validationError.value = t(`${prefix}.errors.modelTargetRequired`)
     return
   }
+  if (!isMultiplierOnly.value && (!Number.isInteger(unschedulableProbeIntervalMinutes.value) || unschedulableProbeIntervalMinutes.value <= 0)) {
+    validationError.value = t(`${prefix}.errors.unschedulableIntervalInvalid`)
+    return
+  }
 
   const ownGroup = props.ownGroupOptions.find(g => g.id === ownGroupId.value)
   const input: PolicyInput = {
@@ -168,6 +177,8 @@ const handleSave = () => {
     observationSeconds: observationSeconds.value,
     recoveryStepPercent: recoveryStepPercent.value,
     dailyProbeBudget: dailyProbeBudget.value,
+    continueProbeWhenUnschedulable: continueProbeWhenUnschedulable.value,
+    unschedulableProbeIntervalMinutes: unschedulableProbeIntervalMinutes.value,
     autoDegradeEnabled: isMultiplierOnly.value ? false : autoDegradeEnabled.value,
     autoRemoteActionEnabled: isMultiplierOnly.value ? false : autoRemoteActionEnabled.value,
     priorityMode: isMultiplierOnly.value ? 'multiplier' : priorityMode.value,
@@ -361,6 +372,16 @@ const handleSave = () => {
                     <HelpTooltip :text="t(`${prefix}.tooltips.probeInterval`)" />
                   </label>
                   <input v-model.number="probeIntervalSeconds" type="number" min="1" class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
+                </div>
+                <div class="col-span-2 flex items-center justify-between rounded-lg border border-border/40 bg-surface/30 px-3 py-2.5">
+                  <label class="flex min-w-0 items-center gap-2 text-xs text-foreground">
+                    <input v-model="continueProbeWhenUnschedulable" type="checkbox" class="h-3.5 w-3.5 rounded border-border/60" />
+                    <span>{{ t(`${prefix}.continueProbeWhenUnschedulableLabel`) }}</span>
+                  </label>
+                  <label class="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                    <span>{{ t(`${prefix}.unschedulableProbeIntervalLabel`) }}</span>
+                    <input v-model.number="unschedulableProbeIntervalMinutes" type="number" min="1" class="h-8 w-20 rounded-md border border-border/60 bg-background px-2 text-xs text-foreground" :disabled="!continueProbeWhenUnschedulable" />
+                  </label>
                 </div>
                 <div class="space-y-1.5">
                   <label class="flex items-center gap-1 text-xs font-medium text-muted-foreground">

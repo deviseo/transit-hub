@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestUpdateSub2APIAdminAccountStatus_UsesFieldOnlyBulkUpdate 验证状态更新不会读取或
@@ -66,6 +67,44 @@ func TestUpdateAdminTargetPriority_Sub2APIUsesFieldOnlyBulkUpdate(t *testing.T) 
 		if _, exists := body[forbidden]; exists {
 			t.Fatalf("priority update must never include %s: %+v", forbidden, body)
 		}
+	}
+}
+
+func TestSetSub2APIAdminAccountSchedulable_UsesDedicatedFieldEndpoint(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/admin/accounts/1515/schedulable" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var err error
+		body, err = readJSONBody(r)
+		if err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		writeJSON(w, map[string]any{
+			"success": true,
+			"data":    map[string]any{"id": 1515, "schedulable": false},
+		})
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token", TokenType: "Bearer"}
+	if err := service.SetSub2APIAdminAccountSchedulable(session, "1515", false); err != nil {
+		t.Fatalf("SetSub2APIAdminAccountSchedulable() error = %v", err)
+	}
+	if len(body) != 1 || body["schedulable"] != false {
+		t.Fatalf("schedulable update must contain only schedulable: %+v", body)
+	}
+}
+
+func TestParseSub2APIAccountPreservesObservedUpdateTime(t *testing.T) {
+	account := parseSub2APIAccount(map[string]any{
+		"id": 1515, "schedulable": false, "updated_at": "2026-08-03T10:20:30Z",
+	})
+	want := time.Date(2026, 8, 3, 10, 20, 30, 0, time.UTC)
+	if account.UpdatedAt == nil || !account.UpdatedAt.Equal(want) {
+		t.Fatalf("updated time = %v, want %s", account.UpdatedAt, want)
 	}
 }
 

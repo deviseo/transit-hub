@@ -35,6 +35,8 @@ type AdminGroupHealth struct {
 	HasEnabledProbePolicy bool                    `json:"hasEnabledProbePolicy"`
 	PriorityMode          string                  `json:"priorityMode"`
 	PriorityConflictCount int                     `json:"priorityConflictCount"`
+	PriorityConflicts     []AdminPriorityConflict `json:"priorityConflicts,omitempty"`
+	ProbeModelsConfigured bool                    `json:"probeModelsConfigured"`
 	HealthSummary         AdminGroupHealthSummary `json:"healthSummary"`
 	// AccountsError 非空时表示该分组的账号/渠道列表拉取失败（i18n key）；此时 accountCount=0、
 	// accounts 为空，但主列表其余分组不受影响，不会整页崩溃。
@@ -55,6 +57,7 @@ type AdminGroupHealthSummary struct {
 	RecoveringModels    int        `json:"recoveringModels"`
 	SuspendedModels     int        `json:"suspendedModels"`
 	DisabledModels      int        `json:"disabledModels"`
+	PendingModels       int        `json:"pendingModels"`
 	UnconfiguredModels  int        `json:"unconfiguredModels"`
 	LastProbeAt         *time.Time `json:"lastProbeAt"`
 }
@@ -63,19 +66,27 @@ type AdminGroupHealthSummary struct {
 // 只要后端能安全解析 base_url + key + model 就可独立探活，不再需要 real_connections。
 // 绝不包含 key / token / cookie / credentials / secret / authorization 明文。
 type AdminGroupAccount struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Platform       string   `json:"platform"`
-	Type           string   `json:"type"`
-	Status         string   `json:"status"`
-	Schedulable    *bool    `json:"schedulable,omitempty"`
-	Priority       *int     `json:"priority,omitempty"`
-	Concurrency    *int     `json:"concurrency,omitempty"`
-	RateMultiplier *float64 `json:"rateMultiplier,omitempty"`
-	LoadFactor     *int     `json:"loadFactor,omitempty"`
-	Weight         *int     `json:"weight,omitempty"`
-	Models         string   `json:"models,omitempty"`
-	GroupIDs       []string `json:"groupIds,omitempty"`
+	ID                            string     `json:"id"`
+	Name                          string     `json:"name"`
+	Platform                      string     `json:"platform"`
+	Type                          string     `json:"type"`
+	Status                        string     `json:"status"`
+	Schedulable                   *bool      `json:"schedulable,omitempty"`
+	SchedulableSource             string     `json:"schedulableSource"`
+	SchedulableChangedAt          *time.Time `json:"schedulableChangedAt,omitempty"`
+	LastSchedulableAction         string     `json:"lastSchedulableAction,omitempty"`
+	LastSchedulableActionAt       *time.Time `json:"lastSchedulableActionAt,omitempty"`
+	LastSchedulableActionResult   string     `json:"lastSchedulableActionResult,omitempty"`
+	LastSchedulableActionErrorKey string     `json:"lastSchedulableActionErrorKey,omitempty"`
+	UpstreamStatusSource          string     `json:"upstreamStatusSource"`
+	HealthStatusSource            string     `json:"healthStatusSource"`
+	Priority                      *int       `json:"priority,omitempty"`
+	Concurrency                   *int       `json:"concurrency,omitempty"`
+	RateMultiplier                *float64   `json:"rateMultiplier,omitempty"`
+	LoadFactor                    *int       `json:"loadFactor,omitempty"`
+	Weight                        *int       `json:"weight,omitempty"`
+	Models                        string     `json:"models,omitempty"`
+	GroupIDs                      []string   `json:"groupIds,omitempty"`
 	// UpstreamKeyGroup* 来自 real_connections 中该 admin 转发账号实际绑定的上游 API Key
 	// 分组，再以站点缓存的 Groups 解析其当前倍率。无法可靠关联时保持空值，绝不使用
 	// admin 转发账号自身的 rate_multiplier 猜测。
@@ -100,12 +111,30 @@ type AdminGroupAccount struct {
 	ExcludedFromGroupPolicy bool                    `json:"excludedFromGroupPolicy"`
 	PriorityManaged         bool                    `json:"priorityManaged"`
 	PriorityConflict        bool                    `json:"priorityConflict"`
+	PriorityOriginal        *int                    `json:"priorityOriginal,omitempty"`
+	PriorityExpected        *int                    `json:"priorityExpected,omitempty"`
+	PriorityConflictValue   *int                    `json:"priorityConflictValue,omitempty"`
+	PriorityConflictAt      *time.Time              `json:"priorityConflictAt,omitempty"`
+	ProbeModelsConfigured   bool                    `json:"probeModelsConfigured"`
 	EffectiveMultiplier     *float64                `json:"effectiveMultiplier,omitempty"`
 }
 
+type AdminPriorityConflict struct {
+	TargetID         string     `json:"targetId"`
+	AccountName      string     `json:"accountName"`
+	CurrentPriority  *int       `json:"currentPriority,omitempty"`
+	ExpectedPriority *int       `json:"expectedPriority,omitempty"`
+	ConflictAt       *time.Time `json:"conflictAt,omitempty"`
+}
+
 type AdminGroupUnprobedModel struct {
-	ModelName      string `json:"modelName"`
-	ProviderFamily string `json:"providerFamily"`
+	ModelName                string                       `json:"modelName"`
+	ProviderFamily           string                       `json:"providerFamily"`
+	NextProbeAt              *time.Time                   `json:"nextProbeAt,omitempty"`
+	BlockedReason            string                       `json:"blockedReason,omitempty"`
+	EffectiveIntervalSeconds int                          `json:"effectiveIntervalSeconds,omitempty"`
+	EffectivePolicySources   []EffectiveProbePolicySource `json:"effectivePolicySources,omitempty"`
+	BudgetPolicyID           string                       `json:"budgetPolicyId,omitempty"`
 }
 
 // SetPlatformGroupReader 注入平台中性的分组/账号读取与凭据解析能力（由 upstream.PlatformService 满足）。
@@ -159,6 +188,18 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	if err != nil {
 		return nil, err
 	}
+	latestProbeFailureEvents, err := s.repo.ListLatestProbeFailureEventsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	latestSchedulableEvents, err := s.repo.ListLatestSchedulableActionEventsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	latestSuccessfulSchedulableEvents, err := s.repo.ListLatestSuccessfulSchedulableActionEventsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
 	// assignmentsByTarget: targetId -> 该 target 已分配的全部策略行（不限已启用/禁用，
 	// 展示层需要如实反映分配关系，是否生效由调度器按启用状态另行判断）。
 	assignmentsByTarget := make(map[string][]PolicyAssignment, len(assignments))
@@ -184,9 +225,43 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	for _, state := range priorityStates {
 		priorityByTarget[state.TargetID] = state
 	}
+	latestProbeFailureEvent := latestProbeFailureEventsByTargetModel(latestProbeFailureEvents)
+	latestSchedulableEvent := latestSchedulableEventsByTarget(latestSchedulableEvents)
+	latestSuccessfulSchedulableEvent := latestSchedulableEventsByTarget(latestSuccessfulSchedulableEvents)
+	budgetCounts := make(map[string]int)
+	budgetLoaded := make(map[string]bool)
+	now := time.Now().UTC()
+	budgetDayStart := probeBudgetDayStart(now)
 	// 真实上游 API Key 分组倍率仅用于展示，不参与探活或优先级计算。读取失败时降级为空，
 	// 保证既有分组健康功能不会因为可选的倍率信息不可用而中断。
 	upstreamKeyGroups := s.upstreamKeyGroupsByAdminAccount(ctx, userID, adminAccountID, platform)
+
+	type groupAccountInventory struct {
+		accounts []upstream.AdminGroupAccountInfo
+		err      error
+	}
+	accountsByGroup := make(map[string]groupAccountInventory, len(groups))
+	inheritedPolicyIDsByTarget := make(map[string][]string)
+	decisionAccountByTarget := make(map[string]upstream.AdminGroupAccountInfo)
+	for _, group := range groups {
+		accounts, accErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		accountsByGroup[group.ID] = groupAccountInventory{accounts: accounts, err: accErr}
+		if accErr != nil {
+			continue
+		}
+		for _, acc := range accounts {
+			targetID := buildTargetID(platform, adminAccountID, acc.ID)
+			if _, exists := decisionAccountByTarget[targetID]; !exists {
+				decisionAccountByTarget[targetID] = acc
+			}
+			if exclusions := excludedByGroup[group.ID]; exclusions != nil {
+				if _, excluded := exclusions[targetID]; excluded {
+					continue
+				}
+			}
+			inheritedPolicyIDsByTarget[targetID] = mergePolicyIDs(inheritedPolicyIDsByTarget[targetID], groupPolicyIDs[group.ID])
+		}
+	}
 
 	// stateIndex[targetId][modelName] = 独立探活当前健康状态。旧的 real_connection 状态行
 	// 也会出现在这里（connection_id 为 UUID），但不会与 targetId 命名空间碰撞，互不影响。
@@ -226,7 +301,8 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			}
 		}
 
-		accounts, accErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		inventory := accountsByGroup[group.ID]
+		accounts, accErr := inventory.accounts, inventory.err
 		if accErr != nil {
 			log.Printf("[connection-health] admin group accounts fetch failed group_id=%s group_name=%s err=%v", group.ID, group.Name, accErr)
 			health.AccountsError = ErrorAccountsFetch
@@ -244,10 +320,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				_, excluded = exclusions[targetID]
 			}
 			explicitIDs, _ := assignedPolicySummaries(assignmentsByTarget[targetID], policyByID)
-			inheritedIDs := []string{}
-			if !excluded {
-				inheritedIDs = groupPolicyIDs[group.ID]
-			}
+			inheritedIDs := inheritedPolicyIDsByTarget[targetID]
 			assignedIDs := mergePolicyIDs(explicitIDs, inheritedIDs)
 			assignedIDs, assignedSummaries := assignedPolicySummariesFromIDs(assignedIDs, policyByID)
 			effectivePolicies := make([]Policy, 0, len(assignedIDs))
@@ -256,15 +329,62 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 					effectivePolicies = append(effectivePolicies, policy)
 				}
 			}
-			activeSpecs := candidateModelSpecs(splitModelList(acc.Models), effectivePolicies)
+			decisionAccount := decisionAccountByTarget[targetID]
+			activeSpecs := candidateModelSpecsForPlatform(splitModelList(decisionAccount.Models), effectivePolicies, platform)
 			hasProbePolicy := hasEnabledProbePolicy(effectivePolicies)
-			modelHealth, unprobedModels := modelHealthForSpecs(stateIndex[targetID], activeSpecs)
-			if credentialReason := latestCredentialUnavailableReason(modelHealth); credentialReason != "" {
+			budgetUsage, budgetReady := s.loadProbeBudgetUsage(ctx, userID, adminAccountID, activeSpecs, decisionAccount.Schedulable, budgetCounts, budgetLoaded, budgetDayStart)
+			if !budgetReady {
+				budgetUsage = nil
+			}
+			modelHealth, unprobedModels := modelHealthForSpecs(stateIndex[targetID], activeSpecs, decisionAccount.Schedulable, now, budgetUsage, budgetReady)
+			credentialReason := latestCredentialUnavailableReason(modelHealth)
+			applyLatestProbeFailureDetails(modelHealth, latestProbeFailureEvent[targetID])
+			if credentialReason != "" {
 				available = false
 				reason = credentialReason
 			}
 			assignmentSource := policyAssignmentSource(explicitIDs, inheritedIDs)
 			priorityState, priorityManaged := priorityByTarget[targetID]
+			var priorityOriginal, priorityExpected, priorityConflictValue *int
+			var priorityConflictAt *time.Time
+			if priorityManaged {
+				original := priorityState.OriginalPriority
+				expected := priorityState.LastAppliedPriority
+				if priorityState.PendingPriority != nil {
+					expected = *priorityState.PendingPriority
+				}
+				priorityOriginal, priorityExpected = &original, &expected
+				if priorityState.LastConflictPriority != nil {
+					priorityConflictValue = cloneIntPointer(priorityState.LastConflictPriority)
+				}
+				if priorityState.Conflict {
+					priorityConflictAt = utcTimePointer(&priorityState.UpdatedAt)
+				}
+			}
+			var schedulableSource string
+			if decisionAccount.Schedulable == nil {
+				schedulableSource = "unknown"
+			} else {
+				schedulableSource = "upstream_observed"
+			}
+			var lastSchedulableAction string
+			var lastSchedulableActionAt *time.Time
+			var lastSchedulableActionResult string
+			var lastSchedulableActionErrorKey string
+			var schedulableChangedAt *time.Time
+			if decisionAccount.UpdatedAt != nil {
+				schedulableChangedAt = utcTimePointer(decisionAccount.UpdatedAt)
+			}
+			if event, ok := latestSchedulableEvent[targetID]; ok {
+				lastSchedulableAction = event.RemoteAction
+				lastSchedulableActionAt = utcTimePointer(&event.CreatedAt)
+				lastSchedulableActionResult = event.Result
+				lastSchedulableActionErrorKey = event.ErrorKey
+			}
+			if event, ok := latestSuccessfulSchedulableEvent[targetID]; ok && schedulableUserActionMatchesObserved(event, decisionAccount.Schedulable, decisionAccount.UpdatedAt) {
+				schedulableSource = ActionSourceUser
+				schedulableChangedAt = utcTimePointer(&event.CreatedAt)
+			}
 			var effectiveMultiplier *float64
 			if priorityManaged {
 				value := priorityState.EffectiveMultiplier
@@ -272,36 +392,49 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			}
 
 			item := AdminGroupAccount{
-				ID:                         acc.ID,
-				Name:                       acc.Name,
-				Platform:                   acc.Platform,
-				Type:                       acc.Type,
-				Status:                     acc.Status,
-				Schedulable:                acc.Schedulable,
-				Priority:                   acc.Priority,
-				Concurrency:                acc.Concurrency,
-				RateMultiplier:             acc.RateMultiplier,
-				LoadFactor:                 acc.LoadFactor,
-				Weight:                     acc.Weight,
-				Models:                     acc.Models,
-				GroupIDs:                   acc.GroupIDs,
-				UpstreamKeyGroupName:       upstreamKeyGroup.name,
-				UpstreamKeyGroupMultiplier: upstreamKeyGroup.multiplier,
-				TargetID:                   targetID,
-				ProbeAvailable:             available,
-				ProbeUnavailableReason:     reason,
-				ModelHealth:                modelHealth,
-				UnprobedModels:             unprobedModels,
-				AssignedPolicyIDs:          assignedIDs,
-				AssignedPolicies:           assignedSummaries,
-				HasAssignedPolicy:          len(assignedIDs) > 0,
-				HasEnabledPolicy:           hasEnabledAssignedPolicy(assignedSummaries),
-				HasEnabledProbePolicy:      hasProbePolicy,
-				PolicyAssignmentSource:     assignmentSource,
-				ExcludedFromGroupPolicy:    excluded,
-				PriorityManaged:            priorityManaged,
-				PriorityConflict:           priorityManaged && priorityState.Conflict,
-				EffectiveMultiplier:        effectiveMultiplier,
+				ID:                            acc.ID,
+				Name:                          acc.Name,
+				Platform:                      acc.Platform,
+				Type:                          acc.Type,
+				Status:                        acc.Status,
+				Schedulable:                   decisionAccount.Schedulable,
+				SchedulableSource:             schedulableSource,
+				SchedulableChangedAt:          schedulableChangedAt,
+				LastSchedulableAction:         lastSchedulableAction,
+				LastSchedulableActionAt:       lastSchedulableActionAt,
+				LastSchedulableActionResult:   lastSchedulableActionResult,
+				LastSchedulableActionErrorKey: lastSchedulableActionErrorKey,
+				UpstreamStatusSource:          "upstream_observed",
+				HealthStatusSource:            healthStatusSource(modelHealth, unprobedModels),
+				Priority:                      acc.Priority,
+				Concurrency:                   acc.Concurrency,
+				RateMultiplier:                acc.RateMultiplier,
+				LoadFactor:                    acc.LoadFactor,
+				Weight:                        acc.Weight,
+				Models:                        acc.Models,
+				GroupIDs:                      acc.GroupIDs,
+				UpstreamKeyGroupName:          upstreamKeyGroup.name,
+				UpstreamKeyGroupMultiplier:    upstreamKeyGroup.multiplier,
+				TargetID:                      targetID,
+				ProbeAvailable:                available,
+				ProbeUnavailableReason:        reason,
+				ModelHealth:                   modelHealth,
+				UnprobedModels:                unprobedModels,
+				AssignedPolicyIDs:             assignedIDs,
+				AssignedPolicies:              assignedSummaries,
+				HasAssignedPolicy:             len(assignedIDs) > 0,
+				HasEnabledPolicy:              hasEnabledAssignedPolicy(assignedSummaries),
+				HasEnabledProbePolicy:         hasProbePolicy,
+				PolicyAssignmentSource:        assignmentSource,
+				ExcludedFromGroupPolicy:       excluded,
+				PriorityManaged:               priorityManaged,
+				PriorityConflict:              priorityManaged && priorityState.Conflict,
+				PriorityOriginal:              priorityOriginal,
+				PriorityExpected:              priorityExpected,
+				PriorityConflictValue:         priorityConflictValue,
+				PriorityConflictAt:            priorityConflictAt,
+				ProbeModelsConfigured:         len(activeSpecs) > 0,
+				EffectiveMultiplier:           effectiveMultiplier,
 			}
 			if item.HasEnabledProbePolicy {
 				health.MonitoredAccountCount++
@@ -311,6 +444,14 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 			}
 			if item.PriorityConflict {
 				health.PriorityConflictCount++
+				current := cloneIntPointer(acc.Priority)
+				health.PriorityConflicts = append(health.PriorityConflicts, AdminPriorityConflict{
+					TargetID: targetID, AccountName: acc.Name, CurrentPriority: current, ExpectedPriority: priorityExpected,
+					ConflictAt: priorityConflictAt,
+				})
+			}
+			if item.ProbeModelsConfigured {
+				health.ProbeModelsConfigured = true
 			}
 
 			if hasProbePolicy && available {
@@ -319,7 +460,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 					summary.UnconfiguredModels++
 				} else {
 					accumulateSummary(&summary, modelHealth)
-					summary.UnconfiguredModels += len(unprobedModels)
+					summary.PendingModels += len(unprobedModels)
 				}
 			} else if hasProbePolicy {
 				summary.UnprobeableAccounts++
@@ -332,6 +473,29 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		result = append(result, health)
 	}
 	return result, nil
+}
+
+func (s *Service) loadProbeBudgetUsage(ctx context.Context, userID string, adminAccountID string, specs []probeModelSpec, schedulable *bool, counts map[string]int, loaded map[string]bool, dayStart time.Time) (map[string]int, bool) {
+	usage := make(map[string]int)
+	for _, spec := range specs {
+		for _, policy := range spec.policies {
+			continueAutoProbe, _ := policyProbeCadence(policy, schedulable)
+			if !continueAutoProbe {
+				continue
+			}
+			if !loaded[policy.ID] {
+				count, err := s.repo.CountProbesToday(ctx, userID, adminAccountID, policy.ID, dayStart)
+				if err != nil {
+					log.Printf("[connection-health] count policy budget for admin group failed policy_id=%s err=%v", policy.ID, err)
+					return nil, false
+				}
+				counts[policy.ID] = count
+				loaded[policy.ID] = true
+			}
+			usage[policy.ID] = counts[policy.ID]
+		}
+	}
+	return usage, true
 }
 
 type upstreamKeyGroupInfo struct {
@@ -558,21 +722,72 @@ func modelHealthForConnection(byModel map[string]ConnectionHealthState) []ModelH
 	return models
 }
 
+func latestProbeFailureEventsByTargetModel(events []ConnectionHealthEvent) map[string]map[string]ConnectionHealthEvent {
+	latest := make(map[string]map[string]ConnectionHealthEvent)
+	for _, event := range events {
+		byModel := latest[event.ConnectionID]
+		if byModel == nil {
+			byModel = make(map[string]ConnectionHealthEvent)
+			latest[event.ConnectionID] = byModel
+		}
+		current, exists := byModel[event.ModelName]
+		if !exists || event.CreatedAt.After(current.CreatedAt) {
+			byModel[event.ModelName] = event
+		}
+	}
+	return latest
+}
+
+func applyLatestProbeFailureDetails(models []ModelHealth, latestByModel map[string]ConnectionHealthEvent) {
+	for i := range models {
+		if models[i].LastFailureAt == nil {
+			continue
+		}
+		event, exists := latestByModel[models[i].ModelName]
+		if !exists || event.CreatedAt.Before(*models[i].LastFailureAt) {
+			continue
+		}
+		models[i].LastErrorKey = event.ErrorKey
+		if models[i].LastErrorKey == "" {
+			models[i].LastErrorKey = event.Result
+		}
+		models[i].LastErrorDetail = event.ErrorDetail
+	}
+}
+
 // modelHealthForSpecs 只展开当前有效策略仍启用的模型。历史状态继续留库用于审计，但模型被
 // 删除、禁用或不再属于目标后，不得继续影响页面汇总、优先级和账号级动作。
-func modelHealthForSpecs(byModel map[string]ConnectionHealthState, specs []probeModelSpec) ([]ModelHealth, []AdminGroupUnprobedModel) {
+func modelHealthForSpecs(byModel map[string]ConnectionHealthState, specs []probeModelSpec, schedulable *bool, now time.Time, budgetUsage map[string]int, budgetReady bool) ([]ModelHealth, []AdminGroupUnprobedModel) {
 	models := make([]ModelHealth, 0, len(specs))
 	unprobed := make([]AdminGroupUnprobedModel, 0)
 	for _, spec := range specs {
 		state, exists := byModel[spec.modelName]
 		if !exists {
+			decision := calculateEffectiveProbeDecisionWithBudgets(spec.policies, schedulable, nil, now, budgetUsage)
+			if !budgetReady && decision.ContinueAutoProbe {
+				decision.NextProbeAt = nil
+				decision.BlockedReason = ProbeBlockedBudgetUnavailable
+			}
 			unprobed = append(unprobed, AdminGroupUnprobedModel{
-				ModelName: spec.modelName, ProviderFamily: spec.providerFamily,
+				ModelName: spec.modelName, ProviderFamily: spec.providerFamily, NextProbeAt: decision.NextProbeAt,
+				BlockedReason: decision.BlockedReason, EffectiveIntervalSeconds: decision.EffectiveIntervalSeconds,
+				EffectivePolicySources: decision.SourcePolicies, BudgetPolicyID: decision.BudgetPolicyID,
 			})
 			continue
 		}
 		model := toModelHealth(spec.modelName, state)
 		model.ProviderFamily = spec.providerFamily
+		decision := calculateEffectiveProbeDecisionWithBudgets(spec.policies, schedulable, &state, now, budgetUsage)
+		if !budgetReady && decision.ContinueAutoProbe {
+			decision.NextProbeAt = nil
+			decision.BlockedReason = ProbeBlockedBudgetUnavailable
+		}
+		model.NextProbeAt = decision.NextProbeAt
+		model.BlockedReason = decision.BlockedReason
+		model.EffectiveIntervalSeconds = decision.EffectiveIntervalSeconds
+		model.EffectivePolicySources = decision.SourcePolicies
+		model.BudgetPolicyID = decision.BudgetPolicyID
+		model.ElapsedSeconds = elapsedSince(model.LastFailureAt, model.LastProbeAt, now)
 		models = append(models, model)
 	}
 	return models, unprobed
@@ -599,6 +814,60 @@ func latestCredentialUnavailableReason(models []ModelHealth) string {
 		return latestErrorKey
 	}
 	return ""
+}
+
+func latestSchedulableEventsByTarget(events []ConnectionHealthEvent) map[string]ConnectionHealthEvent {
+	latest := make(map[string]ConnectionHealthEvent)
+	for _, event := range events {
+		if event.ActionSource != ActionSourceUser {
+			continue
+		}
+		previous, exists := latest[event.ConnectionID]
+		if !exists || event.CreatedAt.After(previous.CreatedAt) {
+			latest[event.ConnectionID] = event
+		}
+	}
+	return latest
+}
+
+func schedulableUserActionMatchesObserved(event ConnectionHealthEvent, observed *bool, observedUpdatedAt *time.Time) bool {
+	if event.Result != SchedulableActionSucceeded || observed == nil || observedUpdatedAt == nil || observedUpdatedAt.After(event.CreatedAt) {
+		return false
+	}
+	switch event.RemoteAction {
+	case RemoteActionSchedulableEnabled:
+		return *observed
+	case RemoteActionSchedulableDisabled:
+		return !*observed
+	default:
+		return false
+	}
+}
+
+func elapsedSince(lastFailure *time.Time, _ *time.Time, now time.Time) *int64 {
+	if lastFailure == nil {
+		return nil
+	}
+	seconds := int64(now.Sub(*lastFailure).Seconds())
+	if seconds < 0 {
+		seconds = 0
+	}
+	return &seconds
+}
+
+func healthStatusSource(models []ModelHealth, unprobed []AdminGroupUnprobedModel) string {
+	if len(models) > 0 {
+		for _, model := range models {
+			if model.Configured {
+				return "health_probe"
+			}
+		}
+		return "unconfigured"
+	}
+	if len(unprobed) > 0 {
+		return "unprobed"
+	}
+	return "none"
 }
 
 // accumulateSummary only counts persisted states. Configured models without a state are

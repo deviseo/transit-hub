@@ -115,6 +115,19 @@ export const manualProbeOnce = async (targetId: string, models: string[]): Promi
     body: JSON.stringify({ models }),
   })
 
+export interface TargetSchedulableActionResult {
+  targetId: string
+  schedulable: boolean
+  actionSource: string
+  actionAt: string
+}
+
+export const setTargetSchedulable = async (targetId: string, schedulable: boolean): Promise<TargetSchedulableActionResult> =>
+  requestJson<TargetSchedulableActionResult>(`/connection-health/targets/${encodeURIComponent(targetId)}/schedulable`, {
+    method: 'POST',
+    body: JSON.stringify({ schedulable }),
+  })
+
 // getTargetPolicyAssignments / setTargetPolicyAssignments 管理「账号/channel 显式分配策略」
 // 关系：只有分配了已启用策略的 target，后台调度器才会自动探活。
 export const getTargetPolicyAssignments = async (targetId: string): Promise<TargetPolicyAssignments> =>

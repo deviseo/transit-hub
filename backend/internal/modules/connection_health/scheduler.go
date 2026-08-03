@@ -202,6 +202,23 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 		return
 	}
 	defer release()
+	freshTarget, freshAccount, memberships, found, accountsReadError, refreshErr := s.findAdminTargetWithMemberships(ctx, j.session, j.adminAccountID, j.target.AccountID)
+	if refreshErr != nil || accountsReadError || !found || freshTarget.TargetID != j.target.TargetID {
+		log.Printf("[connection-health] refresh scheduled target failed target_id=%s found=%t partial=%t err=%v", j.target.TargetID, found, accountsReadError, refreshErr)
+		return
+	}
+	j.target = freshTarget
+	j.account = freshAccount
+	currentSpecs, queuedSpecs, policyOK := s.currentScheduledProbeSpecs(ctx, j.userID, j.adminAccountID, j.target, memberships, j.dueSpecs)
+	if !policyOK {
+		log.Printf("[connection-health] refresh scheduled policy decision failed target_id=%s", j.target.TargetID)
+		return
+	}
+	j.models = currentSpecs
+	j.dueSpecs = s.recheckAdminProbeSpecs(ctx, j.userID, j.adminAccountID, j.target, queuedSpecs, time.Now().UTC())
+	if len(j.dueSpecs) == 0 {
+		return
+	}
 
 	cred, err := s.platformGroups.ResolveProbeCredential(j.session, j.account)
 	if err != nil {
@@ -223,6 +240,137 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, globalS
 	s.finishTargetProbeBatch(ctx, j.userID, j.adminAccountID, j.session, j.target, j.models, results)
 }
 
+// recheckAdminProbeSpecs closes the gap between scheduler collection and job execution:
+// the target lease protects in-process user actions, while this decision pass consumes the
+// fresh schedulable value, current state and budget owner immediately before any probe request.
+func (s *Service) recheckAdminProbeSpecs(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, specs []probeModelSpec, now time.Time) []probeModelSpec {
+	if len(specs) == 0 {
+		return nil
+	}
+	budgetUsage := make(map[string]int)
+	budgetLoaded := make(map[string]bool)
+	due := make([]probeModelSpec, 0, len(specs))
+	for _, spec := range specs {
+		policies := spec.policies
+		if len(policies) == 0 {
+			policies = []Policy{spec.policy}
+		}
+		decision, stateOK := s.effectiveProbeDecision(ctx, target.TargetID, spec.modelName, policies, target.Schedulable, now)
+		if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
+			continue
+		}
+		specBudgetUsage := make(map[string]int)
+		budgetReady := true
+		for _, sourcePolicy := range policies {
+			continueAutoProbe, _ := policyProbeCadence(sourcePolicy, target.Schedulable)
+			if !continueAutoProbe {
+				continue
+			}
+			if !budgetLoaded[sourcePolicy.ID] {
+				count, err := s.repo.CountProbesToday(ctx, userID, adminAccountID, sourcePolicy.ID, probeBudgetDayStart(now))
+				if err != nil {
+					budgetReady = false
+					break
+				}
+				budgetUsage[sourcePolicy.ID] = count
+				budgetLoaded[sourcePolicy.ID] = true
+			}
+			specBudgetUsage[sourcePolicy.ID] = budgetUsage[sourcePolicy.ID]
+		}
+		if !budgetReady {
+			continue
+		}
+		decision, stateOK = s.effectiveProbeDecisionWithBudgets(ctx, target.TargetID, spec.modelName, policies, target.Schedulable, now, specBudgetUsage)
+		if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
+			continue
+		}
+		budgetPolicy, found := policyWithID(policies, decision.BudgetPolicyID)
+		if !found {
+			continue
+		}
+		spec.budgetPolicy = budgetPolicy
+		due = append(due, spec)
+		budgetUsage[budgetPolicy.ID]++
+	}
+	return due
+}
+
+func (s *Service) currentScheduledProbeSpecs(ctx context.Context, userID string, adminAccountID string, target AdminProbeTarget, memberships []adminTargetMembership, queued []probeModelSpec) ([]probeModelSpec, []probeModelSpec, bool) {
+	policies, err := s.repo.ListPolicies(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, nil, false
+	}
+	directAssignments, err := s.repo.ListPolicyAssignmentsForTarget(ctx, userID, adminAccountID, target.TargetID)
+	if err != nil {
+		return nil, nil, false
+	}
+	groupAssignments, err := s.repo.ListGroupPolicyAssignmentsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, nil, false
+	}
+	exclusions, err := s.repo.ListGroupTargetExclusionsByWorkspace(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, nil, false
+	}
+
+	policyByID := make(map[string]Policy, len(policies))
+	for _, policy := range policies {
+		policyByID[policy.ID] = policy
+	}
+	policySources := make(map[string]probePolicyEventGroup)
+	effectivePolicies := make([]Policy, 0)
+	for _, assignment := range directAssignments {
+		policy, exists := policyByID[assignment.PolicyID]
+		if !exists {
+			continue
+		}
+		effectivePolicies = mergePoliciesByID(effectivePolicies, []Policy{policy})
+		policySources[policy.ID] = probePolicyEventGroup{resolved: true}
+	}
+	excluded := groupTargetExclusionIndex(exclusions)[userID+"|"+adminAccountID]
+	for _, membership := range memberships {
+		if excluded[membership.groupID][target.TargetID] {
+			continue
+		}
+		for _, assignment := range groupAssignments {
+			if assignment.AdminGroupID != membership.groupID {
+				continue
+			}
+			policy, exists := policyByID[assignment.PolicyID]
+			if !exists {
+				continue
+			}
+			effectivePolicies = mergePoliciesByID(effectivePolicies, []Policy{policy})
+			if _, resolved := policySources[policy.ID]; !resolved {
+				policySources[policy.ID] = probePolicyEventGroup{
+					resolved: true, adminGroupID: membership.groupID, adminGroupName: membership.groupName,
+				}
+			}
+		}
+	}
+
+	allSpecs := candidateModelSpecsForPlatform(target.Models, effectivePolicies, target.Platform)
+	for index := range allSpecs {
+		allSpecs[index].policySources = policySources
+		if source, exists := policySources[allSpecs[index].policy.ID]; exists {
+			allSpecs[index].eventGroupResolved = source.resolved
+			allSpecs[index].eventAdminGroupID = source.adminGroupID
+			allSpecs[index].eventAdminGroupName = source.adminGroupName
+		}
+	}
+	queuedModels := make(map[string]struct{}, len(queued))
+	for _, spec := range queued {
+		queuedModels[spec.modelName] = struct{}{}
+	}
+	queuedNow := make([]probeModelSpec, 0, len(allSpecs))
+	for _, spec := range allSpecs {
+		if _, exists := queuedModels[spec.modelName]; exists {
+			queuedNow = append(queuedNow, spec)
+		}
+	}
+	return allSpecs, queuedNow, true
+}
+
 // recordTargetCredentialUnavailable 在凭据解析失败时，对每个到期模型回填 last_probe_at（按探活
 // 间隔退避，避免每 30s 反复命中受保护的 key/导出接口）并记录一条 unsupported 事件，
 // 事件 error_key 为脱敏 reason。不驱动状态机、不计入探活预算。
@@ -240,7 +388,7 @@ func (s *Service) recordTargetCredentialUnavailable(ctx context.Context, userID 
 		} else {
 			next = *current
 		}
-		next.LastProbeAt = &now
+		next.UpdatedAt = now
 		next.LastErrorKey = reason
 		next.LastErrorDetail = ""
 		// LastRemoteAction 也是旧版本判断「该上游状态是否由健康模块接管」的兼容证据。
@@ -250,7 +398,7 @@ func (s *Service) recordTargetCredentialUnavailable(ctx context.Context, userID 
 			continue
 		}
 		eventTarget := targetForProbeSpec(target, spec)
-		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, spec.policy.ID, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "")
+		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, spec.effectiveBudgetPolicy().ID, spec.modelName, string(ResultUnsupported), string(next.State), string(next.State), nil, reason, "", "")
 	}
 }
 
@@ -354,6 +502,7 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 					AccountID:      acc.ID,
 					AccountName:    acc.Name,
 					AccountStatus:  acc.Status,
+					Schedulable:    cloneBoolPointer(acc.Schedulable),
 					AccountWeight:  cloneIntPointer(acc.Weight),
 					ProviderFamily: acc.Platform,
 					Models:         splitModelList(acc.Models),
@@ -396,8 +545,9 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				break
 			}
 			candidate := candidates[targetID]
-			specs := candidateModelSpecs(candidate.target.Models, candidate.policies)
+			specs := candidateModelSpecsForPlatform(candidate.target.Models, candidate.policies, candidate.target.Platform)
 			for index := range specs {
+				specs[index].policySources = candidate.policySources
 				if source, exists := candidate.policySources[specs[index].policy.ID]; exists {
 					specs[index].eventGroupResolved = source.resolved
 					specs[index].eventAdminGroupID = source.adminGroupID
@@ -413,22 +563,43 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				if modelBudget <= 0 {
 					break
 				}
-				if !s.isDue(ctx, candidate.target.TargetID, spec.modelName, spec.policy, now) {
+				decision, stateOK := s.effectiveProbeDecision(ctx, candidate.target.TargetID, spec.modelName, spec.policies, candidate.target.Schedulable, now)
+				if !stateOK || !decision.ContinueAutoProbe || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
 					continue
 				}
-				budgetKey := ws.userID + "|" + ws.adminAccountID + "|" + spec.policy.ID
-				if !budgetLoaded[budgetKey] {
-					count, countErr := s.repo.CountProbesToday(ctx, ws.userID, ws.adminAccountID, spec.policy.ID, dayStart)
-					if countErr != nil {
-						log.Printf("[connection-health] count policy probe budget failed policy_id=%s err=%v", spec.policy.ID, countErr)
+				specBudgetUsage := make(map[string]int)
+				budgetReady := true
+				for _, sourcePolicy := range spec.policies {
+					continueAutoProbe, _ := policyProbeCadence(sourcePolicy, candidate.target.Schedulable)
+					if !continueAutoProbe {
 						continue
 					}
-					budgetUsage[budgetKey] = count
-					budgetLoaded[budgetKey] = true
+					budgetKey := ws.userID + "|" + ws.adminAccountID + "|" + sourcePolicy.ID
+					if !budgetLoaded[budgetKey] {
+						count, countErr := s.repo.CountProbesToday(ctx, ws.userID, ws.adminAccountID, sourcePolicy.ID, dayStart)
+						if countErr != nil {
+							log.Printf("[connection-health] count policy probe budget failed policy_id=%s err=%v", sourcePolicy.ID, countErr)
+							budgetReady = false
+							break
+						}
+						budgetUsage[budgetKey] = count
+						budgetLoaded[budgetKey] = true
+					}
+					specBudgetUsage[sourcePolicy.ID] = budgetUsage[budgetKey]
 				}
-				if budgetUsage[budgetKey] >= probeBudgetLimit(spec.policy) {
+				if !budgetReady {
 					continue
 				}
+				decision, stateOK = s.effectiveProbeDecisionWithBudgets(ctx, candidate.target.TargetID, spec.modelName, spec.policies, candidate.target.Schedulable, now, specBudgetUsage)
+				if !stateOK || decision.NextProbeAt == nil || now.Before(*decision.NextProbeAt) {
+					continue
+				}
+				budgetPolicy, found := policyWithID(spec.policies, decision.BudgetPolicyID)
+				if !found {
+					continue
+				}
+				spec.budgetPolicy = budgetPolicy
+				budgetKey := ws.userID + "|" + ws.adminAccountID + "|" + budgetPolicy.ID
 				dueSpecs = append(dueSpecs, spec)
 				budgetUsage[budgetKey]++
 				modelBudget--
@@ -463,30 +634,28 @@ func hasEnabledModelTarget(policies []Policy) bool {
 // 从未探活过立即探活；disabled 状态永不自动探活；cooldown_until 未到不探活；
 // 探活间隔在策略配置的基础上，按连续失败次数叠加 2/5/10 分钟退避。
 func (s *Service) isDue(ctx context.Context, targetID string, modelName string, policy Policy, now time.Time) bool {
+	decision, ok := s.effectiveProbeDecision(ctx, targetID, modelName, []Policy{policy}, nil, now)
+	return ok && decision.ContinueAutoProbe && decision.NextProbeAt != nil && !now.Before(*decision.NextProbeAt)
+}
+
+func (s *Service) effectiveProbeDecision(ctx context.Context, targetID string, modelName string, policies []Policy, schedulable *bool, now time.Time) (EffectiveProbeDecision, bool) {
+	return s.effectiveProbeDecisionWithBudgets(ctx, targetID, modelName, policies, schedulable, now, nil)
+}
+
+func (s *Service) effectiveProbeDecisionWithBudgets(ctx context.Context, targetID string, modelName string, policies []Policy, schedulable *bool, now time.Time, budgetUsage map[string]int) (EffectiveProbeDecision, bool) {
 	state, err := s.repo.GetState(ctx, targetID, modelName)
 	if err != nil {
 		log.Printf("[connection-health] get state failed target_id=%s model=%s err=%v", targetID, modelName, err)
-		return false
+		return EffectiveProbeDecision{}, false
 	}
-	if state == nil {
-		return true
-	}
-	if state.State == StateDisabled {
-		return false
-	}
-	if state.CooldownUntil != nil && now.Before(*state.CooldownUntil) {
-		return false
-	}
-	if state.LastProbeAt == nil {
-		return true
-	}
+	return calculateEffectiveProbeDecisionWithBudgets(policies, schedulable, state, now, budgetUsage), true
+}
 
-	interval := time.Duration(policy.ProbeIntervalSeconds) * time.Second
-	if interval <= 0 {
-		interval = 60 * time.Second
+func policyWithID(policies []Policy, id string) (Policy, bool) {
+	for _, policy := range policies {
+		if policy.ID == id {
+			return policy, true
+		}
 	}
-	if backoff := ProbeBackoff(state.ConsecutiveFailures); backoff > interval {
-		interval = backoff
-	}
-	return now.Sub(*state.LastProbeAt) >= interval
+	return Policy{}, false
 }

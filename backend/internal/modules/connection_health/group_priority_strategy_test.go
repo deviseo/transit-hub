@@ -229,6 +229,36 @@ type priorityUpdateCall struct {
 	priority int
 }
 
+func TestDesiredSub2APIManagedPriority_UsesReservedManagedBands(t *testing.T) {
+	tests := []struct {
+		name           string
+		states         []ConnectionHealthState
+		rank           int
+		expectedModels int
+		want           int
+	}{
+		{name: "healthy start", states: []ConnectionHealthState{{State: StateHealthy}}, expectedModels: 1, want: 10},
+		{name: "healthy end", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 18},
+		{name: "recovering end", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 999, expectedModels: 1, want: 108},
+		{name: "degraded end", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 9999, expectedModels: 1, want: 1008},
+		{name: "unprobed end", states: nil, rank: 99999, expectedModels: 1, want: 10008},
+		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10009},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := desiredSub2APIManagedPriority(tt.states, tt.rank, tt.expectedModels); got != tt.want {
+				t.Fatalf("desiredSub2APIManagedPriority() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDesiredSub2APIMultiplierOnlyPriority_RetainsIndependentRange(t *testing.T) {
+	if got := desiredSub2APIMultiplierOnlyPriority(99); got != 9 {
+		t.Fatalf("multiplier-only priority = %d, want 9", got)
+	}
+}
+
 type fakeTargetPriorityActioner struct {
 	calls []priorityUpdateCall
 }
@@ -284,6 +314,62 @@ func TestMultiplierPrioritySyncAndManualConflict(t *testing.T) {
 	stored = repo.priorityStates["user1|ws1|newapi:ws1:100"]
 	if !stored.Conflict || stored.LastConflictPriority == nil || *stored.LastConflictPriority != manualPriority {
 		t.Fatalf("manual change should be recorded as conflict: %+v", stored)
+	}
+}
+
+func TestMultiplierPrioritySync_Sub2APIPreservesMissingUpstreamPriority(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: float64Ptr(0.4)}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Priority: nil, Models: "gpt-4o"}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}},
+		platformGroups: reader, priorityActions: priorityActions,
+	}
+	policy := Policy{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	if len(priorityActions.calls) != 0 {
+		t.Fatalf("missing upstream priority must remain untouched: %+v", priorityActions.calls)
+	}
+	if _, exists := repo.priorityStates["user1|ws1|sub2api:ws1:100"]; exists {
+		t.Fatal("missing upstream priority must not be materialized as zero")
+	}
+}
+
+func TestMultiplierPrioritySync_NewAPIPreservesMissingPriorityBehavior(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: float64Ptr(0.4)}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Priority: nil, Models: "gpt-4o"}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
+		platformGroups: reader, priorityActions: priorityActions,
+	}
+	policy := Policy{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier,
+		ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}},
+	}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, nil)
+	if len(priorityActions.calls) != 1 {
+		t.Fatalf("P version must preserve NewAPI missing-priority synchronization, got %+v", priorityActions.calls)
+	}
+	if _, exists := repo.priorityStates["user1|ws1|newapi:ws1:100"]; !exists {
+		t.Fatal("P version must preserve the existing NewAPI priority checkpoint behavior")
 	}
 }
 
@@ -394,6 +480,35 @@ func TestMultiplierPrioritySync_ConfirmsPendingSystemWrite(t *testing.T) {
 	}
 	if len(priorityActions.calls) != 0 {
 		t.Fatalf("already-applied priority must not be written twice: %+v", priorityActions.calls)
+	}
+}
+
+func TestMultiplierPrioritySync_PreservesExpectedPriorityOnPendingConflict(t *testing.T) {
+	repo := newFakeRepository()
+	priorityActions := &fakeTargetPriorityActioner{}
+	manual := 23
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip", Multiplier: float64Ptr(0.4)}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Priority: &manual, Models: "gpt-4o"}},
+		},
+	}
+	service := &Service{
+		repo: repo, mySites: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}},
+		platformGroups: reader, priorityActions: priorityActions,
+	}
+	policy := Policy{ID: "p1", UserID: "user1", AdminAccountID: "ws1", Enabled: true, PriorityMode: PriorityModeMultiplier, ModelTargets: []ModelTarget{{ModelName: "gpt-4o", Enabled: true}}}
+	assignment := GroupPolicyAssignment{UserID: "user1", AdminAccountID: "ws1", AdminGroupID: "g1", PolicyID: policy.ID}
+	pending := desiredManagedPriorityForPlatform(upstream.PlatformNewAPI, nil, 0)
+	stored := PrioritySyncState{UserID: "user1", AdminAccountID: "ws1", TargetID: "newapi:ws1:100", OriginalPriority: 7, LastAppliedPriority: 7, PendingPriority: &pending}
+
+	service.syncMultiplierPriorities(context.Background(), []Policy{policy}, nil, []GroupPolicyAssignment{assignment}, nil, []PrioritySyncState{stored})
+	updated := repo.priorityStates["user1|ws1|newapi:ws1:100"]
+	if !updated.Conflict || updated.PendingPriority == nil || *updated.PendingPriority != pending {
+		t.Fatalf("pending conflict must retain the expected priority for UI explanation: %+v", updated)
+	}
+	if updated.LastConflictPriority == nil || *updated.LastConflictPriority != manual || len(priorityActions.calls) != 0 {
+		t.Fatalf("manual value must be preserved without another write: state=%+v calls=%+v", updated, priorityActions.calls)
 	}
 }
 
@@ -601,16 +716,16 @@ func TestDesiredManagedPriority_Sub2APIUsesCompactStateBands(t *testing.T) {
 		expectedModels int
 		want           int
 	}{
-		{name: "multiplier only best", rank: 0, expectedModels: 0, want: 1},
-		{name: "multiplier only second", rank: 1, expectedModels: 0, want: 2},
-		{name: "healthy third", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 2, expectedModels: 1, want: 3},
-		{name: "recovering", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 0, expectedModels: 1, want: 10},
-		{name: "degraded", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 0, expectedModels: 1, want: 100},
-		{name: "observing second", states: []ConnectionHealthState{{State: StateObserving}}, rank: 1, expectedModels: 1, want: 101},
-		{name: "missing model", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 0, expectedModels: 2, want: 1000},
-		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10000},
-		{name: "disabled outranks missing", states: []ConnectionHealthState{{State: StateDisabled}}, rank: 0, expectedModels: 2, want: 10000},
-		{name: "healthy rank stays in band", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 9},
+		{name: "empty state best", rank: 0, expectedModels: 0, want: 10},
+		{name: "empty state second", rank: 1, expectedModels: 0, want: 11},
+		{name: "healthy third", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 2, expectedModels: 1, want: 12},
+		{name: "recovering", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 0, expectedModels: 1, want: 19},
+		{name: "degraded", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 0, expectedModels: 1, want: 109},
+		{name: "observing second", states: []ConnectionHealthState{{State: StateObserving}}, rank: 1, expectedModels: 1, want: 110},
+		{name: "missing model", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 0, expectedModels: 2, want: 1009},
+		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10009},
+		{name: "disabled outranks missing", states: []ConnectionHealthState{{State: StateDisabled}}, rank: 0, expectedModels: 2, want: 10009},
+		{name: "healthy rank stays in band", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 18},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -671,6 +786,21 @@ func TestFilterToAssignedTargetEvents_KeepsUnmanagedRestoreAudit(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Fatalf("automatic restore must remain visible after the final policy is unbound: %+v", events)
+	}
+}
+
+func TestFilterToAssignedTargetEvents_KeepsUserSchedulableActionAudit(t *testing.T) {
+	repo := newFakeRepository()
+	service := &Service{repo: repo}
+	targetID := "sub2api:ws1:100"
+	events, err := service.filterToAssignedTargetEvents(context.Background(), "user1", "ws1", []ConnectionHealthEvent{{
+		ConnectionID: targetID, Result: SchedulableActionSucceeded, ActionSource: ActionSourceUser,
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("explicit user scheduling action must remain auditable without a health policy: %+v", events)
 	}
 }
 

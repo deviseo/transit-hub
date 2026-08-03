@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // AdminGroupAccountInfo 是「某个 admin 分组下的账号(sub2api) / 渠道(new-api)」的平台中性信息，
@@ -17,19 +18,20 @@ import (
 // 数值/布尔字段一律用指针，nil 表示上游未提供，由前端决定展示 "-" 还是隐藏，避免把
 // 「上游没给」误当成「值为 0」。
 type AdminGroupAccountInfo struct {
-	ID             string   // sub2api account id / new-api channel id
-	Name           string   // 账号或渠道名称
-	Platform       string   // 上游平台标识（openai / anthropic / ...），可能为空
-	Type           string   // sub2api 账号类型 / new-api channel 类型（数值转字符串）
-	Status         string   // 状态（字符串或数值转字符串）
-	Priority       *int     // 优先级
-	Concurrency    *int     // 并发（sub2api）
-	RateMultiplier *float64 // Sub2API admin 转发账号记录自身的 rate_multiplier，不代表上游 API Key 所属分组倍率。
-	LoadFactor     *int     // 负载因子（sub2api）
-	Weight         *int     // 权重（仅 new-api channel 有；sub2api 为 nil）
-	Models         string   // 模型列表（new-api channel.models 等）
-	GroupIDs       []string // 所属分组 ID/名称列表
-	Schedulable    *bool    // 是否可调度（sub2api）
+	ID             string     // sub2api account id / new-api channel id
+	Name           string     // 账号或渠道名称
+	Platform       string     // 上游平台标识（openai / anthropic / ...），可能为空
+	Type           string     // sub2api 账号类型 / new-api channel 类型（数值转字符串）
+	Status         string     // 状态（字符串或数值转字符串）
+	Priority       *int       // 优先级
+	Concurrency    *int       // 并发（sub2api）
+	RateMultiplier *float64   // Sub2API admin 转发账号记录自身的 rate_multiplier，不代表上游 API Key 所属分组倍率。
+	LoadFactor     *int       // 负载因子（sub2api）
+	Weight         *int       // 权重（仅 new-api channel 有；sub2api 为 nil）
+	Models         string     // 模型列表（new-api channel.models 等）
+	GroupIDs       []string   // 所属分组 ID/名称列表
+	Schedulable    *bool      // 是否可调度（sub2api）
+	UpdatedAt      *time.Time // 上游账号记录最后更新时间；用于区分本地用户动作与后续主站直接修改
 	// BaseURL 是 new-api channel 转发到的上游 provider 地址（channel.base_url）。
 	// 独立探活需要用它 + channel key 直接对上游发起 OpenAI 兼容请求。sub2api 账号在列表阶段
 	// 拿不到 base_url，探活前再从单账号导出凭据里解析，故此处可能为空。
@@ -104,6 +106,7 @@ func parseSub2APIAccount(record map[string]any) AdminGroupAccountInfo {
 		LoadFactor:     firstInt(record, []string{"load_factor", "loadFactor"}),
 		GroupIDs:       parseGroupIDList(record),
 		Schedulable:    firstBoolValue(record, []string{"schedulable"}),
+		UpdatedAt:      parseFlexibleTime(firstAny(record, []string{"updated_at", "updatedAt"})),
 	}
 	if p := firstString(record, []string{"platform"}); p != nil {
 		account.Platform = *p

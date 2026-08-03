@@ -34,6 +34,7 @@ import {
   restoreConnection,
   setTargetPolicyAssignments,
   setAdminGroupPolicyConfiguration,
+  setTargetSchedulable,
   updateConnectionHealthPolicy,
 } from '../api/connectionHealth'
 
@@ -48,6 +49,11 @@ const isLoading = ref(false)
 const isActionLoading = ref(false)
 const errorKey = ref('')
 let eventsRequestSequence = 0
+let eventsAppliedSequence = 0
+let activeEventsScope = ''
+let adminGroupsRequestSequence = 0
+let adminGroupsLoadingRequests = 0
+let latestAdminGroupsRequest: Promise<boolean> | null = null
 
 const overviewFromAdminGroups = (groupList: AdminGroupHealth[]): ConnectionHealthOverview => {
   const result: ConnectionHealthOverview = {
@@ -69,8 +75,9 @@ const overviewFromAdminGroups = (groupList: AdminGroupHealth[]): ConnectionHealt
   const targets = new Map<string, TargetOverview>()
   for (const group of groupList) {
     for (const account of group.accounts) {
-      const enabled = account.hasEnabledPolicy
-        ?? account.assignedPolicies?.some((policy) => policy.enabled)
+      const enabled = account.hasEnabledProbePolicy
+        ?? account.hasEnabledPolicy
+        ?? account.assignedPolicies?.some((policy) => policy.enabled && policy.priorityMode !== 'multiplier')
         ?? Boolean(account.hasAssignedPolicy)
       if (!enabled) continue
       let target = targets.get(account.targetId)
@@ -134,18 +141,33 @@ export function useConnectionHealth() {
   }
 
   // loadAdminGroups 载入新的主列表数据源（admin 全量分组）。silent 语义同 loadGroups。
-  const loadAdminGroups = async (opts: { silent?: boolean } = {}) => {
-    if (!opts.silent) isLoading.value = true
-    errorKey.value = ''
-    try {
-      const nextGroups = await getConnectionHealthAdminGroups()
-      adminGroups.value = nextGroups
-      overview.value = overviewFromAdminGroups(nextGroups)
-    } catch (err) {
-      errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
-    } finally {
-      if (!opts.silent) isLoading.value = false
-    }
+  const loadAdminGroups = (opts: { silent?: boolean } = {}): Promise<boolean> => {
+    const sequence = ++adminGroupsRequestSequence
+    const request = (async () => {
+      if (!opts.silent) {
+        adminGroupsLoadingRequests++
+        isLoading.value = true
+      }
+      errorKey.value = ''
+      try {
+        const nextGroups = await getConnectionHealthAdminGroups()
+        if (sequence !== adminGroupsRequestSequence) return latestAdminGroupsRequest ?? false
+        adminGroups.value = nextGroups
+        overview.value = overviewFromAdminGroups(nextGroups)
+        return true
+      } catch (err) {
+        if (sequence !== adminGroupsRequestSequence) return latestAdminGroupsRequest ?? false
+        errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
+        return false
+      } finally {
+        if (!opts.silent) {
+          adminGroupsLoadingRequests--
+          if (adminGroupsLoadingRequests === 0) isLoading.value = false
+        }
+      }
+    })()
+    latestAdminGroupsRequest = request
+    return request
   }
 
   // adminGroups 已包含主页面概览所需的全部状态；直接在本地聚合，避免 overview 后端再次
@@ -156,15 +178,24 @@ export function useConnectionHealth() {
     await Promise.all([loadAdminGroups(opts), loadGroups({ silent: true })])
   }
 
-  const loadEvents = async (connectionId?: string) => {
+  const loadEvents = async (connectionId?: string): Promise<boolean> => {
     const sequence = ++eventsRequestSequence
+    const scope = connectionId ?? ''
+    activeEventsScope = scope
     try {
       const nextEvents = await getConnectionHealthEvents(connectionId)
-      if (sequence === eventsRequestSequence) events.value = nextEvents
+      if (scope !== activeEventsScope) return false
+      if (sequence >= eventsAppliedSequence) {
+        events.value = nextEvents
+        eventsAppliedSequence = sequence
+      }
+      return true
     } catch (err) {
-      if (sequence === eventsRequestSequence) {
+      if (scope === activeEventsScope && sequence >= eventsAppliedSequence) {
+        events.value = []
         errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
       }
+      return false
     }
   }
 
@@ -285,6 +316,36 @@ export function useConnectionHealth() {
     }
   }
 
+  const updateTargetSchedulable = async (targetId: string, schedulable: boolean): Promise<boolean> => {
+    isActionLoading.value = true
+    errorKey.value = ''
+    try {
+      const result = await setTargetSchedulable(targetId, schedulable)
+      adminGroups.value = adminGroups.value.map(group => ({
+        ...group,
+        accounts: group.accounts.map(account => account.targetId === result.targetId
+          ? {
+              ...account,
+              schedulable: result.schedulable,
+              schedulableSource: result.actionSource,
+              schedulableChangedAt: result.actionAt,
+              lastSchedulableAction: result.schedulable ? 'sub2api_schedulable_enabled' : 'sub2api_schedulable_disabled',
+              lastSchedulableActionAt: result.actionAt,
+              lastSchedulableActionResult: 'schedulable_user_action_succeeded',
+              lastSchedulableActionErrorKey: '',
+            }
+          : account),
+      }))
+      await loadAll({ silent: true })
+      return true
+    } catch (err) {
+      errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
+      return false
+    } finally {
+      isActionLoading.value = false
+    }
+  }
+
   const loadTargetPolicyAssignments = async (targetId: string): Promise<{ assignments: TargetPolicyAssignments } | { errorKey: string }> => {
     try {
       return { assignments: await getTargetPolicyAssignments(targetId) }
@@ -373,6 +434,7 @@ export function useConnectionHealth() {
     manualProbeTarget,
     discoverModels,
     runManualProbeOnce,
+    updateTargetSchedulable,
     loadTargetPolicyAssignments,
     saveTargetPolicyAssignments,
     loadAdminGroupPolicyConfiguration,
@@ -456,7 +518,7 @@ export function formatConnectionHealthTime(iso: string | null): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return '—'
   const locale = typeof document === 'undefined' ? 'zh-CN' : document.documentElement.lang || 'zh-CN'
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Shanghai' }).format(date)
 }
 
 // connectionHealthMessageKey 将后端返回的 i18n key 或探活错误码转换为可安全展示的文案 key。
@@ -515,27 +577,6 @@ export function connectionHealthRecordColorClass(result: string): string {
   return RECORD_COLOR_CLASS[result] ?? 'bg-zinc-400'
 }
 
-// matchingProbeIntervalSeconds 推导某条链路上某个模型当前生效的探活间隔：匹配规则与
-// matchingProbeCandidates 一致（按 ownGroupId 精确匹配优先于全局策略），用于事件弹窗状态卡片
-// 展示"下次刷新倒计时"。找不到匹配的启用策略时返回 null，调用方应回退展示绝对时间而不是
-// 编造一个刷新间隔。
-export function matchingProbeIntervalSeconds(
-  ownGroupId: string,
-  modelName: string,
-  policies: ConnectionHealthPolicy[],
-): number | null {
-  let matched: ConnectionHealthPolicy | null = null
-  for (const policy of policies) {
-    if (!policy.enabled) continue
-    if (policy.ownGroupId && policy.ownGroupId !== ownGroupId) continue
-    const hasModel = policy.modelTargets.some((target) => target.enabled && target.modelName === modelName)
-    if (!hasModel) continue
-    // 分组专属策略优先于全局策略（ownGroupId 为空表示全局）。
-    if (!matched || (policy.ownGroupId && !matched.ownGroupId)) matched = policy
-  }
-  return matched ? matched.probeIntervalSeconds : null
-}
-
 // remoteActionLabelKey 把后端记录的 remoteAction 原始字符串（见 backend connection_health/
 // actions.go 的 RemoteAction* 常量）映射为 i18n key + 插值参数，供事件弹窗展示"这次探活触发
 // 的远端动作是什么"。返回 null 表示这次探活没有触发任何远端动作（remoteAction 为空），
@@ -555,6 +596,8 @@ export function remoteActionLabelKey(remoteAction: string): { key: string; param
       return { key: `${prefix}.skippedTargetConflict` }
     case 'skipped_target_initially_disabled':
       return { key: `${prefix}.skippedTargetInitiallyDisabled` }
+    case 'skipped_upstream_scheduling_disabled':
+      return { key: `${prefix}.skippedUpstreamScheduling` }
     case 'sub2api_account_status_inactive':
       return { key: `${prefix}.sub2apiInactive` }
     case 'sub2api_account_status_active':
@@ -563,6 +606,14 @@ export function remoteActionLabelKey(remoteAction: string): { key: string; param
       return { key: `${prefix}.sub2apiInactiveFailed` }
     case 'sub2api_account_status_active_failed':
       return { key: `${prefix}.sub2apiActiveFailed` }
+    case 'sub2api_schedulable_enabled':
+      return { key: `${prefix}.sub2apiSchedulableEnabled` }
+    case 'sub2api_schedulable_disabled':
+      return { key: `${prefix}.sub2apiSchedulableDisabled` }
+    case 'sub2api_schedulable_enable_failed':
+      return { key: `${prefix}.sub2apiSchedulableEnableFailed` }
+    case 'sub2api_schedulable_disable_failed':
+      return { key: `${prefix}.sub2apiSchedulableDisableFailed` }
     case 'newapi_channel_disabled':
       return { key: `${prefix}.newapiDisabled` }
     case 'newapi_channel_update_failed':

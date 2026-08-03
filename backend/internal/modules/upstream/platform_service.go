@@ -2363,6 +2363,26 @@ func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accou
 	})
 }
 
+// SetSub2APIAdminAccountSchedulable 使用 Sub2API 的专用字段接口修改业务流量调度开关。
+// 请求体只包含 schedulable，不能复用账号详情更新或携带 status/priority 等其它字段。
+func (s *PlatformService) SetSub2APIAdminAccountSchedulable(session Session, accountID string, schedulable bool) error {
+	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	parsedAccountID, err := strconv.ParseInt(strings.TrimSpace(accountID), 10, 64)
+	if err != nil || parsedAccountID <= 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	options := adminAuthOptions(session)
+	options.Method = http.MethodPost
+	options.Body = map[string]bool{"schedulable": schedulable}
+	_, err = s.httpClient.requestJSON(
+		session.BaseURL+"/api/v1/admin/accounts/"+strconv.FormatInt(parsedAccountID, 10)+"/schedulable",
+		options,
+	)
+	return err
+}
+
 // sub2APIUserIDKeys/sub2APIUserCreatedAtKeys/sub2APIUserLastUsedAtKeys/sub2APIBalanceHistoryTimeKeys
 // 是解析 Sub2API admin 用户资料相关字段时兼容的候选 key 列表（snake_case / camelCase）。
 var (

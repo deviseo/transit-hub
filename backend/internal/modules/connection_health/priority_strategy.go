@@ -20,6 +20,7 @@ type priorityTargetInventory struct {
 	policies        []Policy
 	multipliers     []float64
 	currentPriority int
+	priorityPresent bool
 }
 
 // syncMultiplierPriorities 在每轮探活前同步上游优先级。普通倍率策略仍然「健康优先、倍率次之」，
@@ -128,6 +129,7 @@ func (s *Service) priorityInventoryForSnapshot(
 				}
 				if account.Priority != nil {
 					item.currentPriority = *account.Priority
+					item.priorityPresent = true
 				}
 				inventory[targetID] = item
 			}
@@ -200,6 +202,12 @@ func (s *Service) syncWorkspacePriorities(
 	}
 
 	for targetID, item := range managed {
+		// A missing upstream priority is a real value, not zero. The existing
+		// field-level priority API cannot clear a priority back to NULL safely,
+		// so leave such targets untouched rather than materializing 0.
+		if session.Platform == upstream.PlatformSub2API && !item.priorityPresent {
+			continue
+		}
 		multiplier := item.multipliers[0]
 		activeModels := make(map[string]struct{})
 		if !hasMultiplierOnlyPolicy(item.policies) {
@@ -220,6 +228,9 @@ func (s *Service) syncWorkspacePriorities(
 		desired := desiredManagedPriorityForPlatformWithExpected(
 			session.Platform, activeStates, multiplierRank[multiplier], len(activeModels),
 		)
+		if session.Platform == upstream.PlatformSub2API && hasMultiplierOnlyPolicy(item.policies) {
+			desired = desiredSub2APIMultiplierOnlyPriority(multiplierRank[multiplier])
+		}
 		stored, exists := storedByTarget[targetID]
 		if !exists {
 			stored = PrioritySyncState{
@@ -247,7 +258,6 @@ func (s *Service) syncWorkspacePriorities(
 		if exists && stored.PendingPriority != nil && item.currentPriority != stored.LastAppliedPriority {
 			current := item.currentPriority
 			stored.Conflict = true
-			stored.PendingPriority = nil
 			stored.LastConflictPriority = &current
 			stored.EffectiveMultiplier = multiplier
 			if err := s.repo.UpsertPrioritySyncState(ctx, stored); err != nil {
@@ -287,6 +297,11 @@ func (s *Service) syncWorkspacePriorities(
 			continue
 		}
 		item := inventory[targetID]
+		if session.Platform == upstream.PlatformSub2API && item != nil && !item.priorityPresent {
+			// Preserve an upstream NULL priority and keep any prior checkpoint
+			// for a later, explicit reconciliation once the value is readable.
+			continue
+		}
 		if item == nil {
 			if !inventoryComplete {
 				// 分组读取失败时无法证明目标已经消失，保留当前优先级和同步快照，
@@ -365,31 +380,36 @@ func desiredManagedPriorityForPlatformWithExpected(platform upstream.Platform, s
 }
 
 // desiredSub2APIManagedPriority 使用 Sub2API「数值越小越优先」的原生语义，并为不同健康
-// 状态预留互不重叠的区间：健康 1-9、恢复中 10-99、降级/观察 100-999、待配置
-// 1000-9999、暂停/禁用 10000。同一状态内 multiplierRank 越小，priority 越小。
+// 状态预留互不重叠的区间：健康 10-18、恢复中 19-108、降级/观察 109-1008、待探活
+// 1009-10008、暂停/禁用 10009。同一状态内 multiplierRank 越小，priority 越小。
 // rank 超出区间容量时在区间末尾并列，避免价格排序跨越健康状态边界。
 func desiredSub2APIManagedPriority(states []ConnectionHealthState, multiplierRank int, expectedModels int) int {
 	for _, state := range states {
 		if state.State == StateDisabled || state.State == StateSuspended {
-			return 10000
+			return 10009
 		}
 	}
 	if len(states) < expectedModels {
-		return sub2APIPriorityWithinBand(1000, 10000, multiplierRank)
+		return sub2APIPriorityWithinBand(1009, 10009, multiplierRank)
 	}
 
-	base, nextBase := 1, 10
+	base, nextBase := 10, 19
 	for _, state := range states {
 		switch state.State {
 		case StateDegraded, StateObserving:
-			base, nextBase = 100, 1000
+			base, nextBase = 109, 1009
 		case StateRecovering:
-			if base < 10 {
-				base, nextBase = 10, 100
+			if base < 19 {
+				base, nextBase = 19, 109
 			}
 		}
 	}
 	return sub2APIPriorityWithinBand(base, nextBase, multiplierRank)
+}
+
+// multiplier_only 不参与 P 版健康状态分段，继续使用原有 1-9 独立倍率区间。
+func desiredSub2APIMultiplierOnlyPriority(multiplierRank int) int {
+	return sub2APIPriorityWithinBand(1, 10, multiplierRank)
 }
 
 func sub2APIPriorityWithinBand(base int, nextBase int, multiplierRank int) int {

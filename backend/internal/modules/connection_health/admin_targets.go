@@ -44,6 +44,7 @@ type AdminProbeTarget struct {
 	AccountID              string   `json:"accountId"`
 	AccountName            string   `json:"accountName"`
 	AccountStatus          string   `json:"accountStatus"`
+	Schedulable            *bool    `json:"schedulable,omitempty"`
 	AccountWeight          *int     `json:"accountWeight,omitempty"`
 	ProviderFamily         string   `json:"providerFamily"`
 	Models                 []string `json:"models"`
@@ -58,11 +59,19 @@ type probeModelSpec struct {
 	maxProbeTokens int
 	probePrompt    string
 	policy         Policy
+	policies       []Policy
+	budgetPolicy   Policy
+	policySources  map[string]probePolicyEventGroup
 	// Event group metadata records where this policy was inherited for this target.
 	// Explicit target assignments intentionally resolve to an empty group.
 	eventGroupResolved  bool
 	eventAdminGroupID   string
 	eventAdminGroupName string
+}
+
+type adminTargetMembership struct {
+	groupID   string
+	groupName string
 }
 
 // targetProbeResult 暂存单模型探活结果。一个账号的全部到期模型完成后，再统一决定一次上游
@@ -121,13 +130,16 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 				continue
 			}
 			if index, dup := seen[name]; dup {
+				sourcePolicies := mergePoliciesByID(pool[index].policies, []Policy{p})
 				// 同一模型被多条策略覆盖时使用稳定且偏安全的策略：关闭远端动作优先，
 				// 然后选择更低失败阈值、更长观察期和更短探活间隔，最后按 ID 决胜。
 				if preferProbePolicy(p, pool[index].policy) {
 					pool[index] = probeModelSpec{
 						modelName: name, providerFamily: t.ProviderFamily, maxProbeTokens: t.MaxProbeTokens,
-						probePrompt: t.ProbePrompt, policy: p,
+						probePrompt: t.ProbePrompt, policy: p, policies: sourcePolicies,
 					}
+				} else {
+					pool[index].policies = sourcePolicies
 				}
 				continue
 			}
@@ -138,6 +150,7 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 				maxProbeTokens: t.MaxProbeTokens,
 				probePrompt:    t.ProbePrompt,
 				policy:         p,
+				policies:       []Policy{p},
 			})
 		}
 	}
@@ -156,6 +169,17 @@ func candidateModelSpecs(targetModels []string, policies []Policy) []probeModelS
 		}
 	}
 	return filtered
+}
+
+func candidateModelSpecsForPlatform(targetModels []string, policies []Policy, platform string) []probeModelSpec {
+	specs := candidateModelSpecs(targetModels, policies)
+	if platform == string(upstream.PlatformSub2API) {
+		return specs
+	}
+	for index := range specs {
+		specs[index].policies = []Policy{specs[index].policy}
+	}
+	return specs
 }
 
 func preferProbePolicy(candidate Policy, current Policy) bool {
@@ -365,9 +389,14 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 // 返回的 accountsReadError 表示遍历过程中是否有分组的账号列表读取失败：单分组失败仍会继续查
 // 其它分组，但若最终没找到目标，调用方可据此区分「目标不存在」与「上游读取失败」。
 func (s *Service) findAdminTarget(ctx context.Context, session upstream.Session, adminAccountID string, accountID string) (target AdminProbeTarget, account upstream.AdminGroupAccountInfo, found bool, accountsReadError bool, err error) {
+	target, account, _, found, accountsReadError, err = s.findAdminTargetWithMemberships(ctx, session, adminAccountID, accountID)
+	return
+}
+
+func (s *Service) findAdminTargetWithMemberships(ctx context.Context, session upstream.Session, adminAccountID string, accountID string) (target AdminProbeTarget, account upstream.AdminGroupAccountInfo, memberships []adminTargetMembership, found bool, accountsReadError bool, err error) {
 	groups, err := s.platformGroups.FetchAdminAllGroups(session)
 	if err != nil {
-		return AdminProbeTarget{}, upstream.AdminGroupAccountInfo{}, false, false, err
+		return AdminProbeTarget{}, upstream.AdminGroupAccountInfo{}, nil, false, false, err
 	}
 	platform := string(session.Platform)
 	for _, group := range groups {
@@ -381,22 +410,27 @@ func (s *Service) findAdminTarget(ctx context.Context, session upstream.Session,
 			if acc.ID != accountID {
 				continue
 			}
-			resolved := AdminProbeTarget{
-				TargetID:       buildTargetID(platform, adminAccountID, acc.ID),
-				Platform:       platform,
-				AdminGroupID:   group.ID,
-				AdminGroupName: group.Name,
-				AccountID:      acc.ID,
-				AccountName:    acc.Name,
-				AccountStatus:  acc.Status,
-				AccountWeight:  cloneIntPointer(acc.Weight),
-				ProviderFamily: acc.Platform,
-				Models:         splitModelList(acc.Models),
+			memberships = append(memberships, adminTargetMembership{groupID: group.ID, groupName: group.Name})
+			if !found {
+				target = AdminProbeTarget{
+					TargetID:       buildTargetID(platform, adminAccountID, acc.ID),
+					Platform:       platform,
+					AdminGroupID:   group.ID,
+					AdminGroupName: group.Name,
+					AccountID:      acc.ID,
+					AccountName:    acc.Name,
+					AccountStatus:  acc.Status,
+					Schedulable:    cloneBoolPointer(acc.Schedulable),
+					AccountWeight:  cloneIntPointer(acc.Weight),
+					ProviderFamily: acc.Platform,
+					Models:         splitModelList(acc.Models),
+				}
+				account = acc
+				found = true
 			}
-			return resolved, acc, true, accountsReadError, nil
 		}
 	}
-	return AdminProbeTarget{}, upstream.AdminGroupAccountInfo{}, false, accountsReadError, nil
+	return target, account, memberships, found, accountsReadError, nil
 }
 
 // probeTargetOnce 对一个 (target, model) 组合执行一次独立探活并落库状态。事件和账号级上游
@@ -423,7 +457,8 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 	}
 
 	dayStart := probeBudgetDayStart(time.Now())
-	allowed, err := s.repo.TryConsumeProbeBudget(ctx, userID, adminAccountID, spec.policy.ID, dayStart, probeBudgetLimit(spec.policy))
+	budgetPolicy := spec.effectiveBudgetPolicy()
+	allowed, err := s.repo.TryConsumeProbeBudget(ctx, userID, adminAccountID, budgetPolicy.ID, dayStart, probeBudgetLimit(budgetPolicy))
 	if err != nil {
 		return nil, err
 	}
@@ -484,6 +519,13 @@ func (s *Service) probeTargetOnce(ctx context.Context, userID string, adminAccou
 	}, nil
 }
 
+func (spec probeModelSpec) effectiveBudgetPolicy() Policy {
+	if spec.budgetPolicy.ID != "" {
+		return spec.budgetPolicy
+	}
+	return spec.policy
+}
+
 func probeBudgetDayStart(now time.Time) time.Time {
 	// 产品当前按中国自然日展示“每日预算”，使用固定 UTC+8 避免容器运行在 UTC 时于早上 8 点重置。
 	location := time.FixedZone("UTC+8", 8*60*60)
@@ -499,7 +541,9 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 	if len(results) == 0 {
 		return
 	}
-	remoteAction, actionErr := s.reconcileTargetRemoteAction(ctx, userID, adminAccountID, session, target, specs)
+	remoteAction := ""
+	var actionErr error
+	remoteAction, actionErr = s.reconcileTargetRemoteAction(ctx, userID, adminAccountID, session, target, specs)
 	if actionErr != nil {
 		log.Printf("[connection-health] reconcile target action failed target_id=%s action=%s err=%v", target.TargetID, remoteAction, actionErr)
 	}
@@ -519,9 +563,13 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 				break
 			}
 		}
-		results[actionIndex].state.LastRemoteAction = remoteAction
-		if err := s.repo.UpsertState(ctx, *results[actionIndex].state); err != nil {
-			log.Printf("[connection-health] store target remote action failed target_id=%s err=%v", target.TargetID, err)
+		// A scheduling-disabled skip is an audit outcome, not a new ownership action.
+		// Preserve the last real active/inactive action used by legacy ownership recovery.
+		if remoteAction != RemoteActionSkippedUpstreamScheduling {
+			results[actionIndex].state.LastRemoteAction = remoteAction
+			if err := s.repo.UpsertState(ctx, *results[actionIndex].state); err != nil {
+				log.Printf("[connection-health] store target remote action failed target_id=%s err=%v", target.TargetID, err)
+			}
 		}
 		for index := range results {
 			result := &results[index]
@@ -530,7 +578,7 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 			if index == actionIndex {
 				action = remoteAction
 			}
-			s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.policy.ID, result.spec.modelName,
+			s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
 				string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
 				result.state.LastErrorKey, result.state.LastErrorDetail, action)
 		}
@@ -539,13 +587,21 @@ func (s *Service) finishTargetProbeBatch(ctx context.Context, userID string, adm
 	for index := range results {
 		result := &results[index]
 		eventTarget := targetForProbeSpec(target, result.spec)
-		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.policy.ID, result.spec.modelName,
+		s.recordTargetEvent(ctx, userID, adminAccountID, eventTarget, result.spec.effectiveBudgetPolicy().ID, result.spec.modelName,
 			string(result.outcome.Result), string(result.previousState), string(result.state.State), &result.latencyMs,
 			result.state.LastErrorKey, result.state.LastErrorDetail, "")
 	}
 }
 
 func targetForProbeSpec(target AdminProbeTarget, spec probeModelSpec) AdminProbeTarget {
+	if source, ok := spec.policySources[spec.effectiveBudgetPolicy().ID]; ok {
+		if !source.resolved {
+			return target
+		}
+		target.AdminGroupID = source.adminGroupID
+		target.AdminGroupName = source.adminGroupName
+		return target
+	}
 	if !spec.eventGroupResolved {
 		return target
 	}
@@ -581,11 +637,16 @@ func (s *Service) recordTargetEvent(ctx context.Context, userID string, adminAcc
 		log.Printf("[connection-health] generate target event id failed: %v", err)
 		return
 	}
+	actionSource := ""
+	if remoteAction != "" {
+		actionSource = ActionSourceHealthProbe
+	}
 	event := ConnectionHealthEvent{
 		ID: id, ConnectionID: target.TargetID, ModelName: modelName, UserID: userID, AdminAccountID: adminAccountID,
 		PolicyID: policyID, AdminGroupID: target.AdminGroupID,
 		OwnGroupName: target.AdminGroupName, UpstreamSiteID: "", UpstreamGroupName: target.AdminGroupName, Result: result,
-		FromState: fromState, ToState: toState, LatencyMs: latencyMs, ErrorKey: errorKey, ErrorDetail: errorDetail, RemoteAction: remoteAction,
+		FromState: fromState, ToState: toState, LatencyMs: latencyMs, ErrorKey: errorKey, ErrorDetail: errorDetail,
+		RemoteAction: remoteAction, ActionSource: actionSource,
 	}
 	if err := s.repo.InsertEvent(ctx, event); err != nil {
 		log.Printf("[connection-health] insert target event failed target_id=%s err=%v", target.TargetID, err)
