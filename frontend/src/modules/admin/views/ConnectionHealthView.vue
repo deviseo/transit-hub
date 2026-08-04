@@ -281,9 +281,9 @@ const openAllEvents = async () => {
   const requestSequence = ++eventsOpenRequestSequence
   const previousConnectionId = selectedConnectionId.value
   selectedConnectionId.value = ''
-  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents()])
+  const eventsLoaded = await loadEvents()
   if (requestSequence !== eventsOpenRequestSequence) return
-  if (statusLoaded && eventsLoaded) eventsDialogOpen.value = true
+  if (eventsLoaded) eventsDialogOpen.value = true
   else selectedConnectionId.value = previousConnectionId
 }
 
@@ -291,9 +291,9 @@ const onViewEventsAccount = async (account: AdminGroupAccount) => {
   const requestSequence = ++eventsOpenRequestSequence
   const previousConnectionId = selectedConnectionId.value
   selectedConnectionId.value = account.targetId
-  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents(account.targetId)])
+  const eventsLoaded = await loadEvents(account.targetId)
   if (requestSequence !== eventsOpenRequestSequence) return
-  if (statusLoaded && eventsLoaded) eventsDialogOpen.value = true
+  if (eventsLoaded) eventsDialogOpen.value = true
   else selectedConnectionId.value = previousConnectionId
 }
 
@@ -304,9 +304,9 @@ const onSetTargetSchedulable = async (account: AdminGroupAccount) => {
 
 const showAllEvents = async () => {
   const requestSequence = ++eventsOpenRequestSequence
-  const [statusLoaded, eventsLoaded] = await Promise.all([loadAdminGroups({ silent: true }), loadEvents()])
+  const eventsLoaded = await loadEvents()
   if (requestSequence !== eventsOpenRequestSequence) return
-  if (statusLoaded && eventsLoaded) selectedConnectionId.value = ''
+  if (eventsLoaded) selectedConnectionId.value = ''
 }
 
 // 高级策略列表/编辑继续保留，但退出首次主流程。

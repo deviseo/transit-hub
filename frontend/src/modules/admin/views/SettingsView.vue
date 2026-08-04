@@ -1504,7 +1504,7 @@ onBeforeUnmount(() => {
                     <span>{{ t('admin.settings.upgrade.statusLabel') }}：{{ t(upgradeStatusKey) }}</span>
                   </div>
                   <div class="mt-0.5 text-xs text-muted-foreground/60">
-                    {{ t('admin.settings.upgrade.lastUpdated') }}：v0.1.15 · 2026-08-03
+                    {{ t('admin.settings.upgrade.lastUpdated') }}：v2.0.1 · 2026-08-03
                   </div>
                 </div>
               </div>

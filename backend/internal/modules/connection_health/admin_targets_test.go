@@ -218,8 +218,6 @@ func TestProbeTarget_FormalProbeBlockedStateHasZeroSideEffects(t *testing.T) {
 		wantError string
 	}{
 		{name: "disabled", state: ConnectionHealthState{State: StateDisabled}, wantError: "admin.connectionHealth.errors.probeBlockedHealthDisabled"},
-		{name: "cooldown", state: ConnectionHealthState{State: StateDegraded, CooldownUntil: timePointer(time.Now().Add(time.Hour))}, wantError: "admin.connectionHealth.errors.probeBlockedCooldown"},
-		{name: "failure backoff", state: ConnectionHealthState{State: StateDegraded, ConsecutiveFailures: 2, LastProbeAt: timePointer(time.Now())}, wantError: "admin.connectionHealth.errors.probeBlockedFailureBackoff"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo := newFakeRepository()
@@ -253,6 +251,89 @@ func TestProbeTarget_FormalProbeBlockedStateHasZeroSideEffects(t *testing.T) {
 	}
 	if hits != 0 {
 		t.Fatalf("blocked formal probes issued %d HTTP requests", hits)
+	}
+}
+
+func TestProbeTarget_FormalProbeBypassesCooldownAndRejoinsObservation(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	repo := newFakeRepository()
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	lastProbe := time.Now()
+	cooldown := lastProbe.Add(time.Hour)
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"gpt-4o": {
+			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
+			State: StateSuspended, CurrentWeight: 0, ConsecutiveFailures: 3,
+			LastProbeAt: &lastProbe, CooldownUntil: &cooldown,
+		},
+	}
+	reader := fakePlatformGroupReader{
+		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err != nil {
+		t.Fatalf("formal probe during cooldown failed: %v", err)
+	}
+	if hits != 1 || len(results) != 1 || results[0].State != StateObserving {
+		t.Fatalf("formal probe must execute and enter observing: hits=%d results=%+v", hits, results)
+	}
+	stored := repo.states[targetID]["gpt-4o"]
+	if stored.State != StateObserving || stored.CooldownUntil != nil || stored.ConsecutiveFailures != 0 {
+		t.Fatalf("successful formal probe must clear suspension timing: %+v", stored)
+	}
+	if len(repo.events) != 1 || repo.events[0].Source != EventSourceManual {
+		t.Fatalf("formal recovery event source = %+v, want manual", repo.events)
+	}
+}
+
+func TestProbeTarget_FormalProbeBypassesFailureBackoff(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	repo := newFakeRepository()
+	policy := sub2APIProbePolicy(false)
+	repo.policies = []Policy{policy}
+	targetID := "sub2api:ws1:acc-1"
+	assignPolicyToTarget(repo, policy, targetID)
+	lastProbe := time.Now()
+	repo.states[targetID] = map[string]ConnectionHealthState{
+		"gpt-4o": {
+			ConnectionID: targetID, ModelName: "gpt-4o", UserID: "user1", AdminAccountID: "ws1",
+			State: StateDegraded, CurrentWeight: 50, ConsecutiveFailures: 2, LastProbeAt: &lastProbe,
+		},
+	}
+	reader := fakePlatformGroupReader{
+		groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "acc-1", Name: "acc", Models: "gpt-4o"}}},
+		credByAccount: map[string]upstream.ProbeCredential{"acc-1": {BaseURL: server.URL, Key: "k"}},
+	}
+	svc := newAdminGroupsService(reader, fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}}, repo)
+
+	results, err := svc.ProbeTarget(context.Background(), "user1", targetID, []string{"gpt-4o"})
+	if err != nil || hits != 1 || len(results) != 1 {
+		t.Fatalf("formal probe must bypass failure backoff: hits=%d results=%+v err=%v", hits, results, err)
+	}
+	if stored := repo.states[targetID]["gpt-4o"]; stored.ConsecutiveFailures != 0 || stored.LastProbeAt == nil || !stored.LastProbeAt.After(lastProbe) {
+		t.Fatalf("successful formal probe must replace the backed-off result: %+v", stored)
 	}
 }
 

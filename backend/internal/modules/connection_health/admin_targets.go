@@ -376,13 +376,12 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 		return nil, requestError(ErrorNoMatchingModels)
 	}
 
-	now := time.Now()
 	for _, spec := range specs {
 		current, stateErr := s.repo.GetState(ctx, target.TargetID, spec.modelName)
 		if stateErr != nil {
 			return nil, stateErr
 		}
-		if blocked := formalProbeBlockedError(current, now); blocked != "" {
+		if blocked := formalProbeBlockedError(current); blocked != "" {
 			return nil, requestError(blocked)
 		}
 	}
@@ -425,18 +424,12 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	return results, nil
 }
 
-func formalProbeBlockedError(state *ConnectionHealthState, now time.Time) string {
+func formalProbeBlockedError(state *ConnectionHealthState) string {
 	if state == nil {
 		return ""
 	}
 	if state.State == StateDisabled {
 		return ErrorProbeBlockedHealthDisabled
-	}
-	if state.CooldownUntil != nil && state.CooldownUntil.After(now) {
-		return ErrorProbeBlockedCooldown
-	}
-	if state.LastProbeAt != nil && state.ConsecutiveFailures > 0 && state.LastProbeAt.Add(ProbeBackoff(state.ConsecutiveFailures)).After(now) {
-		return ErrorProbeBlockedFailureBackoff
 	}
 	return ""
 }

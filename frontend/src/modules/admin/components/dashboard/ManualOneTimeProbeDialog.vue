@@ -62,15 +62,16 @@ watch(
     }
     const targetId = props.target.targetId
     const sequence = ++loadSequence
-    phase.value = 'loading'
-		mode.value = 'once'
-    models.value = []
-		onceModels.value = []
-		onceLoadState.value = 'loading'
-    selected.value = new Set()
+    const formalModels = props.target.formalModels ?? []
+    mode.value = formalModels.length > 0 ? 'formal' : 'once'
+    models.value = formalModels
+    onceModels.value = []
+    onceLoadState.value = 'loading'
+    selected.value = defaultSelection(formalModels)
     results.value = []
     loadErrorKey.value = ''
     testErrorKey.value = ''
+    phase.value = formalModels.length > 0 ? 'ready' : 'loading'
 
     const outcome = await discoverModels(targetId)
     if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
