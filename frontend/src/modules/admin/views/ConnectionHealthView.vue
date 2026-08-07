@@ -116,6 +116,14 @@ const groupMonitoringEnabled = (group: AdminGroupHealth): boolean =>
   group.hasEnabledProbePolicy ?? group.hasEnabledPolicy ?? group.assignedPolicies?.some((policy) => policy.enabled) ?? Boolean(group.hasAssignedPolicy)
 
 const compareDefaultGroups = (first: AdminGroupHealth, second: AdminGroupHealth): number => {
+  const firstRank = first.minProductionRank ?? null
+  const secondRank = second.minProductionRank ?? null
+  if (firstRank == null || secondRank == null) {
+    if (firstRank != null) return -1
+    if (secondRank != null) return 1
+  } else if (firstRank !== secondRank) {
+    return firstRank - secondRank
+  }
   const monitoredDiff = Number(groupMonitoringEnabled(first)) - Number(groupMonitoringEnabled(second))
   if (monitoredDiff !== 0) return -monitoredDiff
   const nameDiff = first.name.localeCompare(second.name)

@@ -172,7 +172,6 @@ export interface AdminGroupAccount {
   multiplierSource?: 'upstream_key' | 'local_fallback' | 'none' | string
   localFallbackMultiplier?: number | null
   productionSortOrder?: number
-  priorityCapacityLimited?: boolean
 }
 
 export interface AdminGroupHealth {
@@ -199,6 +198,7 @@ export interface AdminGroupHealth {
   priorityConflicts?: AdminPriorityConflict[]
   probeModelsConfigured?: boolean
   healthSummary: AdminGroupHealthSummary
+  minProductionRank?: number | null
   // accountsError 非空（i18n key）表示该分组账号列表加载失败，其余分组不受影响。
   accountsError?: string
   accounts: AdminGroupAccount[]

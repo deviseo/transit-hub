@@ -381,6 +381,45 @@ func TestSortAdminGroupAccountsByProduction_ConflictUsesObservedPriority(t *test
 	}
 }
 
+func TestFinalizeAdminGroupProductionOrder_DeduplicatesTargetsAndOrdersGroupsByMinimumRank(t *testing.T) {
+	priority := func(value int) *int { return &value }
+	groups := []AdminGroupHealth{
+		{ID: "g2", Accounts: []AdminGroupAccount{
+			{TargetID: "sub2api:ws1:a", Priority: priority(99), PriorityExpected: priority(99)},
+			{TargetID: "sub2api:ws1:c", Priority: priority(100)},
+		}},
+		{ID: "g1", Accounts: []AdminGroupAccount{
+			{TargetID: "sub2api:ws1:b", Priority: priority(99), PriorityExpected: priority(99)},
+			{TargetID: "sub2api:ws1:a", Priority: priority(99), PriorityExpected: priority(99)},
+		}},
+		{ID: "empty", Accounts: []AdminGroupAccount{}},
+	}
+	healthCandidates := map[string]healthPriorityCandidate{
+		"sub2api:ws1:a": {targetID: "sub2api:ws1:a", healthBand: 0, multiplier: 0.2},
+		"sub2api:ws1:b": {targetID: "sub2api:ws1:b", healthBand: 0, multiplier: 0.1},
+	}
+
+	finalizeAdminGroupProductionOrder(groups, upstream.PlatformSub2API, healthCandidates)
+	if got := []string{groups[0].ID, groups[1].ID, groups[2].ID}; strings.Join(got, ",") != "g1,g2,empty" {
+		t.Fatalf("groups should follow minimum global rank, got %v", got)
+	}
+	byTarget := make(map[string]int)
+	for _, group := range groups {
+		for _, account := range group.Accounts {
+			byTarget[account.TargetID] = account.ProductionSortOrder
+		}
+	}
+	if byTarget["sub2api:ws1:b"] != 0 || byTarget["sub2api:ws1:a"] != 1 || byTarget["sub2api:ws1:c"] != 2 {
+		t.Fatalf("targets should have one workspace rank with comparator tie-breaks, got %v", byTarget)
+	}
+	if groups[0].Accounts[1].ProductionSortOrder != 1 {
+		t.Fatalf("duplicate target should retain the same global rank: %+v", groups[0].Accounts)
+	}
+	if groups[2].MinProductionRank != nil {
+		t.Fatalf("empty group must have unknown minimum rank: %+v", groups[2])
+	}
+}
+
 // TestAdminGroups_NoPolicyStillAllowsManualProbe 验证尚未创建策略时，只要静态凭据条件满足，
 // 目标仍可进入一次性手动探活并实时发现模型；自动调度仍会因没有策略而跳过。
 func TestAdminGroups_NoPolicyStillAllowsManualProbe(t *testing.T) {

@@ -1038,7 +1038,6 @@ export default {
         priorityConflictTarget: '{target}：当前 {current}，期望 {expected}，发现于 {time}',
         productionSortHint: '默认按生产调度顺序展示：健康档位优先、有效倍率其次、同倍率再比较最近成功延迟。点击列头只改变当前表格，不会写回主站 priority。',
         temporarySortHint: '当前是临时查看排序，不会改变主站 priority；重新进入分组后恢复生产调度顺序。',
-        priorityCapacityLimited: '当前健康档位容量已满，末位稳定并列',
         slowResponse: '高延迟成功',
         empty: '该分组当前没有账号或渠道。',
         metrics: {

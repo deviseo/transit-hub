@@ -40,6 +40,9 @@ type AdminGroupHealth struct {
 	PriorityConflicts           []AdminPriorityConflict `json:"priorityConflicts,omitempty"`
 	ProbeModelsConfigured       bool                    `json:"probeModelsConfigured"`
 	HealthSummary               AdminGroupHealthSummary `json:"healthSummary"`
+	// MinProductionRank 是该分组内目标的 workspace 全局生产 rank 最小值；空分组或
+	// 账号读取失败时为空，供多分组总览把未知分组稳定放在末尾。
+	MinProductionRank *int `json:"minProductionRank,omitempty"`
 	// AccountsError 非空时表示该分组的账号/渠道列表拉取失败（i18n key）；此时 accountCount=0、
 	// accounts 为空，但主列表其余分组不受影响，不会整页崩溃。
 	AccountsError string              `json:"accountsError,omitempty"`
@@ -122,8 +125,8 @@ type AdminGroupAccount struct {
 	MultiplierResolutionStatus string                  `json:"multiplierResolutionStatus"`
 	MultiplierSource           string                  `json:"multiplierSource"`
 	LocalFallbackMultiplier    *float64                `json:"localFallbackMultiplier,omitempty"`
-	ProductionSortOrder        int                     `json:"productionSortOrder"`
-	PriorityCapacityLimited    bool                    `json:"priorityCapacityLimited"`
+	// ProductionSortOrder 是去重目标在当前 workspace 的全局生产顺序，不是分组内局部序号。
+	ProductionSortOrder int `json:"productionSortOrder"`
 }
 
 type AdminPriorityConflict struct {
@@ -325,6 +328,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	}
 
 	result := make([]AdminGroupHealth, 0, len(groups))
+	healthCandidatesByTarget := make(map[string]healthPriorityCandidate)
 	for _, group := range groups {
 		health := AdminGroupHealth{
 			ID:                          group.ID,
@@ -511,6 +515,25 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 				MultiplierSource:              multiplierSource,
 				LocalFallbackMultiplier:       localFallback,
 			}
+			if _, exists := healthCandidatesByTarget[targetID]; !exists && priorityManaged && !item.PriorityConflict && usesHealthPriority && multiplierSource != MultiplierSourceNone && effectiveMultiplier != nil {
+				activeModels := make(map[string]struct{}, len(activeSpecs))
+				for _, spec := range activeSpecs {
+					if spec.policy.AutoDegradeEnabled {
+						activeModels[spec.modelName] = struct{}{}
+					}
+				}
+				activeStates := make([]ConnectionHealthState, 0, len(activeModels))
+				for _, state := range stateIndex[targetID] {
+					if _, active := activeModels[state.ModelName]; active {
+						activeStates = append(activeStates, state)
+					}
+				}
+				healthCandidatesByTarget[targetID] = healthPriorityCandidate{
+					targetID: targetID, multiplier: *effectiveMultiplier, states: activeStates,
+					expectedModels: len(activeModels), healthBand: priorityHealthBand(activeStates, len(activeModels)),
+					latencyMs: completeTargetSuccessLatency(activeStates, activeModels),
+				}
+			}
 			if item.HasEnabledProbePolicy {
 				health.MonitoredAccountCount++
 			}
@@ -545,21 +568,81 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 		}
 		health.AccountCount = summary.TotalAccounts
 		health.HealthSummary = summary
-		sortAdminGroupAccountsByProduction(health.Accounts, session.Platform)
 		result = append(result, health)
 	}
+	finalizeAdminGroupProductionOrder(result, session.Platform, healthCandidatesByTarget)
 	return result, nil
 }
 
-func sortAdminGroupAccountsByProduction(accounts []AdminGroupAccount, platform upstream.Platform) {
-	priorityFor := func(account AdminGroupAccount) *int {
-		if !account.PriorityConflict && account.PriorityExpected != nil {
-			return account.PriorityExpected
-		}
-		return account.Priority
+func finalizeAdminGroupProductionOrder(groups []AdminGroupHealth, platform upstream.Platform, healthCandidatesByTarget map[string]healthPriorityCandidate) {
+	type productionEntry struct {
+		targetID        string
+		priority        *int
+		healthCandidate *healthPriorityCandidate
 	}
-	sort.SliceStable(accounts, func(i int, j int) bool {
-		left, right := priorityFor(accounts[i]), priorityFor(accounts[j])
+	entriesByTarget := make(map[string]productionEntry)
+	for _, group := range groups {
+		for _, account := range group.Accounts {
+			if _, exists := entriesByTarget[account.TargetID]; exists {
+				continue
+			}
+			priority := account.Priority
+			if !account.PriorityConflict && account.PriorityExpected != nil {
+				priority = account.PriorityExpected
+			}
+			var healthCandidate *healthPriorityCandidate
+			if candidate, ok := healthCandidatesByTarget[account.TargetID]; ok {
+				candidateCopy := candidate
+				healthCandidate = &candidateCopy
+			}
+			entriesByTarget[account.TargetID] = productionEntry{targetID: account.TargetID, priority: priority, healthCandidate: healthCandidate}
+		}
+	}
+
+	targetIDs := make([]string, 0, len(entriesByTarget))
+	for targetID := range entriesByTarget {
+		targetIDs = append(targetIDs, targetID)
+	}
+	sort.SliceStable(targetIDs, func(i int, j int) bool {
+		left, right := entriesByTarget[targetIDs[i]], entriesByTarget[targetIDs[j]]
+		if priorityOrder := compareProductionPriorities(left.priority, right.priority, platform); priorityOrder != 0 {
+			return priorityOrder < 0
+		}
+		if left.healthCandidate != nil && right.healthCandidate != nil {
+			if candidateOrder := compareHealthPriorityCandidates(*left.healthCandidate, *right.healthCandidate); candidateOrder != 0 {
+				return candidateOrder < 0
+			}
+		}
+		return left.targetID < right.targetID
+	})
+
+	rankByTarget := make(map[string]int, len(targetIDs))
+	for rank, targetID := range targetIDs {
+		rankByTarget[targetID] = rank
+	}
+	for groupIndex := range groups {
+		var minRank *int
+		for accountIndex := range groups[groupIndex].Accounts {
+			rank, ok := rankByTarget[groups[groupIndex].Accounts[accountIndex].TargetID]
+			if !ok {
+				continue
+			}
+			groups[groupIndex].Accounts[accountIndex].ProductionSortOrder = rank
+			if minRank == nil || rank < *minRank {
+				rankCopy := rank
+				minRank = &rankCopy
+			}
+		}
+		groups[groupIndex].MinProductionRank = minRank
+		sort.SliceStable(groups[groupIndex].Accounts, func(i int, j int) bool {
+			if groups[groupIndex].Accounts[i].ProductionSortOrder != groups[groupIndex].Accounts[j].ProductionSortOrder {
+				return groups[groupIndex].Accounts[i].ProductionSortOrder < groups[groupIndex].Accounts[j].ProductionSortOrder
+			}
+			return groups[groupIndex].Accounts[i].TargetID < groups[groupIndex].Accounts[j].TargetID
+		})
+	}
+	sort.SliceStable(groups, func(i int, j int) bool {
+		left, right := groups[i].MinProductionRank, groups[j].MinProductionRank
 		if left == nil || right == nil {
 			if left != nil {
 				return true
@@ -567,32 +650,58 @@ func sortAdminGroupAccountsByProduction(accounts []AdminGroupAccount, platform u
 			if right != nil {
 				return false
 			}
-			return accounts[i].TargetID < accounts[j].TargetID
+			return groups[i].ID < groups[j].ID
 		}
 		if *left != *right {
-			if platform == upstream.PlatformSub2API {
-				return *left < *right
-			}
-			return *left > *right
+			return *left < *right
 		}
-		return accounts[i].TargetID < accounts[j].TargetID
+		return groups[i].ID < groups[j].ID
 	})
-	boundaryCounts := make(map[int]int)
-	if platform == upstream.PlatformSub2API {
-		for _, account := range accounts {
-			if account.PriorityManaged && account.HasEnabledProbePolicy && account.PriorityExpected != nil {
-				switch *account.PriorityExpected {
-				case 18, 108, 1008, 10008, 10009:
-					boundaryCounts[*account.PriorityExpected]++
-				}
-			}
+}
+
+func compareProductionPriorities(left *int, right *int, platform upstream.Platform) int {
+	if left == nil || right == nil {
+		if left != nil {
+			return -1
 		}
+		if right != nil {
+			return 1
+		}
+		return 0
 	}
+	if *left == *right {
+		return 0
+	}
+	if platform == upstream.PlatformSub2API {
+		if *left < *right {
+			return -1
+		}
+		return 1
+	}
+	if *left > *right {
+		return -1
+	}
+	return 1
+}
+
+// sortAdminGroupAccountsByProduction 保留给旧的局部调用方和单元测试；AdminGroups 主路径
+// 使用 finalizeAdminGroupProductionOrder 先分配 workspace 全局 rank，再按该 rank 展开。
+func sortAdminGroupAccountsByProduction(accounts []AdminGroupAccount, platform upstream.Platform) {
+	sort.SliceStable(accounts, func(i int, j int) bool {
+		left, right := accounts[i], accounts[j]
+		priorityFor := func(account AdminGroupAccount) *int {
+			if !account.PriorityConflict && account.PriorityExpected != nil {
+				return account.PriorityExpected
+			}
+			return account.Priority
+		}
+		if order := compareProductionPriorities(priorityFor(left), priorityFor(right), platform); order != 0 {
+			return order < 0
+		}
+		return left.TargetID < right.TargetID
+	})
 	for index := range accounts {
 		accounts[index].ProductionSortOrder = index
-		if accounts[index].PriorityExpected != nil && boundaryCounts[*accounts[index].PriorityExpected] > 1 {
-			accounts[index].PriorityCapacityLimited = true
-		}
 	}
 }
 

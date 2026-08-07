@@ -690,9 +690,6 @@ const upstreamMultiplierStatusLabel = (account: AdminGroupAccount): string => {
                     <ArrowDownUp v-else-if="account.priorityManaged" class="h-3.5 w-3.5 text-primary" />
                   </div>
                   <p class="mt-0.5 text-[11px] text-muted-foreground">{{ priorityStateLabel(account) }}</p>
-                  <p v-if="account.priorityCapacityLimited" class="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-                    {{ t(`${detailPrefix}.priorityCapacityLimited`) }}
-                  </p>
                 </td>
                 <td class="px-3 py-3 tabular-nums text-foreground">
                   <span>{{ formatMultiplier(effectiveMultiplier(account)) }}</span>

@@ -359,26 +359,7 @@ func (s *Service) syncWorkspacePriorities(
 		desiredByTarget[targetID] = desired
 	}
 
-	sort.Slice(healthCandidates, func(i int, j int) bool {
-		left, right := healthCandidates[i], healthCandidates[j]
-		if left.healthBand != right.healthBand {
-			return left.healthBand < right.healthBand
-		}
-		if left.multiplier != right.multiplier {
-			return left.multiplier < right.multiplier
-		}
-		if left.latencyMs == nil || right.latencyMs == nil {
-			if left.latencyMs != nil {
-				return true
-			}
-			if right.latencyMs != nil {
-				return false
-			}
-		} else if *left.latencyMs != *right.latencyMs {
-			return *left.latencyMs < *right.latencyMs
-		}
-		return left.targetID < right.targetID
-	})
+	sortHealthPriorityCandidates(healthCandidates)
 	currentBand, bandRank := -1, 0
 	for _, candidate := range healthCandidates {
 		if candidate.healthBand != currentBand {
@@ -553,8 +534,8 @@ func desiredManagedPriorityForPlatformWithExpected(platform upstream.Platform, s
 
 func desiredHealthPriorityForPlatform(platform upstream.Platform, healthBand int, tupleRank int) int {
 	if platform == upstream.PlatformSub2API {
-		bases := []int{10, 19, 109, 1009, 10009}
-		nextBases := []int{19, 109, 1009, 10009, 10010}
+		bases := []int{10, 100, 1000, 10000, 100000}
+		nextBases := []int{100, 1000, 10000, 100000, 100001}
 		if healthBand < 0 || healthBand >= len(bases) {
 			healthBand = 3
 		}
@@ -574,31 +555,74 @@ func desiredHealthPriorityForPlatform(platform upstream.Platform, healthBand int
 }
 
 // desiredSub2APIManagedPriority 使用 Sub2API「数值越小越优先」的原生语义，并为不同健康
-// 状态预留互不重叠的区间：健康 10-18、恢复中 19-108、降级/观察 109-1008、待探活
-// 1009-10008、暂停/禁用 10009。同一状态内 multiplierRank 越小，priority 越小。
+// 状态预留互不重叠的区间：健康 10-99、恢复中 100-999、降级/观察 1000-9999、待探活
+// 10000-99999、暂停/禁用 100000。同一状态内 multiplierRank 越小，priority 越小。
 // rank 超出区间容量时在区间末尾并列，避免价格排序跨越健康状态边界。
 func desiredSub2APIManagedPriority(states []ConnectionHealthState, multiplierRank int, expectedModels int) int {
 	for _, state := range states {
 		if state.State == StateDisabled || state.State == StateSuspended {
-			return 10009
+			return 100000
 		}
 	}
 	if len(states) < expectedModels {
-		return sub2APIPriorityWithinBand(1009, 10009, multiplierRank)
+		return sub2APIPriorityWithinBand(10000, 100000, multiplierRank)
 	}
 
-	base, nextBase := 10, 19
+	base, nextBase := 10, 100
 	for _, state := range states {
 		switch state.State {
 		case StateDegraded, StateObserving:
-			base, nextBase = 109, 1009
+			base, nextBase = 1000, 10000
 		case StateRecovering:
-			if base < 19 {
-				base, nextBase = 19, 109
+			if base < 100 {
+				base, nextBase = 100, 1000
 			}
 		}
 	}
 	return sub2APIPriorityWithinBand(base, nextBase, multiplierRank)
+}
+
+// sortHealthPriorityCandidates 按生产调度使用的完整比较元组排序。该比较器同时用于
+// priority 写回和 admin 详情 rank，避免 priority 在区间末位并列时退化成分组局部顺序。
+func sortHealthPriorityCandidates(candidates []healthPriorityCandidate) {
+	sort.SliceStable(candidates, func(i int, j int) bool {
+		return compareHealthPriorityCandidates(candidates[i], candidates[j]) < 0
+	})
+}
+
+func compareHealthPriorityCandidates(left healthPriorityCandidate, right healthPriorityCandidate) int {
+	if left.healthBand != right.healthBand {
+		if left.healthBand < right.healthBand {
+			return -1
+		}
+		return 1
+	}
+	if left.multiplier != right.multiplier {
+		if left.multiplier < right.multiplier {
+			return -1
+		}
+		return 1
+	}
+	if left.latencyMs == nil || right.latencyMs == nil {
+		if left.latencyMs != nil {
+			return -1
+		}
+		if right.latencyMs != nil {
+			return 1
+		}
+	} else if *left.latencyMs != *right.latencyMs {
+		if *left.latencyMs < *right.latencyMs {
+			return -1
+		}
+		return 1
+	}
+	if left.targetID < right.targetID {
+		return -1
+	}
+	if left.targetID > right.targetID {
+		return 1
+	}
+	return 0
 }
 
 // multiplier_only 不参与 P 版健康状态分段，继续使用原有 1-9 独立倍率区间。

@@ -372,11 +372,11 @@ func TestDesiredSub2APIManagedPriority_UsesReservedManagedBands(t *testing.T) {
 		want           int
 	}{
 		{name: "healthy start", states: []ConnectionHealthState{{State: StateHealthy}}, expectedModels: 1, want: 10},
-		{name: "healthy end", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 18},
-		{name: "recovering end", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 999, expectedModels: 1, want: 108},
-		{name: "degraded end", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 9999, expectedModels: 1, want: 1008},
-		{name: "unprobed end", states: nil, rank: 99999, expectedModels: 1, want: 10008},
-		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10009},
+		{name: "healthy end", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 999, expectedModels: 1, want: 99},
+		{name: "recovering end", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 9999, expectedModels: 1, want: 999},
+		{name: "degraded end", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 99999, expectedModels: 1, want: 9999},
+		{name: "unprobed end", states: nil, rank: 999999, expectedModels: 1, want: 99999},
+		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 100000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -384,6 +384,21 @@ func TestDesiredSub2APIManagedPriority_UsesReservedManagedBands(t *testing.T) {
 				t.Fatalf("desiredSub2APIManagedPriority() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDesiredSub2APIManagedPriority_HealthUsesNinetySlotsAndClampsAtNinetyNine(t *testing.T) {
+	for rank := 0; rank < 90; rank++ {
+		got := desiredSub2APIManagedPriority([]ConnectionHealthState{{State: StateHealthy}}, rank, 1)
+		want := 10 + rank
+		if got != want {
+			t.Fatalf("healthy rank %d = %d, want %d", rank, got, want)
+		}
+	}
+	for _, rank := range []int{90, 91, 999} {
+		if got := desiredSub2APIManagedPriority([]ConnectionHealthState{{State: StateHealthy}}, rank, 1); got != 99 {
+			t.Fatalf("healthy overflow rank %d = %d, want 99", rank, got)
+		}
 	}
 }
 
@@ -1013,13 +1028,13 @@ func TestDesiredManagedPriority_Sub2APIUsesCompactStateBands(t *testing.T) {
 		{name: "empty state best", rank: 0, expectedModels: 0, want: 10},
 		{name: "empty state second", rank: 1, expectedModels: 0, want: 11},
 		{name: "healthy third", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 2, expectedModels: 1, want: 12},
-		{name: "recovering", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 0, expectedModels: 1, want: 19},
-		{name: "degraded", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 0, expectedModels: 1, want: 109},
-		{name: "observing second", states: []ConnectionHealthState{{State: StateObserving}}, rank: 1, expectedModels: 1, want: 110},
-		{name: "missing model", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 0, expectedModels: 2, want: 1009},
-		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 10009},
-		{name: "disabled outranks missing", states: []ConnectionHealthState{{State: StateDisabled}}, rank: 0, expectedModels: 2, want: 10009},
-		{name: "healthy rank stays in band", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 18},
+		{name: "recovering", states: []ConnectionHealthState{{State: StateRecovering}}, rank: 0, expectedModels: 1, want: 100},
+		{name: "degraded", states: []ConnectionHealthState{{State: StateDegraded}}, rank: 0, expectedModels: 1, want: 1000},
+		{name: "observing second", states: []ConnectionHealthState{{State: StateObserving}}, rank: 1, expectedModels: 1, want: 1001},
+		{name: "missing model", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 0, expectedModels: 2, want: 10000},
+		{name: "suspended", states: []ConnectionHealthState{{State: StateSuspended}}, rank: 0, expectedModels: 1, want: 100000},
+		{name: "disabled outranks missing", states: []ConnectionHealthState{{State: StateDisabled}}, rank: 0, expectedModels: 2, want: 100000},
+		{name: "healthy rank stays in band", states: []ConnectionHealthState{{State: StateHealthy}}, rank: 99, expectedModels: 1, want: 99},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
