@@ -77,6 +77,47 @@ func TestFetchKeyUsageToday_Sub2API_PaginatesKeysAndFiltersZeroCost(t *testing.T
 	}
 }
 
+func TestFetchKeyUsageTodayIncludingZero_Sub2APIKeepsExistingZeroCostKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			writeJSON(w, map[string]any{"data": []map[string]any{
+				{"id": 1, "name": "zero", "group": map[string]any{"name": "vip"}},
+				{"id": 2, "name": "used", "group": map[string]any{"name": "vip"}},
+			}, "total": 2})
+		case "/api/v1/usage/stats":
+			if got := r.URL.Query().Get("start_date"); got != "2026-08-07" || r.URL.Query().Get("end_date") != "2026-08-07" {
+				t.Fatalf("unexpected business date: start=%q end=%q", got, r.URL.Query().Get("end_date"))
+			}
+			cost := 0.0
+			if r.URL.Query().Get("api_key_id") == "2" {
+				cost = 4.5
+			}
+			writeJSON(w, map[string]any{"data": map[string]any{"total_actual_cost": cost}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stats, err := NewPlatformService(NewHTTPClient(server.Client())).FetchKeyUsageTodayIncludingZero(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}, nil, "2026-08-07",
+	)
+	if err != nil {
+		t.Fatalf("FetchKeyUsageTodayIncludingZero() error: %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("expected existing zero-cost key to remain visible, got %+v", stats)
+	}
+	byID := map[string]float64{}
+	for _, stat := range stats {
+		byID[stat.KeyID] = stat.TodayAmount
+	}
+	if byID["1"] != 0 || byID["2"] != 4.5 {
+		t.Fatalf("unexpected zero-inclusive key costs: %+v", byID)
+	}
+}
+
 // TestFetchKeyUsageToday_NewAPI_UsesTokenNameAndGroupFilter 覆盖测试要求 6：
 // new-api token 列表分页 + token_name/group 统计路径：带分组的 token 按 token_name+group 查询，
 // 无分组的 token 只按 token_name 查询（不做全分组穷举）。

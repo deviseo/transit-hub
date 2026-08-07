@@ -8,6 +8,7 @@ const (
 	SettlementStatusPartial     = "partial"     // 部分站点成功的日结结果
 	SettlementStatusFinal       = "final"       // 所有站点成功的完整日结结果
 	SettlementStatusMissing     = "missing"     // 占位：该日期无任何记录
+	SettlementStatusUnavailable = "unavailable" // 当前日没有可用于展示的成本/利润值
 )
 
 // 数据来源常量。
@@ -21,16 +22,19 @@ const (
 // 所有金额均以 CNY 计价，上游指标已乘以站点的 rechargeRate。
 // TodayProfit/TodayPurchase/NetProfit 为 *float64，nil 表示该指标不可用。
 type MetricsResponse struct {
-	Date            string            `json:"date"`                   // 指标所属的固定上海业务日
-	Timezone        string            `json:"timezone"`               // 业务日时区，固定为 Asia/Shanghai
-	TodayProfit     *float64          `json:"todayProfit"`            // 今日盈利额度；nil 表示营收不可用
-	SiteBalance     float64           `json:"siteBalance"`            // 站点用户总余额：所有非 admin 用户余额之和
-	TodayPurchase   *float64          `json:"todayPurchase"`          // 今日进货额度；nil 表示成本不完整
-	NetProfit       *float64          `json:"netProfit"`              // 今日净利润；任一分项为 nil 时为 nil
-	UpstreamBalance float64           `json:"upstreamBalance"`        // 上游总余额：所有上游站点余额（CNY）之和
-	GroupCount      int               `json:"groupCount"`             // 管理员站点分组总数，省去前端单独请求
-	MetricErrors    map[string]string `json:"metricErrors,omitempty"` // 局部指标拉取失败原因
-	CostQuality     *CostQuality      `json:"costQuality,omitempty"`  // 成本质量信息，成本不完整时必须存在
+	Date             string            `json:"date"`                       // 指标所属的固定上海业务日
+	Timezone         string            `json:"timezone"`                   // 业务日时区，固定为 Asia/Shanghai
+	TodayProfit      *float64          `json:"todayProfit"`                // 今日盈利额度；nil 表示营收不可用
+	SiteBalance      float64           `json:"siteBalance"`                // 站点用户总余额：所有非 admin 用户余额之和
+	TodayPurchase    *float64          `json:"todayPurchase"`              // 今日进货额度；nil 表示成本不完整
+	NetProfit        *float64          `json:"netProfit"`                  // 今日净利润；任一分项为 nil 时为 nil
+	ConfirmedCost    *float64          `json:"confirmedCost,omitempty"`    // 部分成本时的已确认成本下限
+	NetProfitCeiling *float64          `json:"netProfitCeiling,omitempty"` // 部分成本时的暂估净利润上限
+	SettlementStatus string            `json:"settlementStatus,omitempty"` // final/partial/provisional/unavailable
+	UpstreamBalance  float64           `json:"upstreamBalance"`            // 上游总余额：所有上游站点余额（CNY）之和
+	GroupCount       int               `json:"groupCount"`                 // 管理员站点分组总数，省去前端单独请求
+	MetricErrors     map[string]string `json:"metricErrors,omitempty"`     // 局部指标拉取失败原因
+	CostQuality      *CostQuality      `json:"costQuality,omitempty"`      // 成本质量信息，成本不完整时必须存在
 }
 
 // CostQuality 描述本次成本采集的完整性与质量信息，前端根据此字段分级展示。
@@ -59,12 +63,17 @@ type TrendResponse struct {
 // TrendPoint 代表一天的指标快照，用于趋势图渲染。
 // 成本/营收/净利润允许 NULL：NULL 表示该天数据未采集，前端渲染断点而非伪零。
 type TrendPoint struct {
-	Date            string   `json:"date"`        // 日期，格式 "2006-01-02"
-	TodayProfit     *float64 `json:"todayProfit"` // nil 表示该天营收未采集
-	SiteBalance     float64  `json:"siteBalance"`
-	TodayPurchase   *float64 `json:"todayPurchase"` // nil 表示该天成本未采集
-	NetProfit       *float64 `json:"netProfit"`     // nil 表示该天净利润不可用
-	UpstreamBalance float64  `json:"upstreamBalance"`
+	Date               string   `json:"date"`        // 日期，格式 "2006-01-02"
+	TodayProfit        *float64 `json:"todayProfit"` // nil 表示该天营收未采集
+	SiteBalance        float64  `json:"siteBalance"`
+	TodayPurchase      *float64 `json:"todayPurchase"`              // nil 表示该天成本未采集
+	NetProfit          *float64 `json:"netProfit"`                  // nil 表示该天净利润不可用
+	ConfirmedCost      *float64 `json:"confirmedCost,omitempty"`    // 部分结算日的成本下限
+	NetProfitCeiling   *float64 `json:"netProfitCeiling,omitempty"` // 部分结算日的利润上限
+	SettlementStatus   string   `json:"settlementStatus,omitempty"` // final/partial/provisional/missing
+	CostExpectedCount  *int     `json:"costExpectedCount,omitempty"`
+	CostCollectedCount *int     `json:"costCollectedCount,omitempty"`
+	UpstreamBalance    float64  `json:"upstreamBalance"`
 }
 
 // DailySnapshot 是 dashboard_daily_stats 表的行结构。
@@ -162,16 +171,46 @@ type GroupUsageTodayResponse struct {
 	TotalProfit             *float64              `json:"totalProfit,omitempty"`
 	ProfitAvailable         bool                  `json:"profitAvailable"`
 	ProfitUnavailableReason string                `json:"profitUnavailableReason,omitempty"`
+	Quality                 *GroupProfitQuality   `json:"quality,omitempty"`
+	Issues                  []ProfitIssue         `json:"issues,omitempty"`
+	UnboundUpstreamCost     *float64              `json:"unboundUpstreamCost,omitempty"`
 	Groups                  []GroupUsageTodayItem `json:"groups"`
+}
+
+type GroupProfitQuality struct {
+	Status                   string `json:"status"` // exact/partial/unavailable
+	ExpectedConnections      int    `json:"expectedConnections"`
+	ResolvedConnections      int    `json:"resolvedConnections"`
+	UnallocatableConnections int    `json:"unallocatableConnections"`
+	FailedConnections        int    `json:"failedConnections"`
+	BusinessDate             string `json:"businessDate"`
+	ObservedAt               string `json:"observedAt,omitempty"`
+	RunID                    string `json:"runId,omitempty"`
 }
 
 // GroupUsageTodayItem 是单个分组的今日营收、成本及实时利润。
 type GroupUsageTodayItem struct {
-	GroupName    string   `json:"groupName"`
-	TodayAmount  float64  `json:"todayAmount"` // 兼容字段：今日营收
-	TodayRevenue float64  `json:"todayRevenue"`
-	TodayCost    *float64 `json:"todayCost,omitempty"`
-	TodayProfit  *float64 `json:"todayProfit,omitempty"`
+	GroupID      string                  `json:"groupId,omitempty"`
+	GroupName    string                  `json:"groupName"`
+	TodayAmount  float64                 `json:"todayAmount"` // 兼容字段：今日营收
+	TodayRevenue float64                 `json:"todayRevenue"`
+	TodayCost    *float64                `json:"todayCost,omitempty"`
+	TodayProfit  *float64                `json:"todayProfit,omitempty"`
+	Status       string                  `json:"status,omitempty"` // exact/partial/unavailable/unallocatable
+	Issues       []ProfitIssue           `json:"issues,omitempty"`
+	Connections  []GroupProfitConnection `json:"connections,omitempty"`
+}
+
+type GroupProfitConnection struct {
+	ConnectionID string   `json:"connectionId"`
+	AccountID    string   `json:"accountId"`
+	GroupID      string   `json:"groupId"`
+	SiteID       string   `json:"siteId"`
+	KeyID        string   `json:"keyId"`
+	Revenue      *float64 `json:"revenue,omitempty"`
+	Cost         *float64 `json:"cost,omitempty"`
+	Profit       *float64 `json:"profit,omitempty"`
+	Status       string   `json:"status"`
 }
 
 // UpstreamKeyUsageTodayResponse 是 GET /api/dashboard/upstream-key-usage-today 返回的

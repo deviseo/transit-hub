@@ -405,7 +405,9 @@ export default {
         subtitle: '营收、成本与净利润的同期变化',
         periodRevenue: '周期营收',
         periodCost: '周期成本',
+        periodConfirmedCost: '周期已确认成本',
         periodProfit: '周期净利润',
+        periodProfitCeiling: '周期暂估利润上限',
         chartAria: '营收、成本与净利润组合趋势图'
       },
       capital: {
@@ -466,7 +468,13 @@ export default {
         profitUnavailable: '营收不可用',
         costUnavailable: '成本暂不可用',
         deltaPartial: '成本未完整，环比暂不可确定',
-        deltaUnsettled: '昨日未结算'
+        deltaUnsettled: '昨日未结算',
+        trendConfirmed: '已确认',
+        trendCeiling: '暂估上限',
+        trendConfirmedCost: '已确认成本',
+        trendProfitCeiling: '暂估净利润上限',
+        trendUnavailable: '暂无',
+        trendCoverage: '覆盖 {collected}/{expected}'
       },
       dailyStats: {
         title: '每日明细',
@@ -512,6 +520,18 @@ export default {
       groupUsage: {
         title: '今日营收分组明细',
         subtitle: '共 {count} 个分组，合计 {total}',
+        quality: '利润核算：{status}，已核算 {resolved}/{expected} 条真实接入',
+        statusExact: '精确',
+        statusPartial: '部分核算',
+        statusUnavailable: '无法精确核算',
+        issuesTitle: '核算问题（{count}）',
+        issueScope: '来源 {source} / 阶段 {stage}',
+        issueIds: '连接 {connectionId} · 账号 {accountId} · 分组 {groupId} · Key {keyId}',
+        issueMeta: 'HTTP {status} · {retryable}',
+        retryable: '可重试',
+        nonRetryable: '不可重试',
+        noDetail: '未提供更多安全详情',
+        unboundCost: '未纳入真实接入成本 {cost}',
         close: '关闭',
         empty: '暂无分组用量数据。',
         loadError: '加载分组用量失败。',

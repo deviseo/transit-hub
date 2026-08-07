@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ArrowDownWideNarrow, ArrowUpWideNarrow, Loader2, RefreshCw, TrendingUp, X } from 'lucide-vue-next'
-import { getGroupUsageToday, type GroupUsageTodayItem } from '../../api/dashboardAdmin'
+import { AlertTriangle, ArrowDownWideNarrow, ArrowUpWideNarrow, Loader2, RefreshCw, TrendingUp, X } from 'lucide-vue-next'
+import {
+  getGroupUsageToday,
+  type GroupUsageTodayItem,
+  type GroupProfitQuality,
+  type ProfitIssue,
+} from '../../api/dashboardAdmin'
 import { formatCny } from '../../utils/dashboard'
 
 const props = defineProps<{
@@ -17,6 +22,8 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const groups = ref<GroupUsageTodayItem[]>([])
 const total = ref(0)
+const quality = ref<GroupProfitQuality | null>(null)
+const issues = ref<ProfitIssue[]>([])
 // 默认按金额从高到低排序；toggle 后按金额从低到高，金额相同时用分组名排序，均不触发新的请求。
 const sortAsc = ref(false)
 
@@ -32,15 +39,43 @@ const toggleSort = () => {
   sortAsc.value = !sortAsc.value
 }
 
+const qualityLabel = computed(() => {
+  if (quality.value?.status === 'exact') return t('admin.dashboard.groupUsage.statusExact')
+  if (quality.value?.status === 'partial') return t('admin.dashboard.groupUsage.statusPartial')
+  return t('admin.dashboard.groupUsage.statusUnavailable')
+})
+
+const issueScope = (issue: ProfitIssue) => [
+  issue.connectionId ? `连接 ${issue.connectionId}` : '',
+  issue.accountId ? `账号 ${issue.accountId}` : '',
+  issue.groupId ? `分组 ${issue.groupId}` : '',
+  issue.siteId ? `站点 ${issue.siteId}` : '',
+  issue.keyId ? `Key ${issue.keyId}` : '',
+].filter(Boolean).join(' · ') || t('admin.dashboard.groupUsage.noDetail')
+
+const issueMeta = (issue: ProfitIssue) => {
+  const status = issue.httpStatus ? `HTTP ${issue.httpStatus}` : ''
+  const retryable = issue.httpStatus != null || issue.retryable
+    ? (issue.retryable
+      ? t('admin.dashboard.groupUsage.retryable')
+      : t('admin.dashboard.groupUsage.nonRetryable'))
+    : ''
+  return [status, retryable].filter(Boolean).join(' · ')
+}
+
 // 仅在弹窗打开（open 从 false 变为 true）或用户点击重试时才发起请求，
 // 不在挂载时、排序切换时或关闭时请求。
 const loadData = async () => {
   loading.value = true
   error.value = null
+  quality.value = null
+  issues.value = []
   try {
     const response = await getGroupUsageToday()
     groups.value = response.groups ?? []
     total.value = response.total ?? 0
+    quality.value = response.quality ?? null
+    issues.value = response.issues ?? []
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'admin.dashboard.groupUsage.loadError'
   } finally {
@@ -102,6 +137,32 @@ watch(() => props.open, (isOpen) => {
         </div>
 
         <div class="px-6 py-6">
+          <div v-if="quality" class="mb-4 space-y-3 rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-xs">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <span class="font-medium text-foreground">
+                {{ t('admin.dashboard.groupUsage.quality', {
+                  status: qualityLabel,
+                  resolved: quality.resolvedConnections,
+                  expected: quality.expectedConnections,
+                }) }}
+              </span>
+              <span v-if="issues.length" class="text-warning">
+                {{ t('admin.dashboard.groupUsage.issuesTitle', { count: issues.length }) }}
+              </span>
+            </div>
+            <ul v-if="issues.length" class="space-y-2 border-t border-warning/20 pt-2 text-muted-foreground">
+              <li v-for="issue in issues" :key="`${issue.code}-${issue.connectionId ?? issue.groupId ?? issue.keyId ?? 'global'}`" class="space-y-0.5">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <AlertTriangle class="h-3.5 w-3.5 text-warning" />
+                  <span class="font-medium text-foreground">{{ issue.code }}</span>
+                  <span>{{ issueMeta(issue) }}</span>
+                </div>
+                <div>{{ issueScope(issue) }}</div>
+                <div v-if="issue.detail">{{ issue.detail }}</div>
+              </li>
+            </ul>
+          </div>
+
           <div v-if="loading" class="flex items-center justify-center py-12">
             <Loader2 class="h-6 w-6 animate-spin text-primary/60" />
           </div>

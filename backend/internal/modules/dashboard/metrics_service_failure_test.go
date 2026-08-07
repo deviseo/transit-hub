@@ -144,6 +144,15 @@ func TestLiveMetricsUsesCachedCostsAndKeepsPartialSuccess(t *testing.T) {
 	if response.TodayPurchase != nil || response.NetProfit != nil {
 		t.Fatalf("partial cached cost: todayPurchase=%v netProfit=%v, want both nil (incomplete)", response.TodayPurchase, response.NetProfit)
 	}
+	if response.ConfirmedCost == nil || *response.ConfirmedCost != 6 {
+		t.Fatalf("confirmed cost = %v, want 6.00", response.ConfirmedCost)
+	}
+	if response.NetProfitCeiling == nil || *response.NetProfitCeiling != 24 {
+		t.Fatalf("net profit ceiling = %v, want 24.00", response.NetProfitCeiling)
+	}
+	if response.SettlementStatus != SettlementStatusPartial {
+		t.Fatalf("settlement status = %q, want partial", response.SettlementStatus)
+	}
 	if upstreams.keyUsageCalls != 0 {
 		t.Fatalf("LiveMetrics() called active upstream cost query %d time(s)", upstreams.keyUsageCalls)
 	}

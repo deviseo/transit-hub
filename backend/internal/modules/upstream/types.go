@@ -30,6 +30,7 @@ const (
 	ErrorNetwork         = "admin.upstream.errors.network"
 	ErrorRequest         = "admin.upstream.errors.request"
 	ErrorInvalidResponse = "admin.upstream.errors.invalidResponse"
+	ErrorUnsupported     = "admin.upstream.errors.unsupported"
 	ErrorUnknown         = "admin.upstream.errors.unknown"
 	// ErrorSub2APIBulkUpdateUnsupported 表示当前 Sub2API 站点没有字段级批量更新能力。
 	// 调度优先级/状态更新遇到该能力缺失时必须要求升级，绝不回退到整对象回写。
@@ -251,6 +252,15 @@ type LoginResult struct {
 type GroupDailyStat struct {
 	GroupName       string  `json:"groupName"`
 	TodayActualCost float64 `json:"todayActualCost"`
+}
+
+// AdminUsageStats 是管理员按账号/渠道和分组过滤后的用量统计。
+// TotalActualCost 是主站用户实际扣费；TotalAccountCost 是主站账号口径成本，
+// 两者都不等同于外部上游 Key 账单，调用方必须明确选择成本来源。
+type AdminUsageStats struct {
+	TotalActualCost  float64
+	TotalAccountCost *float64
+	TotalRequests    int64
 }
 
 type AdminSiteBalance struct {

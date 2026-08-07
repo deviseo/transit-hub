@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/businesstime"
 )
@@ -26,10 +27,15 @@ type UpstreamLister interface {
 	// KeyUsageToday 和 BalanceBreakdown 是「今日成本」「上游总余额」下钻弹窗的数据源，
 	// 由 upstream.Service 实现（持有 session/cache，能校验站点归属和当前工作区）。
 	KeyUsageToday(ctx context.Context, userID string) ([]upstream.KeyUsageTodayItem, error)
+	KeyUsageTodayIncludingZeroForDate(ctx context.Context, userID, date string) ([]upstream.KeyUsageTodayItem, error)
 	BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error)
 	// FetchSiteCostsForDate 用各站点自己的 session 查询指定日期的原始成本，
 	// 不依赖仪表盘 admin 账户 session，与 KeyUsageToday 同一模式。
 	FetchSiteCostsForDate(ctx context.Context, userID, adminAccountID, date string) ([]upstream.SiteCostForDateResult, error)
+}
+
+type RealConnectionReader interface {
+	ListRealConnectionsForWorkspace(ctx context.Context, userID, adminAccountID string) ([]my_sites.RealConnection, error)
 }
 
 type metricsStore interface {
@@ -50,6 +56,7 @@ type MetricsService struct {
 	upstreams       UpstreamLister
 	metricsRepo     metricsStore
 	accounts        AdminAccountService
+	realConnections RealConnectionReader
 	sessionSync     MySiteStateSync
 	refreshInterval time.Duration // 用于推导 maxStaleness；0 表示使用默认值 2h
 }
@@ -74,6 +81,10 @@ func (s *MetricsService) maxStaleness() time.Duration {
 
 func (s *MetricsService) SetMySiteSync(sync MySiteStateSync) {
 	s.sessionSync = sync
+}
+
+func (s *MetricsService) SetRealConnectionReader(reader RealConnectionReader) {
+	s.realConnections = reader
 }
 
 func (s *MetricsService) freshAdminSession(ctx context.Context, userID string, adminAccountID string, record *AdminSession) (upstream.Session, error) {
@@ -344,6 +355,20 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	if todayProfitErr == nil {
 		todayProfit = ptrF64(todayProfitVal)
 	}
+	var confirmedCost *float64
+	var netProfitCeiling *float64
+	settlementStatus := SettlementStatusUnavailable
+	if costQuality != nil {
+		if costQuality.Complete {
+			confirmedCost = ptrF64(costQuality.ConfirmedCost)
+		} else if costQuality.CollectedSites > 0 {
+			confirmedCost = ptrF64(costQuality.ConfirmedCost)
+		}
+		if todayProfit != nil && confirmedCost != nil {
+			ceiling := *todayProfit - *confirmedCost
+			netProfitCeiling = &ceiling
+		}
+	}
 	var todayPurchase *float64
 	if costQuality != nil && costQuality.Complete {
 		todayPurchase = ptrF64(costQuality.ConfirmedCost)
@@ -355,18 +380,24 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	if todayProfit != nil && costQuality != nil && costQuality.Complete {
 		np := *todayProfit - costQuality.ConfirmedCost
 		netProfit = &np
+		settlementStatus = SettlementStatusFinal
+	} else if confirmedCost != nil || todayProfit != nil {
+		settlementStatus = SettlementStatusPartial
 	}
 
 	result := MetricsResponse{
-		Date:            today,
-		Timezone:        businesstime.Timezone,
-		TodayProfit:     todayProfit,
-		SiteBalance:     siteBalance,
-		TodayPurchase:   todayPurchase,
-		NetProfit:       netProfit,
-		UpstreamBalance: upstreamBalance,
-		GroupCount:      groupCount,
-		CostQuality:     costQuality,
+		Date:             today,
+		Timezone:         businesstime.Timezone,
+		TodayProfit:      todayProfit,
+		SiteBalance:      siteBalance,
+		TodayPurchase:    todayPurchase,
+		NetProfit:        netProfit,
+		ConfirmedCost:    confirmedCost,
+		NetProfitCeiling: netProfitCeiling,
+		SettlementStatus: settlementStatus,
+		UpstreamBalance:  upstreamBalance,
+		GroupCount:       groupCount,
+		CostQuality:      costQuality,
 	}
 
 	if todayProfitErr != nil {
@@ -401,13 +432,32 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	}
 	points := make([]TrendPoint, 0, len(snapshots))
 	for _, snap := range snapshots {
+		status := snap.SettlementStatus
+		if status == "" {
+			status = SettlementStatusFinal
+		}
+		todayPurchase := snap.TodayPurchase
+		netProfit := snap.NetProfit
+		var confirmedCost *float64
+		var netProfitCeiling *float64
+		if status == SettlementStatusPartial || status == SettlementStatusProvisional {
+			confirmedCost = snap.TodayPurchase
+			todayPurchase = nil
+			netProfitCeiling = snap.NetProfit
+			netProfit = nil
+		}
 		points = append(points, TrendPoint{
-			Date:            snap.Date.Format("2006-01-02"),
-			TodayProfit:     snap.TodayProfit, // 保留 *float64，NULL 表示该天未采集
-			SiteBalance:     derefF64(snap.SiteBalance),
-			TodayPurchase:   snap.TodayPurchase, // 保留 *float64
-			NetProfit:       snap.NetProfit,     // 保留 *float64
-			UpstreamBalance: derefF64(snap.UpstreamBalance),
+			Date:               snap.Date.Format("2006-01-02"),
+			TodayProfit:        snap.TodayProfit, // 保留 *float64，NULL 表示该天未采集
+			SiteBalance:        derefF64(snap.SiteBalance),
+			TodayPurchase:      todayPurchase, // 部分/临时结算不作为正式成本值
+			NetProfit:          netProfit,     // 部分/临时结算不作为正式利润值
+			ConfirmedCost:      confirmedCost,
+			NetProfitCeiling:   netProfitCeiling,
+			SettlementStatus:   status,
+			CostExpectedCount:  snap.CostExpectedCount,
+			CostCollectedCount: snap.CostCollectedCount,
+			UpstreamBalance:    derefF64(snap.UpstreamBalance),
 		})
 	}
 	return TrendResponse{Points: points}, nil
@@ -568,6 +618,9 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 	}
 
 	date := businesstime.Today()
+	if s.realConnections != nil {
+		return s.realGroupUsageToday(ctx, userID, adminAccountID, session, date)
+	}
 	groups, err := s.platform.FetchAdminGroups(session)
 	if err != nil {
 		return GroupUsageTodayResponse{}, err
@@ -687,13 +740,22 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 // 排序、总额与筛选逻辑全部由 upstream.Service.KeyUsageToday 保证，
 // 这里只负责排序展示和响应封装。
 func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID string) (UpstreamKeyUsageTodayResponse, error) {
-	date := businesstime.Today()
+	return s.upstreamKeyUsageTodayForDate(ctx, userID, businesstime.Today(), false)
+}
+
+func (s *MetricsService) upstreamKeyUsageTodayForDate(ctx context.Context, userID, date string, includeZero bool) (UpstreamKeyUsageTodayResponse, error) {
 	// 复用日期和时效校验逻辑，与首页成本卡片口径一致。
 	sites := s.upstreams.List(ctx, userID)
 	_, quality := summarizeCachedUpstreamCostsWithQuality(sites, date, s.maxStaleness())
 	totalSites := quality.ExpectedSites
 	failedSites := quality.FailedSites
-	items, err := s.upstreams.KeyUsageToday(ctx, userID)
+	var items []upstream.KeyUsageTodayItem
+	var err error
+	if includeZero {
+		items, err = s.upstreams.KeyUsageTodayIncludingZeroForDate(ctx, userID, date)
+	} else {
+		items, err = s.upstreams.KeyUsageToday(ctx, userID)
+	}
 	if err != nil {
 		var collectionErr *upstream.KeyUsageCollectionError
 		if !errors.As(err, &collectionErr) || collectionErr.TotalSites <= 0 || collectionErr.FailedSites >= collectionErr.TotalSites {

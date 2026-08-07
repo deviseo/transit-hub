@@ -450,6 +450,42 @@ func (s *PlatformService) FetchSub2APIAdminUsageStats(session Session, startDate
 	return *cost, nil
 }
 
+// FetchAdminUsageStatsForScope 按管理员账号/渠道和主站分组读取指定业务日用量。
+// 该能力目前只对 Sub2API 有明确的 account_id + group_id 合同；其他平台不猜测替代接口。
+func (s *PlatformService) FetchAdminUsageStatsForScope(session Session, accountID, groupID, startDate, endDate string) (AdminUsageStats, error) {
+	if session.Platform != PlatformSub2API {
+		return AdminUsageStats{}, newRequestError(ErrorUnsupported, session.Platform)
+	}
+	if !session.IsAuthenticated() {
+		return AdminUsageStats{}, newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	query := url.Values{}
+	query.Set("start_date", startDate)
+	query.Set("end_date", endDate)
+	query.Set("timezone", businesstime.Timezone)
+	if strings.TrimSpace(accountID) != "" {
+		query.Set("account_id", strings.TrimSpace(accountID))
+	}
+	if strings.TrimSpace(groupID) != "" {
+		query.Set("group_id", strings.TrimSpace(groupID))
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/usage/stats?"+query.Encode(), adminAuthOptions(session))
+	if err != nil {
+		return AdminUsageStats{}, err
+	}
+	data := dataRecord(response.Payload)
+	actual := firstNumber(data, []string{"total_actual_cost", "totalActualCost"})
+	if actual == nil {
+		return AdminUsageStats{}, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+	}
+	stats := AdminUsageStats{TotalActualCost: *actual}
+	stats.TotalAccountCost = firstNumber(data, []string{"total_account_cost", "totalAccountCost"})
+	if requests := firstNumber(data, []string{"total_requests", "totalRequests"}); requests != nil {
+		stats.TotalRequests = int64(*requests)
+	}
+	return stats, nil
+}
+
 // FetchSub2APIAdminSiteBalance 使用默认过滤规则（排除 admin 角色）统计站点用户总余额。
 // my_sites 模块调用此方法时无需关心自定义筛选条件。
 func (s *PlatformService) FetchSub2APIAdminSiteBalance(session Session) (AdminSiteBalance, error) {
@@ -969,11 +1005,25 @@ func (s *PlatformService) FetchNewAPIGroupDailyStatsForDate(session Session, gro
 // FetchKeyUsageToday 按平台分发获取上游站点今天各 key 的消费统计。
 // 返回值为上游平台原始金额，未乘以站点 rechargeRate；由 upstream.Service 层完成 CNY 换算和跨站点聚合。
 func (s *PlatformService) FetchKeyUsageToday(session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
+	date := businesstime.Today()
 	switch session.Platform {
 	case PlatformSub2API:
-		return s.fetchSub2APIKeyUsageToday(session)
+		return s.fetchSub2APIKeyUsageToday(session, false, date)
 	case PlatformNewAPI:
-		return s.fetchNewAPIKeyUsageToday(session, groups)
+		return s.fetchNewAPIKeyUsageToday(session, groups, false, date)
+	default:
+		return nil, newRequestError(ErrorNotFound, "")
+	}
+}
+
+// FetchKeyUsageTodayIncludingZero 与 FetchKeyUsageToday 使用同一日期和权限口径，
+// 但保留真实存在且当日消费为 0 的 key。真实调度利润必须能区分“零成本”和“Key 缺失”。
+func (s *PlatformService) FetchKeyUsageTodayIncludingZero(session Session, groups []GroupInfo, date string) ([]KeyUsageTodayStat, error) {
+	switch session.Platform {
+	case PlatformSub2API:
+		return s.fetchSub2APIKeyUsageToday(session, true, date)
+	case PlatformNewAPI:
+		return s.fetchNewAPIKeyUsageToday(session, groups, true, date)
 	default:
 		return nil, newRequestError(ErrorNotFound, "")
 	}
@@ -1022,7 +1072,7 @@ type sub2APIKeyRecord struct {
 
 // fetchSub2APIKeyUsageToday 分页拉取 sub2api 站点全部 key（不能只取第一页），
 // 再并发查询每个 key 的今日 usage stats（并发上限 maxKeyConcurrency），只保留消费 > 0 的 key。
-func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsageTodayStat, error) {
+func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session, includeZero bool, date string) ([]KeyUsageTodayStat, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
@@ -1068,7 +1118,9 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 		return nil, nil
 	}
 
-	today := businesstime.Today()
+	if strings.TrimSpace(date) == "" {
+		date = businesstime.Today()
+	}
 	const maxKeyConcurrency = 4
 	sem := make(chan struct{}, maxKeyConcurrency)
 	var wg sync.WaitGroup
@@ -1083,7 +1135,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + record.id + "&timezone=Asia%2FShanghai"
+			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + date + "&end_date=" + date + "&api_key_id=" + record.id + "&timezone=Asia%2FShanghai"
 			response, err := s.requestKeyUsageJSON(statsURL, authOptions)
 			if err != nil {
 				mu.Lock()
@@ -1094,7 +1146,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 				return
 			}
 			cost := sub2APIUsageStatsCost(dataRecord(response.Payload))
-			if cost <= 0 {
+			if cost <= 0 && !includeZero {
 				return
 			}
 			groupName := record.groupName
@@ -1120,11 +1172,14 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 // token 记录自带分组字段时直接按 token_name+group 查询；否则仅按 token_name 查询自助统计接口
 // （沿用已验证的 self 统计能力，不做 token×全部分组的穷举以控制并发/请求量）。
 // 并发上限 maxKeyConcurrency，只保留今日 quota 换算金额 > 0 的 token。
-func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInfo) ([]KeyUsageTodayStat, error) {
+func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInfo, includeZero bool, date string) ([]KeyUsageTodayStat, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	cookieOptions := newAPIAuthOptions(session)
+	if strings.TrimSpace(date) == "" {
+		date = businesstime.Today()
+	}
 
 	const pageSize = 100
 	const maxPages = 100
@@ -1189,7 +1244,7 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			startTS, endTS, err := businessDayUnixBounds(businesstime.Today())
+			startTS, endTS, err := businessDayUnixBounds(date)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -1212,7 +1267,7 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 				return
 			}
 			amount := quotaToUSDValueWithUnit(firstNumber(dataRecord(response.Payload), []string{"quota"}), session.QuotaPerUnit)
-			if amount <= 0 {
+			if amount <= 0 && !includeZero {
 				return
 			}
 			groupName := record.groupName

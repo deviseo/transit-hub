@@ -61,6 +61,33 @@ export interface DeltaResult {
   reason?: 'non_adjacent' | 'partial_cost' | 'missing_data'
 }
 
+export type TrendValueQuality = 'exact' | 'confirmed' | 'ceiling' | 'unavailable'
+
+export interface DashboardTrendValueInput {
+  formalValue: number | null | undefined
+  provisionalValue: number | null | undefined
+  status: 'final' | 'partial' | 'provisional' | 'missing' | 'unavailable' | string
+  provisionalQuality: 'confirmed' | 'ceiling'
+}
+
+export interface DashboardTrendValue {
+  value: number | null
+  quality: TrendValueQuality
+}
+
+/** 选择趋势图可展示的正式值或暂估值，绝不把未知数据转换成零。 */
+export function selectDashboardTrendValue(input: DashboardTrendValueInput): DashboardTrendValue {
+  if (typeof input.formalValue === 'number' && Number.isFinite(input.formalValue)) {
+    return { value: input.formalValue, quality: 'exact' }
+  }
+  if ((input.status === 'partial' || input.status === 'provisional')
+    && typeof input.provisionalValue === 'number'
+    && Number.isFinite(input.provisionalValue)) {
+    return { value: input.provisionalValue, quality: input.provisionalQuality }
+  }
+  return { value: null, quality: 'unavailable' }
+}
+
 /** 计算序列最后一个点相对前一个点的变化（今日 vs 昨日）。
  * 新版本接收带日期和状态的点，校验日期相邻性后再计算环比。 */
 export function computeDelta(
@@ -170,6 +197,8 @@ export function buildProfitMarginSeries(revenue: TrendPoint[], profit: TrendPoin
       label: revenuePoint.label,
       date: revenuePoint.date,
       value,
+      quality: profitPoint?.quality,
+      status: profitPoint?.status ?? revenuePoint.status,
     }
   })
 }

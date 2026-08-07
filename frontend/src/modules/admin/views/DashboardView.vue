@@ -34,6 +34,7 @@ import {
   getDashboardTrends,
   getGroupUsageToday,
   getUpstreamBalanceBreakdown,
+  type ProfitIssue,
   type GroupUsageTodayResponse,
   type UpstreamBalanceBreakdownResponse,
 } from '../api/dashboardAdmin'
@@ -323,7 +324,7 @@ const cards = computed<DashboardCoreCard[]>(() => {
   const result: DashboardCoreCard[] = (['todayProfit', 'todayPurchase', 'netProfit'] as DashboardMetricKey[]).flatMap((key) => {
     const current = metric(key)
     if (!current) return []
-    const delta = computeDelta(current.series.month.map(point => ({ value: point.value, date: point.date })))
+    const delta = computeDelta(current.series.month.map(point => ({ value: point.value, date: point.date, status: point.status })))
 
     // todayPurchase：成本不完整时展示已确认成本 + 站点覆盖数
     if (key === 'todayPurchase' && costIncomplete) {
@@ -423,6 +424,42 @@ type GroupMetricMode = 'profit' | 'revenue'
 const groupMetricMode = ref<GroupMetricMode>('profit')
 const groupMetricModes: GroupMetricMode[] = ['profit', 'revenue']
 const groupProfitAvailable = computed(() => groupUsage.value?.profitAvailable === true)
+const groupProfitQuality = computed(() => groupUsage.value?.quality ?? null)
+const groupProfitIssues = computed(() => groupUsage.value?.issues ?? [])
+const groupProfitStatusText = computed(() => {
+  const status = groupProfitQuality.value?.status
+  if (status === 'exact') return t('admin.dashboard.groupUsage.statusExact')
+  if (status === 'partial') return t('admin.dashboard.groupUsage.statusPartial')
+  return t('admin.dashboard.groupUsage.statusUnavailable')
+})
+const groupProfitSummary = computed(() => {
+  const quality = groupProfitQuality.value
+  if (!quality) return t('admin.dashboard.groups.profitUnavailable')
+  return t('admin.dashboard.groupUsage.quality', {
+    status: groupProfitStatusText.value,
+    resolved: quality.resolvedConnections,
+    expected: quality.expectedConnections,
+  })
+})
+const formatProfitIssueScope = (issue: ProfitIssue) => {
+  const ids = [
+    issue.connectionId ? `连接 ${issue.connectionId}` : '',
+    issue.accountId ? `账号 ${issue.accountId}` : '',
+    issue.groupId ? `分组 ${issue.groupId}` : '',
+    issue.siteId ? `站点 ${issue.siteId}` : '',
+    issue.keyId ? `Key ${issue.keyId}` : '',
+  ].filter(Boolean)
+  return ids.join(' · ') || t('admin.dashboard.groupUsage.noDetail')
+}
+const formatProfitIssueMeta = (issue: ProfitIssue) => {
+  const status = issue.httpStatus ? `HTTP ${issue.httpStatus}` : ''
+  const retryable = issue.httpStatus != null || issue.retryable
+    ? (issue.retryable
+      ? t('admin.dashboard.groupUsage.retryable')
+      : t('admin.dashboard.groupUsage.nonRetryable'))
+    : ''
+  return [status, retryable].filter(Boolean).join(' · ')
+}
 const groupMetricLabel = computed(() => t(
   groupMetricMode.value === 'profit'
     ? 'admin.dashboard.groups.profitAmount'
@@ -446,13 +483,24 @@ const groupMetricValue = (item: GroupUsageTodayResponse['groups'][number]): numb
 const period = ref<DashboardPeriod>('week')
 const periods: DashboardPeriod[] = ['week', 'month']
 const selectedSeries = (key: DashboardMetricKey) => metric(key)?.series[period.value] ?? []
-const sumSeries = (key: DashboardMetricKey) => selectedSeries(key).reduce((total, point) => total + (point.value ?? 0), 0)
+const sumSeries = (key: DashboardMetricKey): number | null => {
+  const values = selectedSeries(key)
+    .map(point => point.value)
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  return values.length > 0 ? values.reduce((total, value) => total + value, 0) : null
+}
 
 const periodTotals = computed(() => ({
   revenue: sumSeries('todayProfit'),
   cost: sumSeries('todayPurchase'),
   profit: sumSeries('netProfit'),
 }))
+const periodCostLabel = computed(() => selectedSeries('todayPurchase').some(point => point.quality === 'confirmed')
+  ? t('admin.dashboard.performance.periodConfirmedCost')
+  : t('admin.dashboard.performance.periodCost'))
+const periodProfitLabel = computed(() => selectedSeries('netProfit').some(point => point.quality === 'ceiling')
+  ? t('admin.dashboard.performance.periodProfitCeiling')
+  : t('admin.dashboard.performance.periodProfit'))
 
 const compactCurrency = (value: number) => {
   const absolute = Math.abs(value)
@@ -466,9 +514,27 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
   const cost = selectedSeries('todayPurchase')
   const profit = selectedSeries('netProfit')
   const theme = chartTheme.value
-  const commonSeries = (name: string, data: (number | null)[], color: string) => ({
+  const costName = cost.some(point => point.quality === 'confirmed')
+    ? t('admin.dashboard.costQuality.trendConfirmedCost')
+    : t('admin.dashboard.metrics.todayPurchase')
+  const profitName = profit.some(point => point.quality === 'ceiling')
+    ? t('admin.dashboard.costQuality.trendProfitCeiling')
+    : t('admin.dashboard.metrics.netProfit')
+  const chartData = (points: typeof revenue) => points.map((point) => {
+    if (point.value == null) return null
+    return {
+      value: point.value,
+      quality: point.quality,
+      expected: point.expected,
+      collected: point.collected,
+      itemStyle: point.quality === 'exact'
+        ? undefined
+        : { opacity: 0.58, borderType: 'dashed', borderWidth: 1 },
+    }
+  })
+  const commonSeries = (name: string, points: typeof revenue, color: string) => ({
     name,
-    data,
+    data: chartData(points),
     itemStyle: { color },
     tooltip: { valueFormatter: (value: number | null) => formatCny(value) },
   })
@@ -482,6 +548,38 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
       borderColor: theme.border,
       textStyle: { color: theme.foreground },
       axisPointer: { type: 'shadow', shadowStyle: { color: theme.border } },
+      formatter: (params: unknown) => {
+        const entries = (Array.isArray(params) ? params : [params]) as Array<{
+          axisValue?: unknown
+          seriesName?: unknown
+          value?: unknown
+          data?: { quality?: string; expected?: number | null; collected?: number | null }
+        }>
+        const axisValue = escapeTooltipHtml(String(entries[0]?.axisValue ?? ''))
+        const rows = entries.map((entry) => {
+          const quality = entry.data?.quality === 'confirmed'
+            ? t('admin.dashboard.costQuality.trendConfirmed')
+            : entry.data?.quality === 'ceiling'
+              ? t('admin.dashboard.costQuality.trendCeiling')
+              : entry.data?.quality === 'unavailable'
+                ? t('admin.dashboard.costQuality.trendUnavailable')
+                : ''
+          const label = quality
+            ? `${quality} ${String(entry.seriesName ?? '')}`
+            : String(entry.seriesName ?? '')
+          const coverage = entry.data?.expected != null
+            ? ` (${t('admin.dashboard.costQuality.trendCoverage', {
+                collected: entry.data.collected ?? 0,
+                expected: entry.data.expected,
+              })})`
+            : ''
+          const amount = typeof entry.value === 'number' && Number.isFinite(entry.value)
+            ? formatCny(entry.value)
+            : '¥—'
+          return `${entry.seriesName ? '<span style="display:inline-block;margin-right:4px;border-radius:50%;width:8px;height:8px;background:currentColor"></span>' : ''}${escapeTooltipHtml(label)}${escapeTooltipHtml(coverage)}: ${amount}`
+        }).join('<br/>')
+        return `${axisValue}<br/>${rows}`
+      },
     },
     legend: {
       top: 0,
@@ -505,9 +603,9 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
     },
     dataZoom: period.value === 'month' ? [{ type: 'inside', start: 0, end: 100 }] : [],
     series: [
-      { ...commonSeries(t('admin.dashboard.metrics.todayProfit'), revenue.map(point => point.value), theme.primary), type: 'bar', barMaxWidth: 18, itemStyle: { color: theme.primary, borderRadius: [3, 3, 0, 0] } },
-      { ...commonSeries(t('admin.dashboard.metrics.todayPurchase'), cost.map(point => point.value), theme.warning), type: 'bar', barMaxWidth: 18, itemStyle: { color: theme.warning, borderRadius: [3, 3, 0, 0] } },
-      { ...commonSeries(t('admin.dashboard.metrics.netProfit'), profit.map(point => point.value), theme.signal), type: 'line', smooth: 0.22, symbol: 'circle', symbolSize: 5, lineStyle: { width: 2.5, color: theme.signal }, itemStyle: { color: theme.signal } },
+      { ...commonSeries(t('admin.dashboard.metrics.todayProfit'), revenue, theme.primary), type: 'bar', barMaxWidth: 18, itemStyle: { color: theme.primary, borderRadius: [3, 3, 0, 0] } },
+      { ...commonSeries(costName, cost, theme.warning), type: 'bar', barMaxWidth: 18, itemStyle: { color: theme.warning, borderRadius: [3, 3, 0, 0] } },
+      { ...commonSeries(profitName, profit, theme.signal), type: 'line', smooth: 0.22, symbol: 'circle', symbolSize: 5, lineStyle: { width: 2.5, color: theme.signal }, itemStyle: { color: theme.signal } },
     ],
   }
 })
@@ -853,11 +951,11 @@ const lastProbeLabel = computed(() => {
                 <dd class="mt-1 truncate text-sm font-semibold tabular-nums text-foreground sm:text-base">{{ formatCny(periodTotals.revenue) }}</dd>
               </div>
               <div class="min-w-0 px-2 sm:px-4">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('admin.dashboard.performance.periodCost') }}</dt>
+                <dt class="truncate text-xs text-muted-foreground">{{ periodCostLabel }}</dt>
                 <dd class="mt-1 truncate text-sm font-semibold tabular-nums text-foreground sm:text-base">{{ formatCny(periodTotals.cost) }}</dd>
               </div>
               <div class="min-w-0 px-2 pr-0 sm:px-4 sm:pr-0">
-                <dt class="truncate text-xs text-muted-foreground">{{ t('admin.dashboard.performance.periodProfit') }}</dt>
+                <dt class="truncate text-xs text-muted-foreground">{{ periodProfitLabel }}</dt>
                 <dd class="mt-1 truncate text-sm font-semibold tabular-nums text-signal sm:text-base">{{ formatCny(periodTotals.profit) }}</dd>
               </div>
             </dl>
@@ -964,18 +1062,49 @@ const lastProbeLabel = computed(() => {
                 {{ t('admin.dashboard.retry') }}
               </button>
             </div>
-            <div v-else-if="groupMetricMode === 'profit' && !groupProfitAvailable" class="flex h-[280px] flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
-              <AlertTriangle class="h-5 w-5 text-warning" />
-              <span>{{ t('admin.dashboard.groups.profitUnavailable') }}</span>
-            </div>
-            <div v-else-if="topGroups.length > 0" class="mt-4 h-[280px]">
-              <DashboardEChart
-                :option="groupChartOption"
-                :accessible-label="t(groupMetricMode === 'profit' ? 'admin.dashboard.groups.chartAriaProfit' : 'admin.dashboard.groups.chartAriaRevenue')"
-              />
-            </div>
-            <div v-else class="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-              {{ t('admin.dashboard.groups.empty') }}
+
+            <div v-else>
+              <div
+                v-if="groupMetricMode === 'profit' && groupProfitQuality"
+                class="mt-4 space-y-3 rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-xs"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <span class="font-medium text-foreground">{{ groupProfitSummary }}</span>
+                  <span v-if="groupProfitIssues.length" class="text-warning">
+                    {{ t('admin.dashboard.groupUsage.issuesTitle', { count: groupProfitIssues.length }) }}
+                  </span>
+                </div>
+                <p v-if="groupUsage?.unboundUpstreamCost != null" class="text-muted-foreground">
+                  {{ t('admin.dashboard.groupUsage.unboundCost', { cost: formatCny(groupUsage.unboundUpstreamCost) }) }}
+                </p>
+                <ul v-if="groupProfitIssues.length" class="space-y-2 border-t border-warning/20 pt-2 text-muted-foreground">
+                  <li v-for="issue in groupProfitIssues.slice(0, 5)" :key="`${issue.code}-${issue.connectionId ?? issue.groupId ?? issue.keyId ?? 'global'}`" class="space-y-0.5">
+                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span class="font-medium text-foreground">{{ issue.code }}</span>
+                      <span>{{ formatProfitIssueMeta(issue) }}</span>
+                    </div>
+                    <div>{{ formatProfitIssueScope(issue) }}</div>
+                    <div v-if="issue.detail">{{ issue.detail }}</div>
+                  </li>
+                  <li v-if="groupProfitIssues.length > 5" class="text-muted-foreground">
+                    +{{ groupProfitIssues.length - 5 }} 项问题未展开
+                  </li>
+                </ul>
+              </div>
+
+              <div v-if="groupMetricMode === 'profit' && !groupProfitAvailable" class="flex h-[280px] flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
+                <AlertTriangle class="h-5 w-5 text-warning" />
+                <span>{{ groupProfitSummary }}</span>
+              </div>
+              <div v-else-if="topGroups.length > 0" class="mt-4 h-[280px]">
+                <DashboardEChart
+                  :option="groupChartOption"
+                  :accessible-label="t(groupMetricMode === 'profit' ? 'admin.dashboard.groups.chartAriaProfit' : 'admin.dashboard.groups.chartAriaRevenue')"
+                />
+              </div>
+              <div v-else class="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
+                {{ t('admin.dashboard.groups.empty') }}
+              </div>
             </div>
 
             <div class="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-4 text-sm">

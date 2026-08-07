@@ -37,9 +37,11 @@ type PlatformClient interface {
 	VerifyAdmin(session upstream.Session) error
 	RefreshSession(session upstream.Session) (upstream.Session, error)
 	FetchAdminUsageStats(session upstream.Session, startDate, endDate string) (float64, error)
+	FetchAdminUsageStatsForScope(session upstream.Session, accountID, groupID, startDate, endDate string) (upstream.AdminUsageStats, error)
 	FetchAdminSiteBalanceFiltered(session upstream.Session, filter upstream.BalanceFilter) (upstream.AdminSiteBalance, error)
 	FetchAdminGroups(session upstream.Session) ([]upstream.GroupInfo, error)
 	FetchAdminAllGroups(session upstream.Session) ([]upstream.AdminGroupInfo, error)
+	ListAdminGroupAccounts(session upstream.Session, group upstream.AdminGroupInfo) ([]upstream.AdminGroupAccountInfo, error)
 	FetchAdminGroupDailyStats(session upstream.Session, groups []upstream.GroupInfo) ([]upstream.GroupDailyStat, error)
 	FetchAdminGroupDailyStatsForDate(session upstream.Session, groups []upstream.GroupInfo, date string) ([]upstream.GroupDailyStat, error)
 	// FetchCostForDate 查询上游站点指定上海业务日期的成本（按日精确查询，不使用缓存）。

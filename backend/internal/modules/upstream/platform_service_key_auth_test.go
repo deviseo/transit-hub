@@ -139,6 +139,45 @@ func TestFetchSub2APIAdminUsageStatsUsesAdminAPIKey(t *testing.T) {
 	}
 }
 
+func TestFetchAdminUsageStatsForScopeUsesAccountAndGroupFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/usage/stats" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		for key, want := range map[string]string{
+			"account_id": "account-1",
+			"group_id":   "group-1",
+			"start_date": "2026-08-07",
+			"end_date":   "2026-08-07",
+			"timezone":   "Asia/Shanghai",
+		} {
+			if got := r.URL.Query().Get(key); got != want {
+				t.Fatalf("%s = %q, want %q", key, got, want)
+			}
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("authorization = %q, want bearer token", got)
+		}
+		writeJSON(w, map[string]any{"data": map[string]any{
+			"total_actual_cost":  123.45,
+			"total_account_cost": 100.0,
+			"total_requests":     7,
+		}})
+	}))
+	defer server.Close()
+
+	stats, err := NewPlatformService(NewHTTPClient(server.Client())).FetchAdminUsageStatsForScope(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"},
+		"account-1", "group-1", "2026-08-07", "2026-08-07",
+	)
+	if err != nil {
+		t.Fatalf("FetchAdminUsageStatsForScope() error: %v", err)
+	}
+	if stats.TotalActualCost != 123.45 || stats.TotalAccountCost == nil || *stats.TotalAccountCost != 100 || stats.TotalRequests != 7 {
+		t.Fatalf("unexpected scoped stats: %+v", stats)
+	}
+}
+
 func TestFetchNewAPIAdminUsageStatsUsesShanghaiBusinessDayBounds(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/log/self/stat" {

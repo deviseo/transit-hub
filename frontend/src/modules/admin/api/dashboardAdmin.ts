@@ -87,6 +87,9 @@ export interface DashboardMetricsResponse {
   siteBalance: number
   todayPurchase: number | null
   netProfit: number | null
+  confirmedCost?: number | null
+  netProfitCeiling?: number | null
+  settlementStatus?: 'final' | 'partial' | 'provisional' | 'unavailable' | string
   upstreamBalance: number
   groupCount: number
   metricErrors?: Partial<Record<DashboardMetricKey, string>>
@@ -118,6 +121,11 @@ export interface DashboardTrendPoint {
   siteBalance: number
   todayPurchase: number | null
   netProfit: number | null
+  confirmedCost?: number | null
+  netProfitCeiling?: number | null
+  settlementStatus?: 'final' | 'partial' | 'provisional' | 'missing' | 'unavailable' | string
+  costExpectedCount?: number | null
+  costCollectedCount?: number | null
   upstreamBalance: number
 }
 
@@ -169,6 +177,46 @@ export const getDashboardMetrics = async (): Promise<DashboardMetricsResponse> =
 export const getDashboardTrends = async (days: number): Promise<DashboardTrendsResponse> =>
   requestJson<DashboardTrendsResponse>(`/dashboard/trends?days=${days}`)
 
+/** 单个利润核算问题；只包含可安全展示的稳定 ID 和错误元数据。 */
+export interface ProfitIssue {
+  code: string
+  source?: string
+  stage?: string
+  connectionId?: string
+  siteId?: string
+  keyId?: string
+  accountId?: string
+  groupId?: string
+  httpStatus?: number
+  retryable?: boolean
+  detail?: string
+  observedAt?: string
+  runId?: string
+}
+
+export interface GroupProfitQuality {
+  status: 'exact' | 'partial' | 'unavailable' | string
+  expectedConnections: number
+  resolvedConnections: number
+  unallocatableConnections: number
+  failedConnections: number
+  businessDate: string
+  observedAt?: string
+  runId?: string
+}
+
+export interface GroupProfitConnection {
+  connectionId: string
+  accountId: string
+  groupId: string
+  siteId: string
+  keyId: string
+  revenue?: number | null
+  cost?: number | null
+  profit?: number | null
+  status: string
+}
+
 /** 单个分组的今日营收、成本与利润。todayAmount 保留为营收兼容字段。 */
 export interface GroupUsageTodayItem {
   groupName: string
@@ -176,6 +224,10 @@ export interface GroupUsageTodayItem {
   todayRevenue: number
   todayCost?: number | null
   todayProfit?: number | null
+  groupId?: string
+  status?: string
+  issues?: ProfitIssue[]
+  connections?: GroupProfitConnection[]
 }
 
 /** 分组今日营收明细，以及在成本口径完整时实时派生的利润明细。 */
@@ -187,6 +239,9 @@ export interface GroupUsageTodayResponse {
   totalProfit?: number | null
   profitAvailable: boolean
   profitUnavailableReason?: string
+  quality?: GroupProfitQuality
+  issues?: ProfitIssue[]
+  unboundUpstreamCost?: number | null
   groups: GroupUsageTodayItem[]
 }
 

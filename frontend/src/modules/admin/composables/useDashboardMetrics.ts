@@ -17,6 +17,7 @@ import {
   type DashboardTrendPoint,
   type DashboardTrendsResponse,
 } from '../api/dashboardAdmin'
+import { selectDashboardTrendValue } from '../utils/dashboard'
 
 const METRIC_CONFIGS: { key: DashboardMetricKey; color: DashboardColorToken }[] = [
   { key: 'todayProfit', color: 'primary' },
@@ -50,6 +51,11 @@ function buildMetricData(
     siteBalance: number
     todayPurchase: number | null
     netProfit: number | null
+    confirmedCost?: number | null
+    netProfitCeiling?: number | null
+    settlementStatus?: string
+    costExpectedCount?: number | null
+    costCollectedCount?: number | null
     upstreamBalance: number
   }
   const pointsByDate = new Map<string, LivePoint>()
@@ -60,6 +66,11 @@ function buildMetricData(
       siteBalance: point.siteBalance,
       todayPurchase: point.todayPurchase,
       netProfit: point.netProfit,
+      confirmedCost: point.confirmedCost,
+      netProfitCeiling: point.netProfitCeiling,
+      settlementStatus: point.settlementStatus,
+      costExpectedCount: point.costExpectedCount,
+      costCollectedCount: point.costCollectedCount,
       upstreamBalance: point.upstreamBalance,
     })
   }
@@ -71,18 +82,40 @@ function buildMetricData(
       siteBalance: live.siteBalance,
       todayPurchase: live.todayPurchase,
       netProfit: live.netProfit,
+      confirmedCost: live.confirmedCost,
+      netProfitCeiling: live.netProfitCeiling,
+      settlementStatus: live.settlementStatus,
+      costExpectedCount: live.costQuality?.expectedSites,
+      costCollectedCount: live.costQuality?.collectedSites,
       upstreamBalance: live.upstreamBalance,
     })
   }
 
   const monthPoints: TrendPoint[] = Array.from(pointsByDate.values())
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map((p) => ({
-      label: dateLabel(p.date),
-      // 保留 null：指标不可用时图表显示断点，而不是伪零值。
-      value: (p[key] as number | null | undefined) ?? null,
-      date: p.date,
-    }))
+    .map((p) => {
+      const provisionalQuality = key === 'todayPurchase' ? 'confirmed' : 'ceiling'
+      const provisionalValue = key === 'todayPurchase'
+        ? p.confirmedCost
+        : key === 'netProfit'
+          ? p.netProfitCeiling
+          : null
+      const selected = selectDashboardTrendValue({
+        formalValue: p[key] as number | null | undefined,
+        provisionalValue,
+        status: p.settlementStatus ?? 'unavailable',
+        provisionalQuality,
+      })
+      return {
+        label: dateLabel(p.date),
+        value: selected.value,
+        quality: selected.quality,
+        status: p.settlementStatus,
+        expected: p.costExpectedCount,
+        collected: p.costCollectedCount,
+        date: p.date,
+      }
+    })
 
   const week = monthPoints.slice(-7)
   const month = monthPoints.slice(-30)

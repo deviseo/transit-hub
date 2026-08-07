@@ -238,6 +238,23 @@ func (s *Service) FetchGroupDailyStats(ctx context.Context, userID string, id st
 // todayPurchase 的统计口径完全一致（rechargeRate <= 0 的站点被整体跳过），确保弹窗总额与卡片数值一致。
 // 站点级并发限制 4；任一站点请求上游平台失败即让整个方法返回错误，不允许把失败站点当 0 处理。
 func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageTodayItem, error) {
+	return s.keyUsageToday(ctx, userID, false, businesstime.Today())
+}
+
+// KeyUsageTodayIncludingZero 保留真实存在但当日零消费的 key，供稳定绑定利润核算使用。
+// 普通成本下钻仍使用 KeyUsageToday，只展示有消费的 key。
+func (s *Service) KeyUsageTodayIncludingZero(ctx context.Context, userID string) ([]KeyUsageTodayItem, error) {
+	return s.keyUsageToday(ctx, userID, true, businesstime.Today())
+}
+
+func (s *Service) KeyUsageTodayIncludingZeroForDate(ctx context.Context, userID, date string) ([]KeyUsageTodayItem, error) {
+	return s.keyUsageToday(ctx, userID, true, date)
+}
+
+func (s *Service) keyUsageToday(ctx context.Context, userID string, includeZero bool, date string) ([]KeyUsageTodayItem, error) {
+	if strings.TrimSpace(date) == "" {
+		date = businesstime.Today()
+	}
 	adminAccountID, err := s.requireCurrentAdminAccountID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -287,7 +304,13 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 				return
 			}
 
-			stats, fetchErr := s.platformService.FetchKeyUsageToday(refreshedSession, groups)
+			var stats []KeyUsageTodayStat
+			var fetchErr error
+			if includeZero {
+				stats, fetchErr = s.platformService.FetchKeyUsageTodayIncludingZero(refreshedSession, groups, date)
+			} else {
+				stats, fetchErr = s.platformService.FetchKeyUsageToday(refreshedSession, groups)
+			}
 			if fetchErr != nil {
 				recordFailure(fetchErr)
 				return
@@ -302,7 +325,7 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 
 			mu.Lock()
 			for _, stat := range stats {
-				if stat.TodayAmount <= 0 {
+				if stat.TodayAmount <= 0 && !includeZero {
 					continue
 				}
 				groupName := strings.TrimSpace(stat.GroupName)

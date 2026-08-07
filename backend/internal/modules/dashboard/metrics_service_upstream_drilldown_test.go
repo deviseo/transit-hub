@@ -33,6 +33,11 @@ func (f *fakeUpstreamLister) KeyUsageToday(ctx context.Context, userID string) (
 	return f.keyUsageItems, f.keyUsageErr
 }
 
+func (f *fakeUpstreamLister) KeyUsageTodayIncludingZeroForDate(ctx context.Context, userID, date string) ([]upstream.KeyUsageTodayItem, error) {
+	f.keyUsageCalls++
+	return f.keyUsageItems, f.keyUsageErr
+}
+
 func (f *fakeUpstreamLister) BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error) {
 	return f.balanceItems, f.balanceErr
 }
