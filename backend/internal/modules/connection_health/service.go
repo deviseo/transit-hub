@@ -51,6 +51,8 @@ type healthRepository interface {
 	ListAllPrioritySyncStates(ctx context.Context) ([]PrioritySyncState, error)
 	UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error
 	DeletePrioritySyncState(ctx context.Context, userID string, adminAccountID string, targetID string) error
+	GetPriorityWorkspaceSyncState(ctx context.Context, userID string, adminAccountID string) (*PriorityWorkspaceSyncState, error)
+	UpsertPriorityWorkspaceSyncState(ctx context.Context, state PriorityWorkspaceSyncState) error
 	GetTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) (*TargetActionState, error)
 	ListTargetActionStates(ctx context.Context, userID string, adminAccountID string) ([]TargetActionState, error)
 	ListAllTargetActionStates(ctx context.Context) ([]TargetActionState, error)
@@ -74,6 +76,7 @@ type Service struct {
 	schedulableActions TargetSchedulableActioner
 	probeLimiterMu     sync.Mutex
 	probeLimiter       *probeConcurrencyLimiter
+	now                func() time.Time
 }
 
 func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platform PlatformActioner) *Service {
@@ -182,15 +185,16 @@ type EventView struct {
 
 // OverviewResponse 是大屏顶部汇总卡片的数据。
 type OverviewResponse struct {
-	TotalConnections int         `json:"totalConnections"`
-	Healthy          int         `json:"healthy"`
-	Degraded         int         `json:"degraded"`
-	Suspended        int         `json:"suspended"`
-	Observing        int         `json:"observing"`
-	Recovering       int         `json:"recovering"`
-	Disabled         int         `json:"disabled"`
-	Unconfigured     int         `json:"unconfigured"`
-	RecentEvents     []EventView `json:"recentEvents"`
+	TotalConnections int                         `json:"totalConnections"`
+	Healthy          int                         `json:"healthy"`
+	Degraded         int                         `json:"degraded"`
+	Suspended        int                         `json:"suspended"`
+	Observing        int                         `json:"observing"`
+	Recovering       int                         `json:"recovering"`
+	Disabled         int                         `json:"disabled"`
+	Unconfigured     int                         `json:"unconfigured"`
+	RecentEvents     []EventView                 `json:"recentEvents"`
+	PrioritySync     *PriorityWorkspaceSyncState `json:"prioritySync,omitempty"`
 }
 
 // StoredSummaryResponse 是工作台使用的轻量健康摘要。它只聚合本地状态、事件和动作接管表，
@@ -418,6 +422,11 @@ func (s *Service) Overview(ctx context.Context, userID string) (OverviewResponse
 			return OverviewResponse{}, err
 		}
 		resp.RecentEvents = toEventViews(events)
+		prioritySync, err := s.repo.GetPriorityWorkspaceSyncState(ctx, userID, adminAccountID)
+		if err != nil {
+			return OverviewResponse{}, err
+		}
+		resp.PrioritySync = prioritySync
 		return resp, nil
 	}
 
@@ -492,6 +501,11 @@ func (s *Service) Overview(ctx context.Context, userID string) (OverviewResponse
 		events = events[:50]
 	}
 	resp.RecentEvents = toEventViews(events)
+	prioritySync, err := s.repo.GetPriorityWorkspaceSyncState(ctx, userID, adminAccountID)
+	if err != nil {
+		return OverviewResponse{}, err
+	}
+	resp.PrioritySync = prioritySync
 	return resp, nil
 }
 
@@ -669,26 +683,27 @@ type ModelTargetInput struct {
 }
 
 type PolicyInput struct {
-	ID                                string             `json:"id"`
-	Name                              string             `json:"name"`
-	Enabled                           bool               `json:"enabled"`
-	OwnGroupID                        string             `json:"ownGroupId"`
-	OwnGroupName                      string             `json:"ownGroupName"`
-	ModelPattern                      string             `json:"modelPattern"`
-	ProbeIntervalSeconds              int                `json:"probeIntervalSeconds"`
-	ContinueProbeWhenUnschedulable    *bool              `json:"continueProbeWhenUnschedulable"`
-	UnschedulableProbeIntervalMinutes *int               `json:"unschedulableProbeIntervalMinutes"`
-	FailureThreshold                  int                `json:"failureThreshold"`
-	SuccessThreshold                  int                `json:"successThreshold"`
-	CooldownSeconds                   int                `json:"cooldownSeconds"`
-	ObservationSeconds                int                `json:"observationSeconds"`
-	RecoveryStepPercent               int                `json:"recoveryStepPercent"`
-	AutoDegradeEnabled                bool               `json:"autoDegradeEnabled"`
-	AutoRemoteActionEnabled           bool               `json:"autoRemoteActionEnabled"`
-	PriorityMode                      string             `json:"priorityMode"`
-	StrategyMode                      string             `json:"strategyMode"`
-	DailyProbeBudget                  int                `json:"dailyProbeBudget"`
-	ModelTargets                      []ModelTargetInput `json:"modelTargets"`
+	ID                                string              `json:"id"`
+	Name                              string              `json:"name"`
+	Enabled                           bool                `json:"enabled"`
+	OwnGroupID                        string              `json:"ownGroupId"`
+	OwnGroupName                      string              `json:"ownGroupName"`
+	ModelPattern                      string              `json:"modelPattern"`
+	ProbeIntervalSeconds              int                 `json:"probeIntervalSeconds"`
+	ContinueProbeWhenUnschedulable    *bool               `json:"continueProbeWhenUnschedulable"`
+	UnschedulableProbeIntervalMinutes *int                `json:"unschedulableProbeIntervalMinutes"`
+	FailureThreshold                  int                 `json:"failureThreshold"`
+	SuccessThreshold                  int                 `json:"successThreshold"`
+	CooldownSeconds                   int                 `json:"cooldownSeconds"`
+	ObservationSeconds                int                 `json:"observationSeconds"`
+	RecoveryStepPercent               int                 `json:"recoveryStepPercent"`
+	AutoDegradeEnabled                bool                `json:"autoDegradeEnabled"`
+	AutoRemoteActionEnabled           bool                `json:"autoRemoteActionEnabled"`
+	PriorityMode                      string              `json:"priorityMode"`
+	StrategyMode                      string              `json:"strategyMode"`
+	PrioritySyncPreset                *PrioritySyncPreset `json:"prioritySyncPreset"`
+	DailyProbeBudget                  int                 `json:"dailyProbeBudget"`
+	ModelTargets                      []ModelTargetInput  `json:"modelTargets"`
 }
 
 func (s *Service) ListPolicies(ctx context.Context, userID string) ([]Policy, error) {
@@ -733,6 +748,10 @@ func (s *Service) SavePolicy(ctx context.Context, userID string, in PolicyInput)
 		if in.UnschedulableProbeIntervalMinutes == nil {
 			value := defaultInt(existing.UnschedulableProbeIntervalMinutes, 60)
 			in.UnschedulableProbeIntervalMinutes = &value
+		}
+		if in.PrioritySyncPreset == nil {
+			preset := existing.PrioritySyncPreset
+			in.PrioritySyncPreset = &preset
 		}
 	}
 
@@ -784,6 +803,10 @@ func buildPolicyAndTargets(userID string, adminAccountID string, id string, in P
 		unschedulableIntervalMinutes = *in.UnschedulableProbeIntervalMinutes
 	}
 	strategyMode := normalizeStrategyMode(in.StrategyMode)
+	preset, presetErr := normalizePrioritySyncPreset(in.PrioritySyncPreset)
+	if presetErr != nil {
+		return Policy{}, nil, presetErr
+	}
 	policy := Policy{
 		ID: id, UserID: userID, AdminAccountID: adminAccountID, Name: strings.TrimSpace(in.Name), Enabled: in.Enabled,
 		OwnGroupID: in.OwnGroupID, OwnGroupName: in.OwnGroupName, ModelPattern: defaultString(in.ModelPattern, "*"),
@@ -794,8 +817,9 @@ func buildPolicyAndTargets(userID string, adminAccountID string, id string, in P
 		CooldownSeconds: defaultInt(in.CooldownSeconds, 300), ObservationSeconds: defaultInt(in.ObservationSeconds, 300),
 		RecoveryStepPercent: defaultInt(in.RecoveryStepPercent, 25), AutoDegradeEnabled: in.AutoDegradeEnabled,
 		AutoRemoteActionEnabled: in.AutoDegradeEnabled && in.AutoRemoteActionEnabled, PriorityMode: normalizePriorityMode(in.PriorityMode),
-		StrategyMode:     strategyMode,
-		DailyProbeBudget: defaultInt(in.DailyProbeBudget, 1000),
+		StrategyMode:       strategyMode,
+		PrioritySyncPreset: preset,
+		DailyProbeBudget:   defaultInt(in.DailyProbeBudget, 1000),
 	}
 	if strategyMode == StrategyModeMultiplierOnly {
 		// 仅倍率策略不拥有任何探活行为。即使错误或旧客户端同时提交了探活字段，也在服务端
@@ -838,6 +862,35 @@ func normalizeStrategyMode(mode string) string {
 		return StrategyModeMultiplierOnly
 	}
 	return StrategyModeHealthProbe
+}
+
+func normalizePrioritySyncPreset(input *PrioritySyncPreset) (PrioritySyncPreset, error) {
+	preset := PrioritySyncPreset{
+		MinWriteIntervalSeconds: defaultPriorityMinWriteIntervalSeconds,
+		MaxPendingAgeSeconds:    defaultPriorityMaxPendingAgeSeconds,
+		DriftAction:             PriorityDriftActionAlertOnly,
+		ReadMode:                PriorityReadModeInventory,
+	}
+	if input == nil {
+		return preset, nil
+	}
+	if input.MinWriteIntervalSeconds != 0 {
+		preset.MinWriteIntervalSeconds = input.MinWriteIntervalSeconds
+	}
+	if input.MaxPendingAgeSeconds != 0 {
+		preset.MaxPendingAgeSeconds = input.MaxPendingAgeSeconds
+	}
+	if strings.TrimSpace(input.DriftAction) != "" {
+		preset.DriftAction = strings.TrimSpace(input.DriftAction)
+	}
+	if strings.TrimSpace(input.ReadMode) != "" {
+		preset.ReadMode = strings.TrimSpace(input.ReadMode)
+	}
+	if preset.MinWriteIntervalSeconds <= 0 || preset.MaxPendingAgeSeconds < preset.MinWriteIntervalSeconds ||
+		preset.DriftAction != PriorityDriftActionAlertOnly || preset.ReadMode != PriorityReadModeInventory {
+		return PrioritySyncPreset{}, requestError(ErrorRequest)
+	}
+	return preset, nil
 }
 
 func policySupportsProbing(policy Policy) bool {

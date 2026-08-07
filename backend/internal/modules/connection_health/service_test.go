@@ -19,35 +19,37 @@ import (
 
 // fakeRepository 是 healthRepository 的内存实现，供 service 单测使用，不连接真实数据库。
 type fakeRepository struct {
-	policies           []Policy
-	states             map[string]map[string]ConnectionHealthState // connectionID -> modelName -> state
-	events             []ConnectionHealthEvent
-	assignments        []PolicyAssignment
-	groupAssignments   []GroupPolicyAssignment
-	groupExclusions    []GroupTargetExclusion
-	priorityStates     map[string]PrioritySyncState
-	targetActionStates map[string]TargetActionState
-	groupSortSettings  map[string]GroupProbeSortSetting
-	budgetClaims       map[string]int
-	insertEventErr     error
-	upsertStateErr     error
-	savePolicyErr      error
-	deletePolicyErr    error
-	targetLeaseBlocked bool
-	priorityLeaseMu    sync.Mutex
-	priorityLeases     map[string]*sync.Mutex
-	priorityLeaseCount map[string]int
+	policies                []Policy
+	states                  map[string]map[string]ConnectionHealthState // connectionID -> modelName -> state
+	events                  []ConnectionHealthEvent
+	assignments             []PolicyAssignment
+	groupAssignments        []GroupPolicyAssignment
+	groupExclusions         []GroupTargetExclusion
+	priorityStates          map[string]PrioritySyncState
+	priorityWorkspaceStates map[string]PriorityWorkspaceSyncState
+	targetActionStates      map[string]TargetActionState
+	groupSortSettings       map[string]GroupProbeSortSetting
+	budgetClaims            map[string]int
+	insertEventErr          error
+	upsertStateErr          error
+	savePolicyErr           error
+	deletePolicyErr         error
+	targetLeaseBlocked      bool
+	priorityLeaseMu         sync.Mutex
+	priorityLeases          map[string]*sync.Mutex
+	priorityLeaseCount      map[string]int
 }
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		states:             map[string]map[string]ConnectionHealthState{},
-		priorityStates:     map[string]PrioritySyncState{},
-		targetActionStates: map[string]TargetActionState{},
-		groupSortSettings:  map[string]GroupProbeSortSetting{},
-		budgetClaims:       map[string]int{},
-		priorityLeases:     map[string]*sync.Mutex{},
-		priorityLeaseCount: map[string]int{},
+		states:                  map[string]map[string]ConnectionHealthState{},
+		priorityStates:          map[string]PrioritySyncState{},
+		priorityWorkspaceStates: map[string]PriorityWorkspaceSyncState{},
+		targetActionStates:      map[string]TargetActionState{},
+		groupSortSettings:       map[string]GroupProbeSortSetting{},
+		budgetClaims:            map[string]int{},
+		priorityLeases:          map[string]*sync.Mutex{},
+		priorityLeaseCount:      map[string]int{},
 	}
 }
 
@@ -691,6 +693,23 @@ func (f *fakeRepository) UpsertPrioritySyncState(ctx context.Context, state Prio
 
 func (f *fakeRepository) DeletePrioritySyncState(ctx context.Context, userID string, adminAccountID string, targetID string) error {
 	delete(f.priorityStates, userID+"|"+adminAccountID+"|"+targetID)
+	return nil
+}
+
+func (f *fakeRepository) GetPriorityWorkspaceSyncState(ctx context.Context, userID string, adminAccountID string) (*PriorityWorkspaceSyncState, error) {
+	state, ok := f.priorityWorkspaceStates[userID+"|"+adminAccountID]
+	if !ok {
+		return nil, nil
+	}
+	copy := state
+	return &copy, nil
+}
+
+func (f *fakeRepository) UpsertPriorityWorkspaceSyncState(ctx context.Context, state PriorityWorkspaceSyncState) error {
+	if f.priorityWorkspaceStates == nil {
+		f.priorityWorkspaceStates = map[string]PriorityWorkspaceSyncState{}
+	}
+	f.priorityWorkspaceStates[state.UserID+"|"+state.AdminAccountID] = state
 	return nil
 }
 

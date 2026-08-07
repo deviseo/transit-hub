@@ -1253,6 +1253,36 @@ export default {
         monitoredGroups: '已监控分组',
         priorityConflicts: '优先级冲突'
       },
+      prioritySync: {
+        decision: 'Priority 写回',
+        interval: '最短写回间隔',
+        intervalValue: '{seconds} 秒',
+        writes: '主站写入成功/尝试',
+        skips: '已抑制写入',
+        decisions: {
+          applied: '已写回最新排序',
+          observed_applied: '主站已是最新排序',
+          pending: '等待写回窗口',
+          skipped: '排序未变化',
+          signature_reverted: '排序已恢复原状',
+          suppressed: '等待完整排序输入',
+          drift_alert: '检测到人工优先级漂移',
+          failed: '主站写回失败',
+          unknown: '尚未评估'
+        },
+        reasons: {
+          none: '无',
+          signature_unchanged: '稳定生产顺序未变化',
+          min_write_interval: '窗口内保留最新排序',
+          inventory_incomplete: '主站目标读取不完整',
+          sort_input_unavailable: '排序输入暂不可用',
+          priority_input_unavailable: '主站 priority 暂不可读',
+          manual_priority_drift: '已告警，不覆盖人工 priority',
+          priority_pending_overdue: 'pending 等待超过预期',
+          priority_checkpoint_read_failed: 'priority checkpoint 读取失败',
+          priority_write_failed: '最近一次主站 priority 写入失败'
+        }
+      },
       stateLabels: {
         healthy: '健康',
         degraded: '降级',
@@ -1460,6 +1490,9 @@ export default {
         autoRemoteActionLabel: '自动远端动作',
         autoRemoteActionHelp: 'NewAPI 会修改 channel 权重/状态，Sub2API 会切换 admin 账号 active/inactive。关闭后只记录健康结果，不调用上游。',
         priorityModeLabel: '上游流量优先级',
+        priorityWriteIntervalLabel: '最短 Priority 写回间隔',
+        priorityWriteIntervalHelp: '只限制主站 priority 写入，不改变探活频率。排序未变时不会写入；主站人工修改默认只告警，不自动覆盖。',
+        secondsUnit: '秒',
         priorityModes: {
           none: '保持上游设置',
           multiplier: '按分组倍率排序'
@@ -1485,7 +1518,8 @@ export default {
           recoveryStep: '恢复过程中每次探活成功会按该百分比逐步提高本地权重，不是一次性恢复到 100%。',
           autoDegrade: '开启后，探活结果会推进链路的健康状态机并调整本地转发权重；关闭后只记录探活结果，不会自动改变状态或权重。',
           autoRemoteAction: '开启后，状态机触发降级/恢复时会执行受支持的上游动作：Sub2API 切换 admin 账号 active/inactive，NewAPI 调整 channel 权重/状态。关闭后只记录探活和状态结果。',
-          priorityMode: '健康探活模式先看健康档位，再使用唯一可靠的上游 Key 倍率；确定性缺失或多 Key 冲突时使用分组配置的本地回退倍率，同倍率再按最近成功延迟排序。上游查询暂不可用时保持上次排序。仅倍率模式始终只使用主站分组倍率。'
+          priorityMode: '健康探活模式先看健康档位，再使用唯一可靠的上游 Key 倍率；确定性缺失或多 Key 冲突时使用分组配置的本地回退倍率，同倍率再按最近成功延迟排序。上游查询暂不可用时保持上次排序。仅倍率模式始终只使用主站分组倍率。',
+          priorityWriteInterval: '同一 workspace 两次主站 priority 写入至少相隔此时长。窗口内只保留最新排序，探活仍按原策略继续执行。'
         },
         runFlow: {
           buttonLabel: '运行流程',
@@ -1539,7 +1573,8 @@ export default {
           nameRequired: '请输入策略名称。',
           modelTargetRequired: '至少需要一个已填写模型名称的探活目标。',
           providerRequired: '请选择该策略的 provider。',
-          unschedulableIntervalInvalid: '关闭调度后的探活间隔必须是正整数分钟。'
+          unschedulableIntervalInvalid: '关闭调度后的探活间隔必须是正整数分钟。',
+          priorityWriteIntervalInvalid: '最短 Priority 写回间隔必须是正整数秒。'
         }
       },
       probeDialog: {

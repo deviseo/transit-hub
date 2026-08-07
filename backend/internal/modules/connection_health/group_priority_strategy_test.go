@@ -295,7 +295,8 @@ func TestSetAdminGroupPolicyConfiguration_QuickPolicyCreatesAndBindsTogether(t *
 	configuration, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
 		QuickPolicy: &PolicyInput{
 			Name: "quick", Enabled: true, AutoDegradeEnabled: true, AutoRemoteActionEnabled: true,
-			ModelTargets: []ModelTargetInput{{ModelName: "gpt-4o", ProviderFamily: ProviderOpenAI, Enabled: true}},
+			PrioritySyncPreset: &PrioritySyncPreset{MinWriteIntervalSeconds: 10, MaxPendingAgeSeconds: 20, DriftAction: PriorityDriftActionAlertOnly, ReadMode: PriorityReadModeInventory},
+			ModelTargets:       []ModelTargetInput{{ModelName: "gpt-4o", ProviderFamily: ProviderOpenAI, Enabled: true}},
 		},
 	})
 	if err != nil {
@@ -303,6 +304,9 @@ func TestSetAdminGroupPolicyConfiguration_QuickPolicyCreatesAndBindsTogether(t *
 	}
 	if len(configuration.PolicyIDs) != 1 || len(repo.policies) != 1 || repo.policies[0].ID != configuration.PolicyIDs[0] {
 		t.Fatalf("quick policy must be created and bound in one operation: config=%+v policies=%+v", configuration, repo.policies)
+	}
+	if got := repo.policies[0].PrioritySyncPreset; got.MinWriteIntervalSeconds != 10 || got.MaxPendingAgeSeconds != 20 {
+		t.Fatalf("quick policy must preserve priority sync preset: %+v", got)
 	}
 }
 

@@ -654,7 +654,7 @@ func TestCollectAdminProbeJobs_MultiWorkspaceIsolation(t *testing.T) {
 	}
 }
 
-func TestRunSchedulerTick_SyncsPriorityAfterProbeStateChanges(t *testing.T) {
+func TestRunSchedulerTick_DoesNotWritePriorityWhenOneTargetHealthChangesWithoutReordering(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -702,8 +702,8 @@ func TestRunSchedulerTick_SyncsPriorityAfterProbeStateChanges(t *testing.T) {
 	if stored.State != StateSuspended {
 		t.Fatalf("probe state = %q, want suspended", stored.State)
 	}
-	if len(priorityActions.calls) != 1 || priorityActions.calls[0].priority != 1 {
-		t.Fatalf("post-probe priority was not synchronized in the same tick: calls=%+v priority_states=%+v states=%+v", priorityActions.calls, repo.priorityStates, repo.states)
+	if len(priorityActions.calls) != 0 {
+		t.Fatalf("a health-only change without a global order change must not write priority: calls=%+v priority_states=%+v states=%+v", priorityActions.calls, repo.priorityStates, repo.states)
 	}
 	if repo.priorityLeaseCount["user1|ws1"] != 2 {
 		t.Fatalf("scheduler priority sync must use the workspace lease before and after probes: %+v", repo.priorityLeaseCount)

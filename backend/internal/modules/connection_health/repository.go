@@ -49,6 +49,10 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			auto_remote_action_enabled boolean NOT NULL DEFAULT true,
 			priority_mode text NOT NULL DEFAULT 'none',
 			strategy_mode text NOT NULL DEFAULT 'health_probe',
+			priority_min_write_interval_seconds integer NOT NULL DEFAULT 30,
+			priority_max_pending_age_seconds integer NOT NULL DEFAULT 300,
+			priority_drift_action text NOT NULL DEFAULT 'alert_only',
+			priority_read_mode text NOT NULL DEFAULT 'inventory_snapshot',
 			daily_probe_budget integer NOT NULL DEFAULT 1000,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
@@ -57,6 +61,10 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS strategy_mode text NOT NULL DEFAULT 'health_probe'`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS continue_probe_when_unschedulable boolean NOT NULL DEFAULT true`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS unschedulable_probe_interval_minutes integer NOT NULL DEFAULT 60`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_min_write_interval_seconds integer NOT NULL DEFAULT 30`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_max_pending_age_seconds integer NOT NULL DEFAULT 300`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_drift_action text NOT NULL DEFAULT 'alert_only'`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_read_mode text NOT NULL DEFAULT 'inventory_snapshot'`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_policies_workspace_enabled ON connection_health_policies (user_id, admin_account_id, enabled)`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_policies_group_model ON connection_health_policies (user_id, admin_account_id, own_group_name, model_pattern)`,
 
@@ -202,6 +210,35 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_priority_sync_workspace ON connection_health_priority_sync_states (user_id, admin_account_id)`,
 		`ALTER TABLE connection_health_priority_sync_states ADD COLUMN IF NOT EXISTS pending_priority integer NULL`,
 
+		`CREATE TABLE IF NOT EXISTS connection_health_priority_workspace_sync_states (
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL DEFAULT '',
+			applied_signature text NOT NULL DEFAULT '',
+			pending_signature text NOT NULL DEFAULT '',
+			pending_since timestamptz NULL,
+			last_evaluation_at timestamptz NULL,
+			last_write_attempt_at timestamptz NULL,
+			last_write_success_at timestamptz NULL,
+			last_drift_at timestamptz NULL,
+			last_decision text NOT NULL DEFAULT '',
+			last_suppression_reason text NOT NULL DEFAULT '',
+			last_error text NOT NULL DEFAULT '',
+			min_write_interval_seconds integer NOT NULL DEFAULT 30,
+			max_pending_age_seconds integer NOT NULL DEFAULT 300,
+			drift_action text NOT NULL DEFAULT 'alert_only',
+			read_mode text NOT NULL DEFAULT 'inventory_snapshot',
+			evaluation_count bigint NOT NULL DEFAULT 0,
+			signature_change_count bigint NOT NULL DEFAULT 0,
+			write_attempt_count bigint NOT NULL DEFAULT 0,
+			write_success_count bigint NOT NULL DEFAULT 0,
+			write_failure_count bigint NOT NULL DEFAULT 0,
+			unchanged_skip_count bigint NOT NULL DEFAULT 0,
+			window_suppression_count bigint NOT NULL DEFAULT 0,
+			drift_count bigint NOT NULL DEFAULT 0,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, admin_account_id)
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS connection_health_target_action_states (
 			user_id text NOT NULL,
 			admin_account_id text NOT NULL DEFAULT '',
@@ -253,8 +290,10 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 			id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now(),now())
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			daily_probe_budget, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,now(),now())
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			enabled = EXCLUDED.enabled,
@@ -274,13 +313,18 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 			auto_remote_action_enabled = EXCLUDED.auto_remote_action_enabled,
 			priority_mode = EXCLUDED.priority_mode,
 			strategy_mode = EXCLUDED.strategy_mode,
+			priority_min_write_interval_seconds = EXCLUDED.priority_min_write_interval_seconds,
+			priority_max_pending_age_seconds = EXCLUDED.priority_max_pending_age_seconds,
+			priority_drift_action = EXCLUDED.priority_drift_action,
+			priority_read_mode = EXCLUDED.priority_read_mode,
 			daily_probe_budget = EXCLUDED.daily_probe_budget,
 			updated_at = now()
 	`, p.ID, p.UserID, p.AdminAccountID, p.Name, p.Enabled, p.OwnGroupID, p.OwnGroupName, p.ModelPattern, p.ProbeMode,
 		p.ProbeIntervalSeconds, p.ContinueProbeWhenUnschedulable, defaultInt(p.UnschedulableProbeIntervalMinutes, 60),
 		p.FailureThreshold, p.SuccessThreshold, p.CooldownSeconds, p.ObservationSeconds,
 		p.RecoveryStepPercent, p.AutoDegradeEnabled, p.AutoRemoteActionEnabled, normalizePriorityMode(p.PriorityMode),
-		normalizeStrategyMode(p.StrategyMode), p.DailyProbeBudget)
+		normalizeStrategyMode(p.StrategyMode), p.PrioritySyncPreset.MinWriteIntervalSeconds,
+		p.PrioritySyncPreset.MaxPendingAgeSeconds, p.PrioritySyncPreset.DriftAction, p.PrioritySyncPreset.ReadMode, p.DailyProbeBudget)
 	return err
 }
 
@@ -407,7 +451,9 @@ func (r *Repository) GetPolicy(ctx context.Context, id string, userID string, ad
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE id = $1 AND user_id = $2 AND admin_account_id = $3
 	`, id, userID, adminAccountID)
 	p, err := scanPolicy(row)
@@ -431,7 +477,9 @@ func (r *Repository) ListPolicies(ctx context.Context, userID string, adminAccou
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE user_id = $1 AND admin_account_id = $2 ORDER BY created_at ASC
 	`, userID, adminAccountID)
 	if err != nil {
@@ -467,7 +515,9 @@ func (r *Repository) ListEnabledPolicies(ctx context.Context) ([]Policy, error) 
 		SELECT id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
+			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE enabled = true ORDER BY created_at ASC
 	`)
 	if err != nil {
@@ -508,7 +558,9 @@ func scanPolicy(row pgx.Row) (*Policy, error) {
 	if err := row.Scan(&p.ID, &p.UserID, &p.AdminAccountID, &p.Name, &p.Enabled, &p.OwnGroupID, &p.OwnGroupName, &p.ModelPattern, &p.ProbeMode,
 		&p.ProbeIntervalSeconds, &p.ContinueProbeWhenUnschedulable, &p.UnschedulableProbeIntervalMinutes,
 		&p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
-		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode,
+		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds,
+		&p.PrioritySyncPreset.DriftAction, &p.PrioritySyncPreset.ReadMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -526,7 +578,9 @@ func scanPolicyRow(row rowScanner) (*Policy, error) {
 	if err := row.Scan(&p.ID, &p.UserID, &p.AdminAccountID, &p.Name, &p.Enabled, &p.OwnGroupID, &p.OwnGroupName, &p.ModelPattern, &p.ProbeMode,
 		&p.ProbeIntervalSeconds, &p.ContinueProbeWhenUnschedulable, &p.UnschedulableProbeIntervalMinutes,
 		&p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
-		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode,
+		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds,
+		&p.PrioritySyncPreset.DriftAction, &p.PrioritySyncPreset.ReadMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -1113,19 +1167,7 @@ func (r *Repository) CreatePolicyAndReplaceGroupConfiguration(ctx context.Contex
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO connection_health_policies (
-			id, user_id, admin_account_id, name, enabled, own_group_id, own_group_name, model_pattern, probe_mode,
-				probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
-				failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
-				recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode, daily_probe_budget, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now(),now())
-		`, policy.ID, policy.UserID, policy.AdminAccountID, policy.Name, policy.Enabled, policy.OwnGroupID, policy.OwnGroupName,
-		policy.ModelPattern, policy.ProbeMode, policy.ProbeIntervalSeconds, policy.ContinueProbeWhenUnschedulable,
-		defaultInt(policy.UnschedulableProbeIntervalMinutes, 60), policy.FailureThreshold, policy.SuccessThreshold,
-		policy.CooldownSeconds, policy.ObservationSeconds, policy.RecoveryStepPercent, policy.AutoDegradeEnabled,
-		policy.AutoRemoteActionEnabled, normalizePriorityMode(policy.PriorityMode), normalizeStrategyMode(policy.StrategyMode),
-		policy.DailyProbeBudget); err != nil {
+	if err := upsertPolicyWithExecutor(ctx, tx, policy); err != nil {
 		return err
 	}
 	for _, target := range targets {
@@ -1381,6 +1423,83 @@ func (r *Repository) DeletePrioritySyncState(ctx context.Context, userID string,
 		WHERE user_id = $1 AND admin_account_id = $2 AND target_id = $3
 	`, userID, adminAccountID, targetID)
 	return err
+}
+
+func (r *Repository) GetPriorityWorkspaceSyncState(ctx context.Context, userID string, adminAccountID string) (*PriorityWorkspaceSyncState, error) {
+	row := r.db.QueryRow(ctx, `
+		SELECT user_id, admin_account_id, applied_signature, pending_signature, pending_since,
+			last_evaluation_at, last_write_attempt_at, last_write_success_at, last_drift_at,
+			last_decision, last_suppression_reason, last_error,
+			min_write_interval_seconds, max_pending_age_seconds, drift_action, read_mode,
+			evaluation_count, signature_change_count, write_attempt_count, write_success_count,
+			write_failure_count, unchanged_skip_count, window_suppression_count, drift_count, updated_at
+		FROM connection_health_priority_workspace_sync_states
+		WHERE user_id = $1 AND admin_account_id = $2
+	`, userID, adminAccountID)
+	return scanPriorityWorkspaceSyncState(row)
+}
+
+func (r *Repository) UpsertPriorityWorkspaceSyncState(ctx context.Context, state PriorityWorkspaceSyncState) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO connection_health_priority_workspace_sync_states (
+			user_id, admin_account_id, applied_signature, pending_signature, pending_since,
+			last_evaluation_at, last_write_attempt_at, last_write_success_at, last_drift_at,
+			last_decision, last_suppression_reason, last_error,
+			min_write_interval_seconds, max_pending_age_seconds, drift_action, read_mode,
+			evaluation_count, signature_change_count, write_attempt_count, write_success_count,
+			write_failure_count, unchanged_skip_count, window_suppression_count, drift_count, updated_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,now()
+		)
+		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
+			applied_signature = EXCLUDED.applied_signature,
+			pending_signature = EXCLUDED.pending_signature,
+			pending_since = EXCLUDED.pending_since,
+			last_evaluation_at = EXCLUDED.last_evaluation_at,
+			last_write_attempt_at = EXCLUDED.last_write_attempt_at,
+			last_write_success_at = EXCLUDED.last_write_success_at,
+			last_drift_at = EXCLUDED.last_drift_at,
+			last_decision = EXCLUDED.last_decision,
+			last_suppression_reason = EXCLUDED.last_suppression_reason,
+			last_error = EXCLUDED.last_error,
+			min_write_interval_seconds = EXCLUDED.min_write_interval_seconds,
+			max_pending_age_seconds = EXCLUDED.max_pending_age_seconds,
+			drift_action = EXCLUDED.drift_action,
+			read_mode = EXCLUDED.read_mode,
+			evaluation_count = EXCLUDED.evaluation_count,
+			signature_change_count = EXCLUDED.signature_change_count,
+			write_attempt_count = EXCLUDED.write_attempt_count,
+			write_success_count = EXCLUDED.write_success_count,
+			write_failure_count = EXCLUDED.write_failure_count,
+			unchanged_skip_count = EXCLUDED.unchanged_skip_count,
+			window_suppression_count = EXCLUDED.window_suppression_count,
+			drift_count = EXCLUDED.drift_count,
+			updated_at = now()
+	`, state.UserID, state.AdminAccountID, state.AppliedSignature, state.PendingSignature, state.PendingSince,
+		state.LastEvaluationAt, state.LastWriteAttemptAt, state.LastWriteSuccessAt, state.LastDriftAt,
+		state.LastDecision, state.LastSuppressionReason, state.LastError,
+		state.MinWriteIntervalSeconds, state.MaxPendingAgeSeconds, state.DriftAction, state.ReadMode,
+		state.EvaluationCount, state.SignatureChangeCount, state.WriteAttemptCount, state.WriteSuccessCount,
+		state.WriteFailureCount, state.UnchangedSkipCount, state.WindowSuppressionCount, state.DriftCount)
+	return err
+}
+
+func scanPriorityWorkspaceSyncState(row pgx.Row) (*PriorityWorkspaceSyncState, error) {
+	var state PriorityWorkspaceSyncState
+	if err := row.Scan(
+		&state.UserID, &state.AdminAccountID, &state.AppliedSignature, &state.PendingSignature, &state.PendingSince,
+		&state.LastEvaluationAt, &state.LastWriteAttemptAt, &state.LastWriteSuccessAt, &state.LastDriftAt,
+		&state.LastDecision, &state.LastSuppressionReason, &state.LastError,
+		&state.MinWriteIntervalSeconds, &state.MaxPendingAgeSeconds, &state.DriftAction, &state.ReadMode,
+		&state.EvaluationCount, &state.SignatureChangeCount, &state.WriteAttemptCount, &state.WriteSuccessCount,
+		&state.WriteFailureCount, &state.UnchangedSkipCount, &state.WindowSuppressionCount, &state.DriftCount, &state.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &state, nil
 }
 
 func (r *Repository) GetTargetActionState(ctx context.Context, userID string, adminAccountID string, targetID string) (*TargetActionState, error) {

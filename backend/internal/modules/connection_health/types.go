@@ -65,6 +65,24 @@ const (
 )
 
 const (
+	PriorityDriftActionAlertOnly = "alert_only"
+	PriorityReadModeInventory    = "inventory_snapshot"
+
+	defaultPriorityMinWriteIntervalSeconds = 30
+	defaultPriorityMaxPendingAgeSeconds    = 300
+)
+
+// PrioritySyncPreset controls the workspace-level writeback gate. The interval is the only
+// user-tunable value in B; the remaining fields make the safety behavior explicit and leave a
+// stable configuration contract for later phases without changing their read-frequency scope.
+type PrioritySyncPreset struct {
+	MinWriteIntervalSeconds int    `json:"minWriteIntervalSeconds"`
+	MaxPendingAgeSeconds    int    `json:"maxPendingAgeSeconds"`
+	DriftAction             string `json:"driftAction"`
+	ReadMode                string `json:"readMode"`
+}
+
+const (
 	ErrorRequest          = "admin.connectionHealth.errors.request"
 	ErrorUnknown          = "admin.connectionHealth.errors.unknown"
 	ErrorNotFound         = "admin.connectionHealth.errors.notFound"
@@ -154,6 +172,37 @@ type PrioritySyncState struct {
 	UpdatedAt            time.Time `json:"updatedAt"`
 }
 
+// PriorityWorkspaceSyncState is the single workspace-level source for the effective ordering
+// signature, coalesced pending signature and writeback observations. Per-target upstream values
+// remain in PrioritySyncState; this row only gates when that existing write path may run.
+type PriorityWorkspaceSyncState struct {
+	UserID                  string     `json:"-"`
+	AdminAccountID          string     `json:"-"`
+	AppliedSignature        string     `json:"-"`
+	PendingSignature        string     `json:"-"`
+	PendingSince            *time.Time `json:"pendingSince,omitempty"`
+	LastEvaluationAt        *time.Time `json:"lastEvaluationAt,omitempty"`
+	LastWriteAttemptAt      *time.Time `json:"lastWriteAttemptAt,omitempty"`
+	LastWriteSuccessAt      *time.Time `json:"lastWriteSuccessAt,omitempty"`
+	LastDriftAt             *time.Time `json:"lastDriftAt,omitempty"`
+	LastDecision            string     `json:"lastDecision"`
+	LastSuppressionReason   string     `json:"lastSuppressionReason"`
+	LastError               string     `json:"lastError"`
+	MinWriteIntervalSeconds int        `json:"minWriteIntervalSeconds"`
+	MaxPendingAgeSeconds    int        `json:"maxPendingAgeSeconds"`
+	DriftAction             string     `json:"driftAction"`
+	ReadMode                string     `json:"readMode"`
+	EvaluationCount         int64      `json:"evaluationCount"`
+	SignatureChangeCount    int64      `json:"signatureChangeCount"`
+	WriteAttemptCount       int64      `json:"writeAttemptCount"`
+	WriteSuccessCount       int64      `json:"writeSuccessCount"`
+	WriteFailureCount       int64      `json:"writeFailureCount"`
+	UnchangedSkipCount      int64      `json:"unchangedSkipCount"`
+	WindowSuppressionCount  int64      `json:"windowSuppressionCount"`
+	DriftCount              int64      `json:"driftCount"`
+	UpdatedAt               time.Time  `json:"updatedAt"`
+}
+
 // TargetActionState 记录分组健康首次接管账号/渠道启停或权重前的上游状态。
 // 健康恢复后只能恢复到这里保存的原值，不能假设账号原本一定启用或权重一定为 100。
 type TargetActionState struct {
@@ -173,30 +222,31 @@ type TargetActionState struct {
 // Policy 对应 connection_health_policies 表：一条健康探活/降级策略，
 // 按 own_group_id 匹配对接链路（own_group_id 为空表示匹配该 workspace 下全部已对接分组）。
 type Policy struct {
-	ID                                string    `json:"id"`
-	UserID                            string    `json:"-"`
-	AdminAccountID                    string    `json:"-"`
-	Name                              string    `json:"name"`
-	Enabled                           bool      `json:"enabled"`
-	OwnGroupID                        string    `json:"ownGroupId"`
-	OwnGroupName                      string    `json:"ownGroupName"`
-	ModelPattern                      string    `json:"modelPattern"`
-	ProbeMode                         string    `json:"probeMode"`
-	ProbeIntervalSeconds              int       `json:"probeIntervalSeconds"`
-	ContinueProbeWhenUnschedulable    bool      `json:"continueProbeWhenUnschedulable"`
-	UnschedulableProbeIntervalMinutes int       `json:"unschedulableProbeIntervalMinutes"`
-	FailureThreshold                  int       `json:"failureThreshold"`
-	SuccessThreshold                  int       `json:"successThreshold"`
-	CooldownSeconds                   int       `json:"cooldownSeconds"`
-	ObservationSeconds                int       `json:"observationSeconds"`
-	RecoveryStepPercent               int       `json:"recoveryStepPercent"`
-	AutoDegradeEnabled                bool      `json:"autoDegradeEnabled"`
-	AutoRemoteActionEnabled           bool      `json:"autoRemoteActionEnabled"`
-	PriorityMode                      string    `json:"priorityMode"`
-	StrategyMode                      string    `json:"strategyMode"`
-	DailyProbeBudget                  int       `json:"dailyProbeBudget"`
-	CreatedAt                         time.Time `json:"createdAt"`
-	UpdatedAt                         time.Time `json:"updatedAt"`
+	ID                                string             `json:"id"`
+	UserID                            string             `json:"-"`
+	AdminAccountID                    string             `json:"-"`
+	Name                              string             `json:"name"`
+	Enabled                           bool               `json:"enabled"`
+	OwnGroupID                        string             `json:"ownGroupId"`
+	OwnGroupName                      string             `json:"ownGroupName"`
+	ModelPattern                      string             `json:"modelPattern"`
+	ProbeMode                         string             `json:"probeMode"`
+	ProbeIntervalSeconds              int                `json:"probeIntervalSeconds"`
+	ContinueProbeWhenUnschedulable    bool               `json:"continueProbeWhenUnschedulable"`
+	UnschedulableProbeIntervalMinutes int                `json:"unschedulableProbeIntervalMinutes"`
+	FailureThreshold                  int                `json:"failureThreshold"`
+	SuccessThreshold                  int                `json:"successThreshold"`
+	CooldownSeconds                   int                `json:"cooldownSeconds"`
+	ObservationSeconds                int                `json:"observationSeconds"`
+	RecoveryStepPercent               int                `json:"recoveryStepPercent"`
+	AutoDegradeEnabled                bool               `json:"autoDegradeEnabled"`
+	AutoRemoteActionEnabled           bool               `json:"autoRemoteActionEnabled"`
+	PriorityMode                      string             `json:"priorityMode"`
+	StrategyMode                      string             `json:"strategyMode"`
+	PrioritySyncPreset                PrioritySyncPreset `json:"prioritySyncPreset"`
+	DailyProbeBudget                  int                `json:"dailyProbeBudget"`
+	CreatedAt                         time.Time          `json:"createdAt"`
+	UpdatedAt                         time.Time          `json:"updatedAt"`
 	// ModelTargets 不是数据库列，是查询时一并装载的关联目标（connection_health_model_targets）。
 	ModelTargets []ModelTarget `json:"modelTargets"`
 }

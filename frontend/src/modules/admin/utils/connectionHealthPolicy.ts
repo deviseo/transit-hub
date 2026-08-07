@@ -16,3 +16,9 @@ export const resolveConnectionHealthStrategyMode = (
   }
   return 'health_probe'
 }
+
+export const preservePriorityMaxPendingAge = (
+  existingSeconds: number | undefined,
+  minWriteIntervalSeconds: number,
+  defaultSeconds = 300,
+): number => Math.max(existingSeconds ?? defaultSeconds, minWriteIntervalSeconds)

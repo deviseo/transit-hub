@@ -241,6 +241,38 @@ export interface ConnectionHealthOverview {
   disabled: number
   unconfigured: number
   recentEvents: ConnectionHealthEvent[]
+  prioritySync?: PriorityWorkspaceSyncState
+}
+
+export interface PrioritySyncPreset {
+  minWriteIntervalSeconds: number
+  maxPendingAgeSeconds: number
+  driftAction: 'alert_only' | string
+  readMode: 'inventory_snapshot' | string
+}
+
+export interface PriorityWorkspaceSyncState {
+  pendingSince?: string | null
+  lastEvaluationAt?: string | null
+  lastWriteAttemptAt?: string | null
+  lastWriteSuccessAt?: string | null
+  lastDriftAt?: string | null
+  lastDecision: string
+  lastSuppressionReason: string
+  lastError: string
+  minWriteIntervalSeconds: number
+  maxPendingAgeSeconds: number
+  driftAction: string
+  readMode: string
+  evaluationCount: number
+  signatureChangeCount: number
+  writeAttemptCount: number
+  writeSuccessCount: number
+  writeFailureCount: number
+  unchangedSkipCount: number
+  windowSuppressionCount: number
+  driftCount: number
+  updatedAt: string
 }
 
 // 工作台轻量摘要只来自本地健康状态与事件表，不会在页面加载时触发上游探活。
@@ -292,6 +324,7 @@ export interface ConnectionHealthPolicy {
   autoRemoteActionEnabled: boolean
   priorityMode?: ConnectionHealthPriorityMode
   strategyMode?: ConnectionHealthStrategyMode
+  prioritySyncPreset: PrioritySyncPreset
   dailyProbeBudget: number
   createdAt: string
   updatedAt: string
@@ -350,6 +383,7 @@ export interface PolicyInput {
   autoRemoteActionEnabled: boolean
   priorityMode?: ConnectionHealthPriorityMode
   strategyMode?: ConnectionHealthStrategyMode
+  prioritySyncPreset?: PrioritySyncPreset
   dailyProbeBudget?: number
   modelTargets: ModelTargetInput[]
 }

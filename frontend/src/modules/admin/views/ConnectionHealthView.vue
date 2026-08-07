@@ -168,6 +168,14 @@ watch(filteredGroups, (nextGroups) => {
 const monitoredGroupCount = computed(() => adminGroups.value.filter(groupMonitoringEnabled).length)
 const conflictCount = computed(() => adminGroups.value.reduce((sum, group) => sum + (group.priorityConflictCount ?? 0), 0))
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
+const prioritySyncDecisionLabel = (decision: string): string => {
+  const key = `admin.connectionHealth.prioritySync.decisions.${decision || 'unknown'}`
+  return te(key) ? t(key) : t('admin.connectionHealth.prioritySync.decisions.unknown')
+}
+const prioritySyncReasonLabel = (reason: string): string => {
+  const key = `admin.connectionHealth.prioritySync.reasons.${reason || 'none'}`
+  return te(key) ? t(key) : t('admin.connectionHealth.prioritySync.reasons.none')
+}
 
 const loadSiteNames = async () => {
   try {
@@ -440,6 +448,26 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
         <div class="px-4 py-3">
           <dt class="flex items-center gap-1 text-xs font-medium" :class="conflictCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"><ArrowDownUp class="h-3.5 w-3.5" />{{ t('admin.connectionHealth.summary.priorityConflicts') }}</dt>
           <dd class="mt-1 text-xl font-semibold tabular-nums text-foreground">{{ conflictCount }}</dd>
+        </div>
+      </dl>
+      <dl v-if="overview?.prioritySync" class="grid border-t border-border/50 sm:grid-cols-4">
+        <div class="min-w-0 border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.decision') }}</dt>
+          <dd class="mt-1 truncate text-sm font-medium text-foreground">{{ prioritySyncDecisionLabel(overview.prioritySync.lastDecision) }}</dd>
+          <p v-if="overview.prioritySync.lastSuppressionReason" class="mt-1 truncate text-xs text-muted-foreground">{{ prioritySyncReasonLabel(overview.prioritySync.lastSuppressionReason) }}</p>
+        </div>
+        <div class="border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.interval') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ t('admin.connectionHealth.prioritySync.intervalValue', { seconds: overview.prioritySync.minWriteIntervalSeconds }) }}</dd>
+        </div>
+        <div class="border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.writes') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.writeSuccessCount }}/{{ overview.prioritySync.writeAttemptCount }}</dd>
+        </div>
+        <div class="px-4 py-3">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.skips') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.unchangedSkipCount + overview.prioritySync.windowSuppressionCount }}</dd>
+          <p v-if="overview.prioritySync.lastError" class="mt-1 truncate text-xs text-destructive">{{ prioritySyncReasonLabel(overview.prioritySync.lastError) }}</p>
         </div>
       </dl>
     </section>
