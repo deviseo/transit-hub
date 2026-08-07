@@ -737,7 +737,7 @@ const upstreamMultiplierStatusLabel = (account: AdminGroupAccount): string => {
                         type="button"
                         class="rounded-md p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35"
                         :class="account.schedulable
-                          ? 'text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300'
+                          ? 'bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white dark:bg-emerald-500 dark:text-white dark:hover:bg-emerald-400 dark:hover:text-white'
                           : 'text-muted-foreground hover:bg-surface hover:text-foreground'"
                         :aria-label="account.schedulable ? t(`${detailPrefix}.actions.disableScheduling`) : t(`${detailPrefix}.actions.enableScheduling`)"
                         :disabled="actionLoading"
