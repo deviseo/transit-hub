@@ -10,14 +10,14 @@ import (
 
 // fakeUpstreamLister 是 UpstreamLister 的桩实现，只有测试用到的方法有真实行为。
 type fakeUpstreamLister struct {
-	keyUsageItems    []upstream.KeyUsageTodayItem
-	keyUsageErr      error
-	keyUsageCalls    int
-	cachedSites      []upstream.Response
-	balanceItems     []upstream.BalanceBreakdownItem
-	balanceErr       error
-	siteCostResults  []upstream.SiteCostForDateResult
-	siteCostErr      error
+	keyUsageItems   []upstream.KeyUsageTodayItem
+	keyUsageErr     error
+	keyUsageCalls   int
+	cachedSites     []upstream.Response
+	balanceItems    []upstream.BalanceBreakdownItem
+	balanceErr      error
+	siteCostResults []upstream.SiteCostForDateResult
+	siteCostErr     error
 }
 
 func (f *fakeUpstreamLister) List(ctx context.Context, userID string) []upstream.Response {

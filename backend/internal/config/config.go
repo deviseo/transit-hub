@@ -11,7 +11,7 @@ const (
 	defaultPort       = "10621"
 	defaultRedisURL   = "redis://127.0.0.1:6379/0"
 	defaultPublicDir  = "/app/public"
-	defaultAppVersion = "V2.0.1"
+	defaultAppVersion = "V2.0.2"
 )
 
 type Config struct {
@@ -25,9 +25,6 @@ type Config struct {
 	// 初始化管理员
 	AdminEmail    string
 	AdminPassword string
-
-	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
-	AllowPublicRegister bool
 
 	// 抽奖模块本地调试开关。默认禁止访问回环和私网 Sub2API，避免公开嵌入接口被用于 SSRF；
 	// 仅在受控的本地开发环境中临时开启。
@@ -69,8 +66,6 @@ func Load() Config {
 
 		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
-
-		AllowPublicRegister: envOrDefault("ALLOW_PUBLIC_REGISTER", "true") == "true",
 
 		LotteryAllowPrivateSub2APITargets: envOrDefault("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "false") == "true",
 

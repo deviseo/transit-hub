@@ -12,9 +12,9 @@ const (
 
 // 数据来源常量。
 const (
-	SnapshotSourceLiveCache   = "live_cache"   // 首页请求时从内存缓存写入
-	SnapshotSourceDatedQuery  = "dated_query"  // 日结任务按日期精确查询写入
-	SnapshotSourceBackfill    = "backfill"     // 受控回填操作写入
+	SnapshotSourceLiveCache  = "live_cache"  // 首页请求时从内存缓存写入
+	SnapshotSourceDatedQuery = "dated_query" // 日结任务按日期精确查询写入
+	SnapshotSourceBackfill   = "backfill"    // 受控回填操作写入
 )
 
 // MetricsResponse 是 GET /api/dashboard/metrics 返回的实时指标数据。
@@ -35,13 +35,13 @@ type MetricsResponse struct {
 
 // CostQuality 描述本次成本采集的完整性与质量信息，前端根据此字段分级展示。
 type CostQuality struct {
-	BusinessDate   string         `json:"businessDate"`
-	ConfirmedCost  float64        `json:"confirmedCost"`  // 已确认站点成本之和（真实下限）
-	Complete       bool           `json:"complete"`       // 所有目标站点均成功采集时为 true
-	ExpectedSites  int            `json:"expectedSites"`
-	CollectedSites int            `json:"collectedSites"`
-	FailedSites    int            `json:"failedSites"`
-	ObservedAt     *time.Time     `json:"observedAt,omitempty"`
+	BusinessDate   string          `json:"businessDate"`
+	ConfirmedCost  float64         `json:"confirmedCost"` // 已确认站点成本之和（真实下限）
+	Complete       bool            `json:"complete"`      // 所有目标站点均成功采集时为 true
+	ExpectedSites  int             `json:"expectedSites"`
+	CollectedSites int             `json:"collectedSites"`
+	FailedSites    int             `json:"failedSites"`
+	ObservedAt     *time.Time      `json:"observedAt,omitempty"`
 	Failures       []SiteCostFault `json:"failures,omitempty"` // 失败站点脱敏原因
 }
 
@@ -59,11 +59,11 @@ type TrendResponse struct {
 // TrendPoint 代表一天的指标快照，用于趋势图渲染。
 // 成本/营收/净利润允许 NULL：NULL 表示该天数据未采集，前端渲染断点而非伪零。
 type TrendPoint struct {
-	Date            string   `json:"date"`            // 日期，格式 "2006-01-02"
-	TodayProfit     *float64 `json:"todayProfit"`     // nil 表示该天营收未采集
+	Date            string   `json:"date"`        // 日期，格式 "2006-01-02"
+	TodayProfit     *float64 `json:"todayProfit"` // nil 表示该天营收未采集
 	SiteBalance     float64  `json:"siteBalance"`
-	TodayPurchase   *float64 `json:"todayPurchase"`   // nil 表示该天成本未采集
-	NetProfit       *float64 `json:"netProfit"`       // nil 表示该天净利润不可用
+	TodayPurchase   *float64 `json:"todayPurchase"` // nil 表示该天成本未采集
+	NetProfit       *float64 `json:"netProfit"`     // nil 表示该天净利润不可用
 	UpstreamBalance float64  `json:"upstreamBalance"`
 }
 
@@ -98,7 +98,7 @@ type SiteDailyCost struct {
 	AdminAccountID string
 	Date           time.Time
 	SiteID         string
-	SiteName       string   // 冗余快照，站点删除后历史仍可读
+	SiteName       string // 冗余快照，站点删除后历史仍可读
 	Platform       string
 	RawCost        *float64 // 上游原始成本（允许 NULL）
 	RechargeRate   float64
@@ -121,7 +121,7 @@ type DailyStatItem struct {
 	CostExpectedCount  *int             `json:"costExpectedCount,omitempty"`
 	CostCollectedCount *int             `json:"costCollectedCount,omitempty"`
 	FinalizedAt        *string          `json:"finalizedAt,omitempty"`
-	SiteCosts          []SiteCostDetail `json:"siteCosts,omitempty"`           // expand=true 时填充
+	SiteCosts          []SiteCostDetail `json:"siteCosts,omitempty"`          // expand=true 时填充
 	SiteCostsLoadError bool             `json:"siteCostsLoadError,omitempty"` // expand=true 但查询失败
 }
 
@@ -138,7 +138,6 @@ type SiteCostDetail struct {
 	ErrorReason  string   `json:"errorReason,omitempty"`
 	ObservedAt   string   `json:"observedAt"`
 }
-
 
 // AdminGroupsResponse 是 GET /api/dashboard/groups 返回的管理员站点分组数据。
 type AdminGroupsResponse struct {

@@ -170,6 +170,9 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 			return AdminGroupPolicyConfiguration{}, err
 		}
 		responsePolicies = append(responsePolicies, policy)
+		// 分组配置保存后立即复用生产 priority 同步入口，避免页面刷新时仍展示保存前的同值 priority，
+		// 同时保持后台调度器下一轮扫描的最终兜底行为。
+		s.syncCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID)
 		return savedAdminGroupPolicyConfiguration(groupContext.group, policyIDs, excludedTargetIDs, responsePolicies, input.ProbeSortFallbackMultiplier), nil
 	}
 
@@ -179,6 +182,8 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 	); err != nil {
 		return AdminGroupPolicyConfiguration{}, err
 	}
+	// 与首次向导保持一致：配置变更成功后立即刷新生产 priority，避免依赖 30 秒调度周期。
+	s.syncCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID)
 	return savedAdminGroupPolicyConfiguration(groupContext.group, policyIDs, excludedTargetIDs, responsePolicies, input.ProbeSortFallbackMultiplier), nil
 }
 

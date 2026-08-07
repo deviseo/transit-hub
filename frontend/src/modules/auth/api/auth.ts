@@ -1,9 +1,6 @@
 import type {
   AuthTokenResponse,
-  EmailCodeRequest,
-  EmailCodeResponse,
   LoginRequest,
-  RegisterRequest,
 } from '../types/auth'
 import { resetWorkspaceCheck } from '@/lib/workspaceGuard'
 
@@ -42,20 +39,6 @@ const requestJson = async <T>(path: string, options: RequestInit = {}, errorKey 
 
   return payload
 }
-
-export const requestEmailCode = async (form: EmailCodeRequest): Promise<EmailCodeResponse> => (
-  requestJson<EmailCodeResponse>('/auth/email-code', {
-    method: 'POST',
-    body: JSON.stringify(form),
-  }, 'auth.register.errors.codeRequest')
-)
-
-export const registerWithEmail = async (form: RegisterRequest): Promise<AuthTokenResponse> => (
-  requestJson<AuthTokenResponse>('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(form),
-  }, 'auth.register.errors.register')
-)
 
 export const loginWithEmail = async (form: LoginRequest): Promise<AuthTokenResponse> => (
   requestJson<AuthTokenResponse>('/auth/login', {

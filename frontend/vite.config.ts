@@ -18,4 +18,15 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // ECharts 与 zrender 存在循环模块图，合并后的延迟 vendor chunk 当前为约 572 kB。
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts/') || id.includes('node_modules/zrender/')) return 'echarts'
+        },
+      },
+    },
+  },
 })

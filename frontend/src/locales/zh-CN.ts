@@ -68,38 +68,10 @@ export default {
       noAccount: '还没有账号？',
       registerLink: '去注册'
     },
-    register: {
-      title: '创建账号',
-      subtitle: '输入您的信息以注册 TransitHub',
-      email: '邮箱',
-      emailPlaceholder: "name{'@'}example.com",
-      password: '密码',
-      passwordPlaceholder: '设置密码',
-      code: '验证码',
-      codePlaceholder: '输入 6 位验证码',
-      sendCode: '发送验证码',
-      sendingCode: '发送中...',
-      codeSent: '已发送',
-      codeSentSuccess: '验证码已发送，请使用 {code} 完成注册。',
-      submit: '注册',
-      submitting: '注册中...',
-      success: '注册成功，正在打开管理后台...',
-      errors: {
-        codeRequest: '验证码发送失败，请检查邮箱后重试。',
-        register: '注册失败，请检查验证码后重试。'
-      },
-      hasAccount: '已经有账号？',
-      loginLink: '去登录'
-    },
     errors: {
-      emailRequired: '请先输入邮箱地址。',
-      invalidRegister: '请输入邮箱、密码和验证码。',
       invalidLogin: '请输入邮箱和密码。',
-      invalidCode: '验证码错误或已过期。',
-      emailExists: '该邮箱已注册。',
       invalidCredentials: '邮箱或密码不正确。',
       unauthorized: '登录状态已过期，请重新登录后继续。',
-      registrationDisabled: '当前部署已关闭公开注册，请使用管理员账号登录。',
       network: '网络异常，请检查连接后重试。',
       unknown: '操作失败，请稍后重试。'
     }

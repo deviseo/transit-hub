@@ -735,7 +735,10 @@ const upstreamMultiplierStatusLabel = (account: AdminGroupAccount): string => {
                     <Tooltip v-if="isSub2API(account) && account.schedulable != null" :text="account.schedulable ? t(`${detailPrefix}.actions.disableScheduling`) : t(`${detailPrefix}.actions.enableScheduling`)" wide>
                       <button
                         type="button"
-                        class="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-surface hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                        class="rounded-md p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35"
+                        :class="account.schedulable
+                          ? 'text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300'
+                          : 'text-muted-foreground hover:bg-surface hover:text-foreground'"
                         :aria-label="account.schedulable ? t(`${detailPrefix}.actions.disableScheduling`) : t(`${detailPrefix}.actions.enableScheduling`)"
                         :disabled="actionLoading"
                         @click="emit('set-schedulable', account)"

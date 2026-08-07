@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -132,6 +133,128 @@ func TestFetchKeyUsageToday_NewAPI_UsesTokenNameAndGroupFilter(t *testing.T) {
 	}
 	if stats[0].TodayAmount != 2.5 {
 		t.Errorf("todayAmount = %.4f, want 2.5000 (250000/100000 quota conversion)", stats[0].TodayAmount)
+	}
+}
+
+func TestFetchKeyUsageToday_Sub2APIRetriesTransientKeyStatsFailure(t *testing.T) {
+	var statsCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			writeJSON(w, map[string]any{"data": []map[string]any{{
+				"id": 1, "name": "retry-key", "group": map[string]any{"name": "vip"},
+			}}, "total": 1})
+		case "/api/v1/usage/stats":
+			if statsCalls.Add(1) == 1 {
+				http.Error(w, "temporary upstream failure", http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, map[string]any{"data": map[string]any{"total_actual_cost": 12.5}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stats, err := NewPlatformService(NewHTTPClient(server.Client())).FetchKeyUsageToday(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}, nil)
+	if err != nil {
+		t.Fatalf("FetchKeyUsageToday() error: %v", err)
+	}
+	if statsCalls.Load() != 2 {
+		t.Fatalf("usage stats attempts = %d, want 2", statsCalls.Load())
+	}
+	if len(stats) != 1 || stats[0].TodayAmount != 12.5 {
+		t.Fatalf("stats = %+v, want recovered key usage", stats)
+	}
+}
+
+func TestFetchKeyUsageToday_NewAPIRetriesTransientTokenStatsFailure(t *testing.T) {
+	var statsCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/token/":
+			writeJSON(w, map[string]any{"data": []map[string]any{{
+				"id": 1, "name": "retry-token", "group": "vip",
+			}}, "total": 1})
+		case "/api/log/self/stat":
+			if statsCalls.Add(1) == 1 {
+				http.Error(w, "temporary upstream failure", http.StatusBadGateway)
+				return
+			}
+			writeJSON(w, map[string]any{"data": map[string]any{"quota": 250000}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stats, err := NewPlatformService(NewHTTPClient(server.Client())).FetchKeyUsageToday(
+		Session{Platform: PlatformNewAPI, BaseURL: server.URL, Cookie: "session=abc", UserID: "1", QuotaPerUnit: 100000}, nil)
+	if err != nil {
+		t.Fatalf("FetchKeyUsageToday() error: %v", err)
+	}
+	if statsCalls.Load() != 2 {
+		t.Fatalf("usage stats attempts = %d, want 2", statsCalls.Load())
+	}
+	if len(stats) != 1 || stats[0].TodayAmount != 2.5 {
+		t.Fatalf("stats = %+v, want recovered token usage", stats)
+	}
+}
+
+func TestFetchKeyUsageToday_DoesNotRetryUnauthorizedKeyStats(t *testing.T) {
+	var statsCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			writeJSON(w, map[string]any{"data": []map[string]any{{
+				"id": 1, "name": "private-key", "group": map[string]any{"name": "vip"},
+			}}, "total": 1})
+		case "/api/v1/usage/stats":
+			statsCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"unauthorized"}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	_, err := NewPlatformService(NewHTTPClient(server.Client())).FetchKeyUsageToday(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}, nil)
+	if err == nil {
+		t.Fatal("expected unauthorized key stats to fail")
+	}
+	if statsCalls.Load() != 1 {
+		t.Fatalf("usage stats attempts = %d, want 1 for unauthorized response", statsCalls.Load())
+	}
+}
+
+func TestFetchKeyUsageToday_StopsAfterRetryBudget(t *testing.T) {
+	var statsCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/keys":
+			writeJSON(w, map[string]any{"data": []map[string]any{{
+				"id": 1, "name": "unavailable-key", "group": map[string]any{"name": "vip"},
+			}}, "total": 1})
+		case "/api/v1/usage/stats":
+			statsCalls.Add(1)
+			http.Error(w, "temporary upstream failure", http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	_, err := NewPlatformService(NewHTTPClient(server.Client())).FetchKeyUsageToday(
+		Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}, nil)
+	if err == nil {
+		t.Fatal("expected persistent key stats failure")
+	}
+	if statsCalls.Load() != keyUsageRequestAttempts {
+		t.Fatalf("usage stats attempts = %d, want retry budget %d", statsCalls.Load(), keyUsageRequestAttempts)
 	}
 }
 

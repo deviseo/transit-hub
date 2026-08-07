@@ -28,6 +28,12 @@ func jsonMarshal(v any) ([]byte, error) {
 
 const refreshSkewMS int64 = 60_000
 
+const (
+	keyUsageRequestAttempts = 2
+	keyUsageRequestTimeout  = 20 * time.Second
+	keyUsageRetryDelay      = 150 * time.Millisecond
+)
+
 type PlatformService struct {
 	httpClient *HTTPClient
 }
@@ -973,6 +979,40 @@ func (s *PlatformService) FetchKeyUsageToday(session Session, groups []GroupInfo
 	}
 }
 
+// requestKeyUsageJSON 为分组利润所需的 key/token 用量请求提供一次有界重试。
+// 瞬时网络、网关和解析异常不应让整张利润图立刻失效；鉴权和普通 4xx 仍直接失败，
+// 且重试耗尽后由上层继续按 fail-closed 处理，绝不把未知成本当作零。
+func (s *PlatformService) requestKeyUsageJSON(reqURL string, options requestOptions) (jsonResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < keyUsageRequestAttempts; attempt++ {
+		response, err := s.httpClient.requestJSONWithTimeout(reqURL, options, keyUsageRequestTimeout)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryableKeyUsageError(err) || attempt+1 == keyUsageRequestAttempts {
+			break
+		}
+		time.Sleep(keyUsageRetryDelay)
+	}
+	return jsonResponse{}, lastErr
+}
+
+func retryableKeyUsageError(err error) bool {
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) {
+		return false
+	}
+	switch requestErr.MessageKey {
+	case ErrorNetwork, ErrorInvalidResponse:
+		return true
+	case ErrorRequest:
+		return requestErr.StatusCode == 0 || requestErr.StatusCode >= http.StatusInternalServerError
+	default:
+		return false
+	}
+}
+
 // sub2APIKeyRecord 是分页拉取 /api/v1/keys 后缓存的 key 基本信息，供后续并发查询 usage stats 使用。
 type sub2APIKeyRecord struct {
 	id        string
@@ -993,7 +1033,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 	records := make([]sub2APIKeyRecord, 0)
 	for page := 1; page <= maxPages; page++ {
 		pageURL := session.BaseURL + "/api/v1/keys?page=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(pageSize) + "&sort_by=created_at&sort_order=desc"
-		response, err := s.httpClient.requestJSON(pageURL, authOptions)
+		response, err := s.requestKeyUsageJSON(pageURL, authOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -1044,7 +1084,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 			defer func() { <-sem }()
 
 			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + record.id + "&timezone=Asia%2FShanghai"
-			response, err := s.httpClient.requestJSON(statsURL, authOptions)
+			response, err := s.requestKeyUsageJSON(statsURL, authOptions)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -1096,7 +1136,7 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 	records := make([]tokenRecord, 0)
 	for page := 1; page <= maxPages; page++ {
 		pageURL := session.BaseURL + "/api/token/?p=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(pageSize)
-		response, err := s.httpClient.requestJSON(pageURL, cookieOptions)
+		response, err := s.requestKeyUsageJSON(pageURL, cookieOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -1162,7 +1202,7 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 			if record.groupName != "" {
 				statURL += "&group=" + url.QueryEscape(record.groupName)
 			}
-			response, err := s.httpClient.requestJSON(statURL, cookieOptions)
+			response, err := s.requestKeyUsageJSON(statURL, cookieOptions)
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {

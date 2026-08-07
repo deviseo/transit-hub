@@ -2,9 +2,76 @@ package httpserver
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"transithub/backend/internal/config"
 )
+
+func TestProtectedPathIncludesUsersPrefix(t *testing.T) {
+	server := &Server{}
+	for _, path := range []string{"/api/users", "/api/users/user-1"} {
+		if !server.protectedPath(path) {
+			t.Fatalf("expected %s to be protected", path)
+		}
+	}
+}
+
+func TestCORSWithoutConfiguredOriginsDoesNotAuthorizeCrossOriginRequest(t *testing.T) {
+	server := &Server{cfg: config.Config{}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	request.Header.Set("Origin", "https://review.invalid")
+
+	server.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("unconfigured CORS must not authorize origin, got %q", got)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("unconfigured CORS must not allow credentials, got %q", got)
+	}
+}
+
+func TestCORSWithoutOriginDoesNotEmitWildcardCredentials(t *testing.T) {
+	server := &Server{cfg: config.Config{}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+
+	server.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("same-origin request must not emit wildcard CORS, got %q", got)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Fatalf("same-origin request must not emit CORS credentials, got %q", got)
+	}
+}
+
+func TestCORSExplicitlyConfiguredOriginIsAuthorized(t *testing.T) {
+	origin := "https://app.example.com"
+	cfg := config.Config{CORSOrigins: []string{origin}}
+	server := &Server{cfg: cfg, allowed: makeAllowedOrigins(cfg.CORSOrigins)}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	request.Header.Set("Origin", origin)
+
+	server.cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(recorder, request)
+
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != origin {
+		t.Fatalf("configured origin = %q, want %q", got, origin)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("configured origin credentials = %q, want true", got)
+	}
+}
 
 func TestProtectedPathIncludesMassEmailPrefix(t *testing.T) {
 	server := &Server{}

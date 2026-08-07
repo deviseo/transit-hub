@@ -69,7 +69,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 
-	auth.RegisterRoutes(server.mux, authService, cfg.AllowPublicRegister)
+	auth.RegisterRoutes(server.mux, authService)
 	users.RegisterRoutes(server.mux, users.NewService(users.NewRepository(db)))
 	adminAccountsService := admin_accounts.NewService(admin_accounts.NewRepository(db))
 	upstreamRepository := upstream.NewRepository(db)
@@ -439,7 +439,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email")
+	return strings.HasPrefix(path, "/api/users") || strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email")
 }
 
 func (s *Server) setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
@@ -509,15 +509,7 @@ func (r *statusRecorder) Flush() {
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if len(s.cfg.CORSOrigins) == 0 {
-			if origin == "" {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			} else {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
-			}
-			w.Header().Set("Access-Control-Allow-Credentials", "true")
-		} else if _, ok := s.allowed[origin]; ok {
+		if _, ok := s.allowed[origin]; origin != "" && ok {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")

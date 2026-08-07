@@ -2,10 +2,12 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"time"
 )
 
 // BrowserUserAgent 是所有上游 HTTP 请求统一使用的浏览器 User-Agent。
@@ -35,6 +37,18 @@ func NewHTTPClient(client *http.Client) *HTTPClient {
 }
 
 func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonResponse, error) {
+	return c.requestJSONWithContext(context.Background(), reqURL, options)
+}
+
+// requestJSONWithTimeout 为少量对延迟敏感的只读请求设置更短的调用时限，
+// 不改变共享 HTTP client 的全局超时配置。
+func (c *HTTPClient) requestJSONWithTimeout(reqURL string, options requestOptions, timeout time.Duration) (jsonResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return c.requestJSONWithContext(ctx, reqURL, options)
+}
+
+func (c *HTTPClient) requestJSONWithContext(ctx context.Context, reqURL string, options requestOptions) (jsonResponse, error) {
 	method := options.Method
 	if method == "" {
 		method = http.MethodGet
@@ -45,7 +59,7 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 		return jsonResponse{}, err
 	}
 
-	req, err := http.NewRequest(method, reqURL, body)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return jsonResponse{}, newRequestError(ErrorInvalidURL, "")
 	}

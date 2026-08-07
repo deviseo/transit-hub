@@ -8,18 +8,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository struct {
 	db *pgxpool.Pool
-}
-
-type EmailVerification struct {
-	ID        string
-	CodeHash  string
-	ExpiresAt time.Time
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
@@ -29,41 +22,6 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 func (r *Repository) EnsureSchema(ctx context.Context) error {
 	// 当前线上 users 表早期没有密码列；启动时补齐该列，保证注册/登录接口能在旧库上直接运行。
 	_, err := r.db.Exec(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS "passwordHash" text NOT NULL DEFAULT ''`)
-	return err
-}
-
-func (r *Repository) SaveEmailCode(ctx context.Context, email string, codeHash string, expiresAt time.Time) error {
-	_, err := r.db.Exec(ctx, `
-		INSERT INTO email_verification_codes (id, email, "codeHash", "expiresAt", "createdAt")
-		VALUES ($1, $2, $3, $4, $5)
-	`, prefixedID("evc"), email, codeHash, expiresAt, time.Now())
-	return err
-}
-
-func (r *Repository) LatestEmailCode(ctx context.Context, email string) (*EmailVerification, error) {
-	var verification EmailVerification
-	err := r.db.QueryRow(ctx, `
-		SELECT id, "codeHash", "expiresAt"
-		FROM email_verification_codes
-		WHERE email = $1 AND "consumedAt" IS NULL
-		ORDER BY "createdAt" DESC
-		LIMIT 1
-	`, email).Scan(&verification.ID, &verification.CodeHash, &verification.ExpiresAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &verification, nil
-}
-
-func (r *Repository) ConsumeEmailCode(ctx context.Context, id string) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE email_verification_codes
-		SET "consumedAt" = $2
-		WHERE id = $1
-	`, id, time.Now())
 	return err
 }
 
@@ -117,11 +75,6 @@ func (r *Repository) UserIDBySessionToken(ctx context.Context, tokenHash string)
 		return "", nil
 	}
 	return userID, err
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func prefixedID(prefix string) string {

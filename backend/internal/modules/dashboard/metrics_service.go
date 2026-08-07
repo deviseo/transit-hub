@@ -264,13 +264,13 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 	// 余额和分组数量保持原有零值降级行为。
 	today := businesstime.Today()
 	var (
-		todayProfitVal          float64
-		todayProfitErr          error
-		siteBalance             float64
-		groupCount              int
-		upstreamBalance         float64
-		costQuality             *CostQuality
-		wg                      sync.WaitGroup
+		todayProfitVal  float64
+		todayProfitErr  error
+		siteBalance     float64
+		groupCount      int
+		upstreamBalance float64
+		costQuality     *CostQuality
+		wg              sync.WaitGroup
 	)
 
 	// goroutine 1: 今日盈利额度（平台中性）。
@@ -403,7 +403,7 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	for _, snap := range snapshots {
 		points = append(points, TrendPoint{
 			Date:            snap.Date.Format("2006-01-02"),
-			TodayProfit:     snap.TodayProfit,  // 保留 *float64，NULL 表示该天未采集
+			TodayProfit:     snap.TodayProfit, // 保留 *float64，NULL 表示该天未采集
 			SiteBalance:     derefF64(snap.SiteBalance),
 			TodayPurchase:   snap.TodayPurchase, // 保留 *float64
 			NetProfit:       snap.NetProfit,     // 保留 *float64
@@ -1081,10 +1081,10 @@ func (s *MetricsService) DailyStats(ctx context.Context, userID string, from, to
 		dateStr := d.Format("2006-01-02")
 		if snap, ok := snapMap[dateStr]; ok {
 			item := DailyStatItem{
-				Date:             dateStr,
-				SettlementStatus: snap.SettlementStatus,
-				SnapshotSource:   snap.SnapshotSource,
-				TodayProfit:      snap.TodayProfit,
+				Date:               dateStr,
+				SettlementStatus:   snap.SettlementStatus,
+				SnapshotSource:     snap.SnapshotSource,
+				TodayProfit:        snap.TodayProfit,
 				CostExpectedCount:  snap.CostExpectedCount,
 				CostCollectedCount: snap.CostCollectedCount,
 			}

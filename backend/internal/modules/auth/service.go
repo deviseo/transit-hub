@@ -14,39 +14,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-const defaultEmailCode = "123456"
-
 type Service struct {
 	repository *Repository
-}
-
-type EmailCodeRequest struct {
-	Email string `json:"email"`
-}
-
-type EmailCodeResponse struct {
-	Success bool   `json:"success"`
-	Code    string `json:"code"`
-}
-
-type RegisterRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Code     string `json:"code"`
 }
 
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-type PasswordLogin struct {
-	Account  string `json:"account"`
-	Password string `json:"password"`
-}
-
-type APIKeyLogin struct {
-	APIKey string `json:"apiKey"`
 }
 
 type TokenResponse struct {
@@ -108,55 +82,6 @@ func (s *Service) BootstrapAdmin(ctx context.Context, email, password string) er
 	return nil
 }
 
-func (s *Service) RequestEmailCode(ctx context.Context, dto EmailCodeRequest) (EmailCodeResponse, error) {
-	email := normalizeEmail(dto.Email)
-	if email == "" {
-		return EmailCodeResponse{}, requestError(http.StatusBadRequest, "auth.errors.emailRequired")
-	}
-
-	// 当前阶段验证码固定为 123456，但仍写入验证码表；以后接入真实邮件时只需替换生成和发送逻辑。
-	if err := s.repository.SaveEmailCode(ctx, email, hashValue(defaultEmailCode), time.Now().Add(10*time.Minute)); err != nil {
-		return EmailCodeResponse{}, err
-	}
-	return EmailCodeResponse{Success: true, Code: defaultEmailCode}, nil
-}
-
-func (s *Service) Register(ctx context.Context, dto RegisterRequest) (TokenResponse, error) {
-	email := normalizeEmail(dto.Email)
-	password := strings.TrimSpace(dto.Password)
-	code := strings.TrimSpace(dto.Code)
-	if email == "" || password == "" || code == "" {
-		return TokenResponse{}, requestError(http.StatusBadRequest, "auth.errors.invalidRegister")
-	}
-	if code != defaultEmailCode {
-		return TokenResponse{}, requestError(http.StatusBadRequest, "auth.errors.invalidCode")
-	}
-
-	// 验证码表记录用于模拟真实邮箱验证码生命周期，防止未请求验证码就直接注册。
-	verification, err := s.repository.LatestEmailCode(ctx, email)
-	if err != nil {
-		return TokenResponse{}, err
-	}
-	if verification == nil || verification.CodeHash != hashValue(defaultEmailCode) || time.Now().After(verification.ExpiresAt) {
-		return TokenResponse{}, requestError(http.StatusBadRequest, "auth.errors.invalidCode")
-	}
-	// 密码和验证码分开处理：验证码是临时固定值，密码必须用带盐哈希保存，避免明文或快速哈希落库。
-	passwordHash, err := hashPassword(password)
-	if err != nil {
-		return TokenResponse{}, err
-	}
-	if err := s.repository.CreateUser(ctx, email, passwordHash); err != nil {
-		if isUniqueViolation(err) {
-			return TokenResponse{}, requestError(http.StatusConflict, "auth.errors.emailExists")
-		}
-		return TokenResponse{}, err
-	}
-	if err := s.repository.ConsumeEmailCode(ctx, verification.ID); err != nil {
-		return TokenResponse{}, err
-	}
-	return s.createSession(ctx, "register", email)
-}
-
 func (s *Service) Login(ctx context.Context, dto LoginRequest) (TokenResponse, error) {
 	email := normalizeEmail(dto.Email)
 	password := strings.TrimSpace(dto.Password)
@@ -171,20 +96,6 @@ func (s *Service) Login(ctx context.Context, dto LoginRequest) (TokenResponse, e
 		return TokenResponse{}, requestError(http.StatusUnauthorized, "auth.errors.invalidCredentials")
 	}
 	return s.createSession(ctx, "login", email)
-}
-
-func (s *Service) LoginWithPassword(dto PasswordLogin) (TokenResponse, bool) {
-	if strings.TrimSpace(dto.Account) == "" || strings.TrimSpace(dto.Password) == "" {
-		return TokenResponse{}, false
-	}
-	return TokenResponse{Strategy: "password", Subject: dto.Account, AccessToken: "pending-implementation"}, true
-}
-
-func (s *Service) LoginWithAPIKey(dto APIKeyLogin) (TokenResponse, bool) {
-	if strings.TrimSpace(dto.APIKey) == "" {
-		return TokenResponse{}, false
-	}
-	return TokenResponse{Strategy: "api-key", Subject: dto.APIKey, AccessToken: "pending-implementation"}, true
 }
 
 func (s *Service) CurrentUser(ctx context.Context, accessToken string) (CurrentUser, error) {

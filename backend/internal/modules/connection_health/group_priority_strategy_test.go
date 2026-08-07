@@ -251,6 +251,38 @@ func TestSetAdminGroupPolicyConfiguration_PersistsProbeSortFallbackMultiplier(t 
 	}
 }
 
+func TestSetAdminGroupPolicyConfiguration_SynchronizesPriorityImmediately(t *testing.T) {
+	repo := newFakeRepository()
+	policy := probePolicy()
+	policy.PriorityMode = PriorityModeMultiplier
+	policy.StrategyMode = StrategyModeHealthProbe
+	policy.AutoDegradeEnabled = false
+	repo.policies = []Policy{policy}
+	currentPriority := 11
+	reader := fakePlatformGroupReader{
+		groups: []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+		accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{
+			"g1": {{ID: "100", Name: "cheap", Priority: &currentPriority, Models: "gpt-4o"}},
+		},
+	}
+	actions := &fakeTargetPriorityActioner{}
+	service := newAdminGroupsService(reader, fakeAdminGroupKeyReader{
+		fakeMySitesReader: fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformSub2API}},
+	}, repo)
+	service.sites = fakeSiteLookup{}
+	service.priorityActions = actions
+	fallback := 0.08
+
+	if _, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
+		PolicyIDs: []string{policy.ID}, ProbeSortFallbackMultiplier: &fallback,
+	}); err != nil {
+		t.Fatalf("save group configuration: %v", err)
+	}
+	if len(actions.calls) != 1 || actions.calls[0].targetID != "100" || actions.calls[0].priority != 10 {
+		t.Fatalf("priority must synchronize immediately after saving group configuration: %+v", actions.calls)
+	}
+}
+
 func TestSetAdminGroupPolicyConfiguration_QuickPolicyCreatesAndBindsTogether(t *testing.T) {
 	repo := newFakeRepository()
 	reader := fakePlatformGroupReader{
