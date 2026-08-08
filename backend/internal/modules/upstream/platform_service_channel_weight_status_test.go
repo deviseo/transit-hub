@@ -1,11 +1,51 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestUpdateNewAPIChannelWeightStatusContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformNewAPI, BaseURL: server.URL, Cookie: "session=abc", UserID: "1"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- service.UpdateNewAPIChannelWeightStatusContext(ctx, session, "42", 0, 2)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked channel update did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled channel update must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("channel update did not stop after context cancellation")
+	}
+}
 
 // TestUpdateNewAPIChannelWeightStatus_PutBodyIsTopLevel 验证 PUT /api/channel/ 的请求体
 // 字段在 JSON 顶层（new-api UpdateChannel 用 ShouldBindJSON(&PatchChannel) 直接绑定），

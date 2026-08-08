@@ -51,6 +51,9 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			strategy_mode text NOT NULL DEFAULT 'health_probe',
 			priority_min_write_interval_seconds integer NOT NULL DEFAULT 30,
 			priority_max_pending_age_seconds integer NOT NULL DEFAULT 300,
+			priority_reconcile_interval_seconds integer NOT NULL DEFAULT 30,
+			priority_inventory_snapshot_ttl_seconds integer NOT NULL DEFAULT 60,
+			priority_reconcile_failure_backoff_seconds integer NOT NULL DEFAULT 30,
 			priority_drift_action text NOT NULL DEFAULT 'alert_only',
 			priority_read_mode text NOT NULL DEFAULT 'inventory_snapshot',
 			daily_probe_budget integer NOT NULL DEFAULT 1000,
@@ -63,6 +66,9 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS unschedulable_probe_interval_minutes integer NOT NULL DEFAULT 60`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_min_write_interval_seconds integer NOT NULL DEFAULT 30`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_max_pending_age_seconds integer NOT NULL DEFAULT 300`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_reconcile_interval_seconds integer NOT NULL DEFAULT 30`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_inventory_snapshot_ttl_seconds integer NOT NULL DEFAULT 60`,
+		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_reconcile_failure_backoff_seconds integer NOT NULL DEFAULT 30`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_drift_action text NOT NULL DEFAULT 'alert_only'`,
 		`ALTER TABLE connection_health_policies ADD COLUMN IF NOT EXISTS priority_read_mode text NOT NULL DEFAULT 'inventory_snapshot'`,
 		`CREATE INDEX IF NOT EXISTS idx_connection_health_policies_workspace_enabled ON connection_health_policies (user_id, admin_account_id, enabled)`,
@@ -220,15 +226,36 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			last_write_attempt_at timestamptz NULL,
 			last_write_success_at timestamptz NULL,
 			last_drift_at timestamptz NULL,
+			last_reconcile_attempt_at timestamptz NULL,
+			last_reconcile_success_at timestamptz NULL,
+			last_reconcile_failure_at timestamptz NULL,
+			next_reconcile_at timestamptz NULL,
+			inventory_snapshot_expires_at timestamptz NULL,
 			last_decision text NOT NULL DEFAULT '',
 			last_suppression_reason text NOT NULL DEFAULT '',
 			last_error text NOT NULL DEFAULT '',
+			last_inventory_error text NOT NULL DEFAULT '',
+			inventory_status text NOT NULL DEFAULT 'unknown',
+			last_action_source text NOT NULL DEFAULT '',
+			policy_version text NOT NULL DEFAULT '',
 			min_write_interval_seconds integer NOT NULL DEFAULT 30,
 			max_pending_age_seconds integer NOT NULL DEFAULT 300,
+			reconcile_interval_seconds integer NOT NULL DEFAULT 30,
+			inventory_snapshot_ttl_seconds integer NOT NULL DEFAULT 60,
+			reconcile_failure_backoff_seconds integer NOT NULL DEFAULT 30,
 			drift_action text NOT NULL DEFAULT 'alert_only',
 			read_mode text NOT NULL DEFAULT 'inventory_snapshot',
+			pending_age_seconds bigint NOT NULL DEFAULT 0,
+			last_inventory_read_duration_ms bigint NOT NULL DEFAULT 0,
+			last_write_duration_ms bigint NOT NULL DEFAULT 0,
 			evaluation_count bigint NOT NULL DEFAULT 0,
+			probe_evaluation_count bigint NOT NULL DEFAULT 0,
 			signature_change_count bigint NOT NULL DEFAULT 0,
+			reconcile_attempt_count bigint NOT NULL DEFAULT 0,
+			reconcile_success_count bigint NOT NULL DEFAULT 0,
+			reconcile_failure_count bigint NOT NULL DEFAULT 0,
+			snapshot_hit_count bigint NOT NULL DEFAULT 0,
+			snapshot_miss_count bigint NOT NULL DEFAULT 0,
 			write_attempt_count bigint NOT NULL DEFAULT 0,
 			write_success_count bigint NOT NULL DEFAULT 0,
 			write_failure_count bigint NOT NULL DEFAULT 0,
@@ -238,6 +265,27 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (user_id, admin_account_id)
 		)`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_reconcile_attempt_at timestamptz NULL`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_reconcile_success_at timestamptz NULL`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_reconcile_failure_at timestamptz NULL`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS next_reconcile_at timestamptz NULL`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS inventory_snapshot_expires_at timestamptz NULL`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_inventory_error text NOT NULL DEFAULT ''`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS inventory_status text NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_action_source text NOT NULL DEFAULT ''`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS policy_version text NOT NULL DEFAULT ''`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS reconcile_interval_seconds integer NOT NULL DEFAULT 30`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS inventory_snapshot_ttl_seconds integer NOT NULL DEFAULT 60`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS reconcile_failure_backoff_seconds integer NOT NULL DEFAULT 30`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS pending_age_seconds bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_inventory_read_duration_ms bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS last_write_duration_ms bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS probe_evaluation_count bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS reconcile_attempt_count bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS reconcile_success_count bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS reconcile_failure_count bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS snapshot_hit_count bigint NOT NULL DEFAULT 0`,
+		`ALTER TABLE connection_health_priority_workspace_sync_states ADD COLUMN IF NOT EXISTS snapshot_miss_count bigint NOT NULL DEFAULT 0`,
 
 		`CREATE TABLE IF NOT EXISTS connection_health_target_action_states (
 			user_id text NOT NULL,
@@ -291,9 +339,10 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
 			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
-			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_reconcile_interval_seconds,
+			priority_inventory_snapshot_ttl_seconds, priority_reconcile_failure_backoff_seconds, priority_drift_action, priority_read_mode,
 			daily_probe_budget, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,now(),now())
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,now(),now())
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			enabled = EXCLUDED.enabled,
@@ -315,6 +364,9 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 			strategy_mode = EXCLUDED.strategy_mode,
 			priority_min_write_interval_seconds = EXCLUDED.priority_min_write_interval_seconds,
 			priority_max_pending_age_seconds = EXCLUDED.priority_max_pending_age_seconds,
+			priority_reconcile_interval_seconds = EXCLUDED.priority_reconcile_interval_seconds,
+			priority_inventory_snapshot_ttl_seconds = EXCLUDED.priority_inventory_snapshot_ttl_seconds,
+			priority_reconcile_failure_backoff_seconds = EXCLUDED.priority_reconcile_failure_backoff_seconds,
 			priority_drift_action = EXCLUDED.priority_drift_action,
 			priority_read_mode = EXCLUDED.priority_read_mode,
 			daily_probe_budget = EXCLUDED.daily_probe_budget,
@@ -324,7 +376,9 @@ func upsertPolicyWithExecutor(ctx context.Context, executor policyExecutor, p Po
 		p.FailureThreshold, p.SuccessThreshold, p.CooldownSeconds, p.ObservationSeconds,
 		p.RecoveryStepPercent, p.AutoDegradeEnabled, p.AutoRemoteActionEnabled, normalizePriorityMode(p.PriorityMode),
 		normalizeStrategyMode(p.StrategyMode), p.PrioritySyncPreset.MinWriteIntervalSeconds,
-		p.PrioritySyncPreset.MaxPendingAgeSeconds, p.PrioritySyncPreset.DriftAction, p.PrioritySyncPreset.ReadMode, p.DailyProbeBudget)
+		p.PrioritySyncPreset.MaxPendingAgeSeconds, p.PrioritySyncPreset.ReconcileIntervalSeconds,
+		p.PrioritySyncPreset.InventorySnapshotTTLSeconds, p.PrioritySyncPreset.ReconcileFailureBackoffSeconds,
+		p.PrioritySyncPreset.DriftAction, p.PrioritySyncPreset.ReadMode, p.DailyProbeBudget)
 	return err
 }
 
@@ -452,7 +506,8 @@ func (r *Repository) GetPolicy(ctx context.Context, id string, userID string, ad
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
 			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
-			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_reconcile_interval_seconds,
+			priority_inventory_snapshot_ttl_seconds, priority_reconcile_failure_backoff_seconds, priority_drift_action, priority_read_mode,
 			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE id = $1 AND user_id = $2 AND admin_account_id = $3
 	`, id, userID, adminAccountID)
@@ -478,7 +533,8 @@ func (r *Repository) ListPolicies(ctx context.Context, userID string, adminAccou
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
 			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
-			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_reconcile_interval_seconds,
+			priority_inventory_snapshot_ttl_seconds, priority_reconcile_failure_backoff_seconds, priority_drift_action, priority_read_mode,
 			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE user_id = $1 AND admin_account_id = $2 ORDER BY created_at ASC
 	`, userID, adminAccountID)
@@ -516,7 +572,8 @@ func (r *Repository) ListEnabledPolicies(ctx context.Context) ([]Policy, error) 
 			probe_interval_seconds, continue_probe_when_unschedulable, unschedulable_probe_interval_minutes,
 			failure_threshold, success_threshold, cooldown_seconds, observation_seconds,
 			recovery_step_percent, auto_degrade_enabled, auto_remote_action_enabled, priority_mode, strategy_mode,
-			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_drift_action, priority_read_mode,
+			priority_min_write_interval_seconds, priority_max_pending_age_seconds, priority_reconcile_interval_seconds,
+			priority_inventory_snapshot_ttl_seconds, priority_reconcile_failure_backoff_seconds, priority_drift_action, priority_read_mode,
 			daily_probe_budget, created_at, updated_at
 		FROM connection_health_policies WHERE enabled = true ORDER BY created_at ASC
 	`)
@@ -559,7 +616,8 @@ func scanPolicy(row pgx.Row) (*Policy, error) {
 		&p.ProbeIntervalSeconds, &p.ContinueProbeWhenUnschedulable, &p.UnschedulableProbeIntervalMinutes,
 		&p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
 		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode,
-		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds,
+		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds, &p.PrioritySyncPreset.ReconcileIntervalSeconds,
+		&p.PrioritySyncPreset.InventorySnapshotTTLSeconds, &p.PrioritySyncPreset.ReconcileFailureBackoffSeconds,
 		&p.PrioritySyncPreset.DriftAction, &p.PrioritySyncPreset.ReadMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -579,7 +637,8 @@ func scanPolicyRow(row rowScanner) (*Policy, error) {
 		&p.ProbeIntervalSeconds, &p.ContinueProbeWhenUnschedulable, &p.UnschedulableProbeIntervalMinutes,
 		&p.FailureThreshold, &p.SuccessThreshold, &p.CooldownSeconds, &p.ObservationSeconds,
 		&p.RecoveryStepPercent, &p.AutoDegradeEnabled, &p.AutoRemoteActionEnabled, &p.PriorityMode, &p.StrategyMode,
-		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds,
+		&p.PrioritySyncPreset.MinWriteIntervalSeconds, &p.PrioritySyncPreset.MaxPendingAgeSeconds, &p.PrioritySyncPreset.ReconcileIntervalSeconds,
+		&p.PrioritySyncPreset.InventorySnapshotTTLSeconds, &p.PrioritySyncPreset.ReconcileFailureBackoffSeconds,
 		&p.PrioritySyncPreset.DriftAction, &p.PrioritySyncPreset.ReadMode, &p.DailyProbeBudget, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
@@ -1398,6 +1457,41 @@ func (r *Repository) ListAllPrioritySyncStates(ctx context.Context) ([]PriorityS
 	return states, rows.Err()
 }
 
+func (r *Repository) ListAllPriorityWorkspaceSyncStates(ctx context.Context) ([]PriorityWorkspaceSyncState, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, admin_account_id, applied_signature, pending_signature, pending_since,
+			last_evaluation_at, last_write_attempt_at, last_write_success_at, last_drift_at,
+			last_reconcile_attempt_at, last_reconcile_success_at, last_reconcile_failure_at,
+			next_reconcile_at, inventory_snapshot_expires_at,
+			last_decision, last_suppression_reason, last_error, last_inventory_error,
+			inventory_status, last_action_source, policy_version,
+			min_write_interval_seconds, max_pending_age_seconds, reconcile_interval_seconds,
+			inventory_snapshot_ttl_seconds, reconcile_failure_backoff_seconds, drift_action, read_mode,
+			pending_age_seconds, last_inventory_read_duration_ms, last_write_duration_ms,
+			evaluation_count, probe_evaluation_count, signature_change_count,
+			reconcile_attempt_count, reconcile_success_count, reconcile_failure_count,
+			snapshot_hit_count, snapshot_miss_count, write_attempt_count, write_success_count,
+			write_failure_count, unchanged_skip_count, window_suppression_count, drift_count, updated_at
+		FROM connection_health_priority_workspace_sync_states
+		WHERE pending_signature <> ''
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	states := make([]PriorityWorkspaceSyncState, 0)
+	for rows.Next() {
+		state, scanErr := scanPriorityWorkspaceSyncState(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if state != nil {
+			states = append(states, *state)
+		}
+	}
+	return states, rows.Err()
+}
+
 func (r *Repository) UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO connection_health_priority_sync_states (
@@ -1429,9 +1523,16 @@ func (r *Repository) GetPriorityWorkspaceSyncState(ctx context.Context, userID s
 	row := r.db.QueryRow(ctx, `
 		SELECT user_id, admin_account_id, applied_signature, pending_signature, pending_since,
 			last_evaluation_at, last_write_attempt_at, last_write_success_at, last_drift_at,
-			last_decision, last_suppression_reason, last_error,
-			min_write_interval_seconds, max_pending_age_seconds, drift_action, read_mode,
-			evaluation_count, signature_change_count, write_attempt_count, write_success_count,
+			last_reconcile_attempt_at, last_reconcile_success_at, last_reconcile_failure_at,
+			next_reconcile_at, inventory_snapshot_expires_at,
+			last_decision, last_suppression_reason, last_error, last_inventory_error,
+			inventory_status, last_action_source, policy_version,
+			min_write_interval_seconds, max_pending_age_seconds, reconcile_interval_seconds,
+			inventory_snapshot_ttl_seconds, reconcile_failure_backoff_seconds, drift_action, read_mode,
+			pending_age_seconds, last_inventory_read_duration_ms, last_write_duration_ms,
+			evaluation_count, probe_evaluation_count, signature_change_count,
+			reconcile_attempt_count, reconcile_success_count, reconcile_failure_count,
+			snapshot_hit_count, snapshot_miss_count, write_attempt_count, write_success_count,
 			write_failure_count, unchanged_skip_count, window_suppression_count, drift_count, updated_at
 		FROM connection_health_priority_workspace_sync_states
 		WHERE user_id = $1 AND admin_account_id = $2
@@ -1444,12 +1545,21 @@ func (r *Repository) UpsertPriorityWorkspaceSyncState(ctx context.Context, state
 		INSERT INTO connection_health_priority_workspace_sync_states (
 			user_id, admin_account_id, applied_signature, pending_signature, pending_since,
 			last_evaluation_at, last_write_attempt_at, last_write_success_at, last_drift_at,
-			last_decision, last_suppression_reason, last_error,
-			min_write_interval_seconds, max_pending_age_seconds, drift_action, read_mode,
-			evaluation_count, signature_change_count, write_attempt_count, write_success_count,
+			last_reconcile_attempt_at, last_reconcile_success_at, last_reconcile_failure_at,
+			next_reconcile_at, inventory_snapshot_expires_at,
+			last_decision, last_suppression_reason, last_error, last_inventory_error,
+			inventory_status, last_action_source, policy_version,
+			min_write_interval_seconds, max_pending_age_seconds, reconcile_interval_seconds,
+			inventory_snapshot_ttl_seconds, reconcile_failure_backoff_seconds, drift_action, read_mode,
+			pending_age_seconds, last_inventory_read_duration_ms, last_write_duration_ms,
+			evaluation_count, probe_evaluation_count, signature_change_count,
+			reconcile_attempt_count, reconcile_success_count, reconcile_failure_count,
+			snapshot_hit_count, snapshot_miss_count, write_attempt_count, write_success_count,
 			write_failure_count, unchanged_skip_count, window_suppression_count, drift_count, updated_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,now()
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+			$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
+			$39,$40,$41,$42,$43,$44,$45,now()
 		)
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
 			applied_signature = EXCLUDED.applied_signature,
@@ -1459,15 +1569,36 @@ func (r *Repository) UpsertPriorityWorkspaceSyncState(ctx context.Context, state
 			last_write_attempt_at = EXCLUDED.last_write_attempt_at,
 			last_write_success_at = EXCLUDED.last_write_success_at,
 			last_drift_at = EXCLUDED.last_drift_at,
+			last_reconcile_attempt_at = EXCLUDED.last_reconcile_attempt_at,
+			last_reconcile_success_at = EXCLUDED.last_reconcile_success_at,
+			last_reconcile_failure_at = EXCLUDED.last_reconcile_failure_at,
+			next_reconcile_at = EXCLUDED.next_reconcile_at,
+			inventory_snapshot_expires_at = EXCLUDED.inventory_snapshot_expires_at,
 			last_decision = EXCLUDED.last_decision,
 			last_suppression_reason = EXCLUDED.last_suppression_reason,
 			last_error = EXCLUDED.last_error,
+			last_inventory_error = EXCLUDED.last_inventory_error,
+			inventory_status = EXCLUDED.inventory_status,
+			last_action_source = EXCLUDED.last_action_source,
+			policy_version = EXCLUDED.policy_version,
 			min_write_interval_seconds = EXCLUDED.min_write_interval_seconds,
 			max_pending_age_seconds = EXCLUDED.max_pending_age_seconds,
+			reconcile_interval_seconds = EXCLUDED.reconcile_interval_seconds,
+			inventory_snapshot_ttl_seconds = EXCLUDED.inventory_snapshot_ttl_seconds,
+			reconcile_failure_backoff_seconds = EXCLUDED.reconcile_failure_backoff_seconds,
 			drift_action = EXCLUDED.drift_action,
 			read_mode = EXCLUDED.read_mode,
+			pending_age_seconds = EXCLUDED.pending_age_seconds,
+			last_inventory_read_duration_ms = EXCLUDED.last_inventory_read_duration_ms,
+			last_write_duration_ms = EXCLUDED.last_write_duration_ms,
 			evaluation_count = EXCLUDED.evaluation_count,
+			probe_evaluation_count = EXCLUDED.probe_evaluation_count,
 			signature_change_count = EXCLUDED.signature_change_count,
+			reconcile_attempt_count = EXCLUDED.reconcile_attempt_count,
+			reconcile_success_count = EXCLUDED.reconcile_success_count,
+			reconcile_failure_count = EXCLUDED.reconcile_failure_count,
+			snapshot_hit_count = EXCLUDED.snapshot_hit_count,
+			snapshot_miss_count = EXCLUDED.snapshot_miss_count,
 			write_attempt_count = EXCLUDED.write_attempt_count,
 			write_success_count = EXCLUDED.write_success_count,
 			write_failure_count = EXCLUDED.write_failure_count,
@@ -1477,9 +1608,16 @@ func (r *Repository) UpsertPriorityWorkspaceSyncState(ctx context.Context, state
 			updated_at = now()
 	`, state.UserID, state.AdminAccountID, state.AppliedSignature, state.PendingSignature, state.PendingSince,
 		state.LastEvaluationAt, state.LastWriteAttemptAt, state.LastWriteSuccessAt, state.LastDriftAt,
-		state.LastDecision, state.LastSuppressionReason, state.LastError,
-		state.MinWriteIntervalSeconds, state.MaxPendingAgeSeconds, state.DriftAction, state.ReadMode,
-		state.EvaluationCount, state.SignatureChangeCount, state.WriteAttemptCount, state.WriteSuccessCount,
+		state.LastReconcileAttemptAt, state.LastReconcileSuccessAt, state.LastReconcileFailureAt,
+		state.NextReconcileAt, state.InventorySnapshotExpiresAt,
+		state.LastDecision, state.LastSuppressionReason, state.LastError, state.LastInventoryError,
+		state.InventoryStatus, state.LastActionSource, state.PolicyVersion,
+		state.MinWriteIntervalSeconds, state.MaxPendingAgeSeconds, state.ReconcileIntervalSeconds,
+		state.InventorySnapshotTTLSeconds, state.ReconcileFailureBackoffSeconds, state.DriftAction, state.ReadMode,
+		state.PendingAgeSeconds, state.LastInventoryReadDurationMs, state.LastWriteDurationMs,
+		state.EvaluationCount, state.ProbeEvaluationCount, state.SignatureChangeCount,
+		state.ReconcileAttemptCount, state.ReconcileSuccessCount, state.ReconcileFailureCount,
+		state.SnapshotHitCount, state.SnapshotMissCount, state.WriteAttemptCount, state.WriteSuccessCount,
 		state.WriteFailureCount, state.UnchangedSkipCount, state.WindowSuppressionCount, state.DriftCount)
 	return err
 }
@@ -1489,9 +1627,16 @@ func scanPriorityWorkspaceSyncState(row pgx.Row) (*PriorityWorkspaceSyncState, e
 	if err := row.Scan(
 		&state.UserID, &state.AdminAccountID, &state.AppliedSignature, &state.PendingSignature, &state.PendingSince,
 		&state.LastEvaluationAt, &state.LastWriteAttemptAt, &state.LastWriteSuccessAt, &state.LastDriftAt,
-		&state.LastDecision, &state.LastSuppressionReason, &state.LastError,
-		&state.MinWriteIntervalSeconds, &state.MaxPendingAgeSeconds, &state.DriftAction, &state.ReadMode,
-		&state.EvaluationCount, &state.SignatureChangeCount, &state.WriteAttemptCount, &state.WriteSuccessCount,
+		&state.LastReconcileAttemptAt, &state.LastReconcileSuccessAt, &state.LastReconcileFailureAt,
+		&state.NextReconcileAt, &state.InventorySnapshotExpiresAt,
+		&state.LastDecision, &state.LastSuppressionReason, &state.LastError, &state.LastInventoryError,
+		&state.InventoryStatus, &state.LastActionSource, &state.PolicyVersion,
+		&state.MinWriteIntervalSeconds, &state.MaxPendingAgeSeconds, &state.ReconcileIntervalSeconds,
+		&state.InventorySnapshotTTLSeconds, &state.ReconcileFailureBackoffSeconds, &state.DriftAction, &state.ReadMode,
+		&state.PendingAgeSeconds, &state.LastInventoryReadDurationMs, &state.LastWriteDurationMs,
+		&state.EvaluationCount, &state.ProbeEvaluationCount, &state.SignatureChangeCount,
+		&state.ReconcileAttemptCount, &state.ReconcileSuccessCount, &state.ReconcileFailureCount,
+		&state.SnapshotHitCount, &state.SnapshotMissCount, &state.WriteAttemptCount, &state.WriteSuccessCount,
 		&state.WriteFailureCount, &state.UnchangedSkipCount, &state.WindowSuppressionCount, &state.DriftCount, &state.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

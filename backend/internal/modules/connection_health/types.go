@@ -68,18 +68,23 @@ const (
 	PriorityDriftActionAlertOnly = "alert_only"
 	PriorityReadModeInventory    = "inventory_snapshot"
 
-	defaultPriorityMinWriteIntervalSeconds = 30
-	defaultPriorityMaxPendingAgeSeconds    = 300
+	defaultPriorityMinWriteIntervalSeconds  = 30
+	defaultPriorityMaxPendingAgeSeconds     = 300
+	defaultPriorityReconcileIntervalSeconds = 30
+	defaultInventorySnapshotTTLSeconds      = 60
+	defaultReconcileFailureBackoffSeconds   = 30
 )
 
-// PrioritySyncPreset controls the workspace-level writeback gate. The interval is the only
-// user-tunable value in B; the remaining fields make the safety behavior explicit and leave a
-// stable configuration contract for later phases without changing their read-frequency scope.
+// PrioritySyncPreset controls the workspace-level writeback gate and the independent C-phase
+// inventory reconciliation cadence. ProbeIntervalSeconds remains the separate probe cadence.
 type PrioritySyncPreset struct {
-	MinWriteIntervalSeconds int    `json:"minWriteIntervalSeconds"`
-	MaxPendingAgeSeconds    int    `json:"maxPendingAgeSeconds"`
-	DriftAction             string `json:"driftAction"`
-	ReadMode                string `json:"readMode"`
+	MinWriteIntervalSeconds        int    `json:"minWriteIntervalSeconds"`
+	MaxPendingAgeSeconds           int    `json:"maxPendingAgeSeconds"`
+	ReconcileIntervalSeconds       int    `json:"reconcileIntervalSeconds"`
+	InventorySnapshotTTLSeconds    int    `json:"inventorySnapshotTtlSeconds"`
+	ReconcileFailureBackoffSeconds int    `json:"reconcileFailureBackoffSeconds"`
+	DriftAction                    string `json:"driftAction"`
+	ReadMode                       string `json:"readMode"`
 }
 
 const (
@@ -176,31 +181,52 @@ type PrioritySyncState struct {
 // signature, coalesced pending signature and writeback observations. Per-target upstream values
 // remain in PrioritySyncState; this row only gates when that existing write path may run.
 type PriorityWorkspaceSyncState struct {
-	UserID                  string     `json:"-"`
-	AdminAccountID          string     `json:"-"`
-	AppliedSignature        string     `json:"-"`
-	PendingSignature        string     `json:"-"`
-	PendingSince            *time.Time `json:"pendingSince,omitempty"`
-	LastEvaluationAt        *time.Time `json:"lastEvaluationAt,omitempty"`
-	LastWriteAttemptAt      *time.Time `json:"lastWriteAttemptAt,omitempty"`
-	LastWriteSuccessAt      *time.Time `json:"lastWriteSuccessAt,omitempty"`
-	LastDriftAt             *time.Time `json:"lastDriftAt,omitempty"`
-	LastDecision            string     `json:"lastDecision"`
-	LastSuppressionReason   string     `json:"lastSuppressionReason"`
-	LastError               string     `json:"lastError"`
-	MinWriteIntervalSeconds int        `json:"minWriteIntervalSeconds"`
-	MaxPendingAgeSeconds    int        `json:"maxPendingAgeSeconds"`
-	DriftAction             string     `json:"driftAction"`
-	ReadMode                string     `json:"readMode"`
-	EvaluationCount         int64      `json:"evaluationCount"`
-	SignatureChangeCount    int64      `json:"signatureChangeCount"`
-	WriteAttemptCount       int64      `json:"writeAttemptCount"`
-	WriteSuccessCount       int64      `json:"writeSuccessCount"`
-	WriteFailureCount       int64      `json:"writeFailureCount"`
-	UnchangedSkipCount      int64      `json:"unchangedSkipCount"`
-	WindowSuppressionCount  int64      `json:"windowSuppressionCount"`
-	DriftCount              int64      `json:"driftCount"`
-	UpdatedAt               time.Time  `json:"updatedAt"`
+	UserID                         string     `json:"-"`
+	AdminAccountID                 string     `json:"-"`
+	AppliedSignature               string     `json:"-"`
+	PendingSignature               string     `json:"-"`
+	PendingSince                   *time.Time `json:"pendingSince,omitempty"`
+	LastEvaluationAt               *time.Time `json:"lastEvaluationAt,omitempty"`
+	LastWriteAttemptAt             *time.Time `json:"lastWriteAttemptAt,omitempty"`
+	LastWriteSuccessAt             *time.Time `json:"lastWriteSuccessAt,omitempty"`
+	LastDriftAt                    *time.Time `json:"lastDriftAt,omitempty"`
+	LastReconcileAttemptAt         *time.Time `json:"lastReconcileAttemptAt,omitempty"`
+	LastReconcileSuccessAt         *time.Time `json:"lastReconcileSuccessAt,omitempty"`
+	LastReconcileFailureAt         *time.Time `json:"lastReconcileFailureAt,omitempty"`
+	NextReconcileAt                *time.Time `json:"nextReconcileAt,omitempty"`
+	InventorySnapshotExpiresAt     *time.Time `json:"inventorySnapshotExpiresAt,omitempty"`
+	LastDecision                   string     `json:"lastDecision"`
+	LastSuppressionReason          string     `json:"lastSuppressionReason"`
+	LastError                      string     `json:"lastError"`
+	LastInventoryError             string     `json:"lastInventoryError"`
+	InventoryStatus                string     `json:"inventoryStatus"`
+	LastActionSource               string     `json:"lastActionSource"`
+	PolicyVersion                  string     `json:"policyVersion"`
+	MinWriteIntervalSeconds        int        `json:"minWriteIntervalSeconds"`
+	MaxPendingAgeSeconds           int        `json:"maxPendingAgeSeconds"`
+	ReconcileIntervalSeconds       int        `json:"reconcileIntervalSeconds"`
+	InventorySnapshotTTLSeconds    int        `json:"inventorySnapshotTtlSeconds"`
+	ReconcileFailureBackoffSeconds int        `json:"reconcileFailureBackoffSeconds"`
+	DriftAction                    string     `json:"driftAction"`
+	ReadMode                       string     `json:"readMode"`
+	PendingAgeSeconds              int64      `json:"pendingAgeSeconds"`
+	LastInventoryReadDurationMs    int64      `json:"lastInventoryReadDurationMs"`
+	LastWriteDurationMs            int64      `json:"lastWriteDurationMs"`
+	EvaluationCount                int64      `json:"evaluationCount"`
+	ProbeEvaluationCount           int64      `json:"probeEvaluationCount"`
+	SignatureChangeCount           int64      `json:"signatureChangeCount"`
+	ReconcileAttemptCount          int64      `json:"reconcileAttemptCount"`
+	ReconcileSuccessCount          int64      `json:"reconcileSuccessCount"`
+	ReconcileFailureCount          int64      `json:"reconcileFailureCount"`
+	SnapshotHitCount               int64      `json:"snapshotHitCount"`
+	SnapshotMissCount              int64      `json:"snapshotMissCount"`
+	WriteAttemptCount              int64      `json:"writeAttemptCount"`
+	WriteSuccessCount              int64      `json:"writeSuccessCount"`
+	WriteFailureCount              int64      `json:"writeFailureCount"`
+	UnchangedSkipCount             int64      `json:"unchangedSkipCount"`
+	WindowSuppressionCount         int64      `json:"windowSuppressionCount"`
+	DriftCount                     int64      `json:"driftCount"`
+	UpdatedAt                      time.Time  `json:"updatedAt"`
 }
 
 // TargetActionState 记录分组健康首次接管账号/渠道启停或权重前的上游状态。
@@ -361,6 +387,17 @@ type PlatformGroupReader interface {
 	// ResolveProbeCredential 在探活前 server-only 地临时解析某账号/渠道的明文 base_url + key。
 	// 明文凭据只在返回值里短暂存在，绝不落库/日志/前端；失败返回 *upstream.ProbeCredentialError。
 	ResolveProbeCredential(session upstream.Session, account upstream.AdminGroupAccountInfo) (upstream.ProbeCredential, error)
+}
+
+// PlatformGroupContextReader is the production scheduler extension. Keeping it optional
+// preserves existing request-path readers while allowing shutdown to cancel inventory HTTP calls.
+type PlatformGroupContextReader interface {
+	FetchAdminAllGroupsContext(ctx context.Context, session upstream.Session) ([]upstream.AdminGroupInfo, error)
+	ListAdminGroupAccountsContext(ctx context.Context, session upstream.Session, group upstream.AdminGroupInfo) ([]upstream.AdminGroupAccountInfo, error)
+}
+
+type PlatformProbeCredentialContextReader interface {
+	ResolveProbeCredentialContext(ctx context.Context, session upstream.Session, account upstream.AdminGroupAccountInfo) (upstream.ProbeCredential, error)
 }
 
 // AdminAccountResolver 解析当前用户所在的 workspace（admin_account_id），

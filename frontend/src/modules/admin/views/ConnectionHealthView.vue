@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Activity,
   AlertTriangle,
@@ -44,6 +45,8 @@ import {
 } from '../utils/connectionHealthPreferences'
 
 import { t, te } from '@/locales'
+const route = useRoute()
+const router = useRouter()
 const {
   overview,
   groups,
@@ -66,6 +69,7 @@ const { currentAccount } = useAdminAccounts()
 const searchText = ref('')
 const selectedType = ref('')
 const selectedGroupId = ref('')
+const focusedGroupId = ref('')
 const selectedConnectionId = ref('')
 const eventsDialogOpen = ref(false)
 let eventsOpenRequestSequence = 0
@@ -165,6 +169,49 @@ watch(filteredGroups, (nextGroups) => {
   selectedGroupId.value = nextGroups[0]?.id ?? ''
 }, { immediate: true })
 
+const routeQueryValue = (value: unknown): string => {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+  return typeof value === 'string' ? value : ''
+}
+
+const clearGroupFocusQuery = async () => {
+  const query = { ...route.query }
+  delete query.focusGroupId
+  delete query.focusGroupName
+  await router.replace({ query })
+}
+
+const consumeRouteGroupFocus = async () => {
+  const focusId = routeQueryValue(route.query.focusGroupId).trim()
+  const focusName = routeQueryValue(route.query.focusGroupName).trim()
+  if (!focusId && !focusName) return
+  if (adminGroups.value.length === 0) return
+
+  const target = filteredGroups.value.find(group => (
+    (focusId && group.id === focusId) || (!focusId && focusName && group.name === focusName)
+  ))
+  if (target) {
+    selectedGroupId.value = target.id
+    focusedGroupId.value = target.id
+  }
+  await clearGroupFocusQuery()
+}
+
+watch(
+  [() => route.query.focusGroupId, () => route.query.focusGroupName, filteredGroups],
+  () => { void consumeRouteGroupFocus() },
+  { immediate: true },
+)
+
+const selectGroup = (groupId: string) => {
+  selectedGroupId.value = groupId
+  focusedGroupId.value = ''
+}
+
+const clearGroupHighlight = () => {
+  focusedGroupId.value = ''
+}
+
 const monitoredGroupCount = computed(() => adminGroups.value.filter(groupMonitoringEnabled).length)
 const conflictCount = computed(() => adminGroups.value.reduce((sum, group) => sum + (group.priorityConflictCount ?? 0), 0))
 const readableMessage = (rawKey: string): string => t(connectionHealthMessageKey(rawKey, te))
@@ -175,6 +222,10 @@ const prioritySyncDecisionLabel = (decision: string): string => {
 const prioritySyncReasonLabel = (reason: string): string => {
   const key = `admin.connectionHealth.prioritySync.reasons.${reason || 'none'}`
   return te(key) ? t(key) : t('admin.connectionHealth.prioritySync.reasons.none')
+}
+const prioritySyncActionLabel = (source: string): string => {
+  const key = `admin.connectionHealth.prioritySync.actionSources.${source || 'unknown'}`
+  return te(key) ? t(key) : t('admin.connectionHealth.prioritySync.actionSources.unknown')
 }
 
 const loadSiteNames = async () => {
@@ -399,7 +450,7 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
 </script>
 
 <template>
-  <div class="space-y-5">
+  <div class="space-y-5" @click.capture="clearGroupHighlight">
     <header class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div class="min-w-0">
         <h1 class="text-xl font-semibold text-foreground">{{ t('admin.connectionHealth.title') }}</h1>
@@ -450,24 +501,34 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
           <dd class="mt-1 text-xl font-semibold tabular-nums text-foreground">{{ conflictCount }}</dd>
         </div>
       </dl>
-      <dl v-if="overview?.prioritySync" class="grid border-t border-border/50 sm:grid-cols-4">
-        <div class="min-w-0 border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
+      <dl v-if="overview?.prioritySync" class="grid border-t border-border/50 sm:grid-cols-3 xl:grid-cols-6">
+        <div class="min-w-0 border-b border-border/50 px-4 py-3 sm:border-r xl:border-b-0">
           <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.decision') }}</dt>
           <dd class="mt-1 truncate text-sm font-medium text-foreground">{{ prioritySyncDecisionLabel(overview.prioritySync.lastDecision) }}</dd>
-          <p v-if="overview.prioritySync.lastSuppressionReason" class="mt-1 truncate text-xs text-muted-foreground">{{ prioritySyncReasonLabel(overview.prioritySync.lastSuppressionReason) }}</p>
+          <p class="mt-1 truncate text-xs text-muted-foreground">{{ prioritySyncActionLabel(overview.prioritySync.lastActionSource) }}</p>
         </div>
-        <div class="border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
+        <div class="border-b border-border/50 px-4 py-3 sm:border-r xl:border-b-0">
           <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.interval') }}</dt>
-          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ t('admin.connectionHealth.prioritySync.intervalValue', { seconds: overview.prioritySync.minWriteIntervalSeconds }) }}</dd>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ t('admin.connectionHealth.prioritySync.intervalPairValue', { write: overview.prioritySync.minWriteIntervalSeconds, reconcile: overview.prioritySync.reconcileIntervalSeconds }) }}</dd>
+        </div>
+        <div class="border-b border-border/50 px-4 py-3 xl:border-b-0 xl:border-r">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.reconcile') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.reconcileSuccessCount }}/{{ overview.prioritySync.reconcileAttemptCount }}</dd>
+          <p v-if="overview.prioritySync.lastInventoryError" class="mt-1 truncate text-xs text-destructive">{{ prioritySyncReasonLabel(overview.prioritySync.lastInventoryError) }}</p>
+        </div>
+        <div class="border-b border-border/50 px-4 py-3 sm:border-r sm:border-b-0">
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.snapshots') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.snapshotHitCount }}/{{ overview.prioritySync.snapshotMissCount }}</dd>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.probeEvaluations', { count: overview.prioritySync.probeEvaluationCount }) }}</p>
         </div>
         <div class="border-b border-border/50 px-4 py-3 sm:border-b-0 sm:border-r">
           <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.writes') }}</dt>
           <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.writeSuccessCount }}/{{ overview.prioritySync.writeAttemptCount }}</dd>
         </div>
         <div class="px-4 py-3">
-          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.skips') }}</dt>
-          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ overview.prioritySync.unchangedSkipCount + overview.prioritySync.windowSuppressionCount }}</dd>
-          <p v-if="overview.prioritySync.lastError" class="mt-1 truncate text-xs text-destructive">{{ prioritySyncReasonLabel(overview.prioritySync.lastError) }}</p>
+          <dt class="text-xs font-medium text-muted-foreground">{{ t('admin.connectionHealth.prioritySync.pendingAge') }}</dt>
+          <dd class="mt-1 text-sm font-medium tabular-nums text-foreground">{{ t('admin.connectionHealth.prioritySync.pendingAgeValue', { seconds: overview.prioritySync.pendingAgeSeconds }) }}</dd>
+          <p v-if="overview.prioritySync.lastError || overview.prioritySync.lastSuppressionReason" class="mt-1 truncate text-xs" :class="overview.prioritySync.lastError ? 'text-destructive' : 'text-muted-foreground'">{{ prioritySyncReasonLabel(overview.prioritySync.lastError || overview.prioritySync.lastSuppressionReason) }}</p>
         </div>
       </dl>
     </section>
@@ -568,8 +629,11 @@ const handleDeletePolicy = async (policy: ConnectionHealthPolicy) => {
                 :key="group.id"
                 type="button"
                 class="mb-1 flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                :class="selectedGroup?.id === group.id ? 'bg-primary/[0.08]' : 'hover:bg-surface/60'"
-                @click="selectedGroupId = group.id"
+                :class="[
+                  selectedGroup?.id === group.id ? 'bg-primary/[0.08]' : 'hover:bg-surface/60',
+                  focusedGroupId === group.id ? 'outline outline-2 -outline-offset-2 outline-primary/70' : '',
+                ]"
+                @click="selectGroup(group.id)"
               >
                 <span
                   class="mt-1.5 h-2 w-2 shrink-0 rounded-full"

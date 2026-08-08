@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { listGroupRateHistory, listGroupRates, updateGroupRateType } from '../api/groupRates'
+import { listAllGroupRates, listGroupRateHistory, listGroupRates, updateGroupRateType } from '../api/groupRates'
 import type { GroupRate, GroupRateHistoryQuery, GroupRateHistoryRow, GroupRateSort, GroupRateStatusCounts, GroupRateStatusFilter } from '../types/groupRates'
 
 export const useGroupRates = () => {
@@ -14,6 +14,7 @@ export const useGroupRates = () => {
   const search = ref('')
   const typeFilter = ref('')
   const platformFilter = ref('')
+  const siteFilter = ref('')
   const statusFilter = ref<GroupRateStatusFilter>('all')
   const sortMode = ref<GroupRateSort>('multiplierAsc')
   const statusCounts = ref<GroupRateStatusCounts>({ all: 0, mapped: 0, unmapped: 0, deleted: 0 })
@@ -23,13 +24,64 @@ export const useGroupRates = () => {
   const isActionLoading = ref(false)
   const errorKey = ref<string | null>(null)
   const historyErrorKey = ref<string | null>(null)
+  const siteFilteredRates = ref<GroupRate[]>([])
   let ratesRequestId = 0
+
+  const applySiteFilteredPage = () => {
+    total.value = siteFilteredRates.value.length
+    totalPages.value = total.value > 0 ? Math.ceil(total.value / pageSize.value) : 0
+    page.value = Math.min(Math.max(page.value, 1), Math.max(totalPages.value, 1))
+    const offset = (page.value - 1) * pageSize.value
+    rates.value = siteFilteredRates.value.slice(offset, offset + pageSize.value)
+  }
+
+  const loadSiteFilteredRates = async (requestId: number) => {
+    const baseQuery = {
+      search: search.value,
+      type: typeFilter.value,
+      platform: platformFilter.value,
+      sort: sortMode.value,
+    }
+    const [activeRows, deletedRows, metadata] = await Promise.all([
+      listAllGroupRates({ ...baseQuery, status: 'all' }),
+      listAllGroupRates({ ...baseQuery, status: 'deleted' }),
+      listGroupRates({ ...baseQuery, page: 1, status: 'all' }),
+    ])
+    if (requestId !== ratesRequestId) return
+    const filterBySite = (items: GroupRate[]) => items.filter(item => item.siteId === siteFilter.value)
+    const activeSiteRows = filterBySite(activeRows)
+    const deletedSiteRows = filterBySite(deletedRows)
+
+    statusCounts.value = {
+      all: activeSiteRows.length,
+      mapped: activeSiteRows.filter(item => item.mapped).length,
+      unmapped: activeSiteRows.filter(item => !item.mapped).length,
+      deleted: deletedSiteRows.length,
+    }
+    types.value = metadata.types
+    platforms.value = metadata.platforms
+    siteFilteredRates.value = statusFilter.value === 'deleted'
+      ? deletedSiteRows
+      : statusFilter.value === 'mapped'
+        ? activeSiteRows.filter(item => item.mapped)
+        : statusFilter.value === 'unmapped'
+          ? activeSiteRows.filter(item => !item.mapped)
+          : activeSiteRows
+    serverSupportsStatusFilters.value = true
+    pageSize.value = metadata.pageSize || 30
+    applySiteFilteredPage()
+  }
 
   const loadRates = async () => {
     const requestId = ++ratesRequestId
     isLoading.value = true
     errorKey.value = null
     try {
+      if (siteFilter.value) {
+        await loadSiteFilteredRates(requestId)
+        return
+      }
+
       const response = await listGroupRates({
         page: page.value,
         search: search.value,
@@ -41,6 +93,7 @@ export const useGroupRates = () => {
 
       if (requestId !== ratesRequestId) return
 
+      siteFilteredRates.value = []
       rates.value = response.items
       total.value = response.total
       page.value = response.page
@@ -85,6 +138,11 @@ export const useGroupRates = () => {
     await resetPageAndLoadRates()
   }
 
+  const setSiteFilter = async (value: string) => {
+    siteFilter.value = value
+    await resetPageAndLoadRates()
+  }
+
   const setStatusFilter = async (value: GroupRateStatusFilter) => {
     statusFilter.value = value
     await resetPageAndLoadRates()
@@ -100,7 +158,20 @@ export const useGroupRates = () => {
     if (nextPage === page.value) return
 
     page.value = nextPage
+    if (siteFilter.value) {
+      applySiteFilteredPage()
+      return
+    }
     await loadRates()
+  }
+
+  const focusGroup = (groupName: string): boolean => {
+    if (!siteFilter.value || !groupName.trim()) return false
+    const index = siteFilteredRates.value.findIndex(item => item.groupName === groupName)
+    if (index < 0) return false
+    page.value = Math.floor(index / pageSize.value) + 1
+    applySiteFilteredPage()
+    return true
   }
 
   const loadHistory = async (query: GroupRateHistoryQuery) => {
@@ -141,6 +212,7 @@ export const useGroupRates = () => {
     search,
     typeFilter,
     platformFilter,
+    siteFilter,
     statusFilter,
     sortMode,
     statusCounts,
@@ -156,8 +228,10 @@ export const useGroupRates = () => {
     setSearch,
     setTypeFilter,
     setPlatformFilter,
+    setSiteFilter,
     setStatusFilter,
     setSortMode,
     goToPage,
+    focusGroup,
   }
 }

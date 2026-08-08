@@ -170,9 +170,8 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 			return AdminGroupPolicyConfiguration{}, err
 		}
 		responsePolicies = append(responsePolicies, policy)
-		// 分组配置保存后立即复用生产 priority 同步入口，避免页面刷新时仍展示保存前的同值 priority，
-		// 同时保持后台调度器下一轮扫描的最终兜底行为。
-		s.syncCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID)
+		// 配置变更只更新本地 pending；独立校验和写回循环负责主站读写。
+		s.evaluateCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID, priorityActionPolicy)
 		return savedAdminGroupPolicyConfiguration(groupContext.group, policyIDs, excludedTargetIDs, responsePolicies, input.ProbeSortFallbackMultiplier), nil
 	}
 
@@ -182,8 +181,8 @@ func (s *Service) SetAdminGroupPolicyConfiguration(ctx context.Context, userID s
 	); err != nil {
 		return AdminGroupPolicyConfiguration{}, err
 	}
-	// 与首次向导保持一致：配置变更成功后立即刷新生产 priority，避免依赖 30 秒调度周期。
-	s.syncCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID)
+	// 与首次向导保持一致：立即计算本地排序，但不把配置保存和主站读写绑在一起。
+	s.evaluateCurrentWorkspacePriorities(ctx, userID, groupContext.adminAccountID, priorityActionPolicy)
 	return savedAdminGroupPolicyConfiguration(groupContext.group, policyIDs, excludedTargetIDs, responsePolicies, input.ProbeSortFallbackMultiplier), nil
 }
 

@@ -1,9 +1,11 @@
 package upstream
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // availableGroupsFixture 是各测试共用的 /api/v1/groups/available 响应：
@@ -16,6 +18,39 @@ func availableGroupsFixture(w http.ResponseWriter) {
 			{"id": 3, "name": "stable", "platform": "claude", "rate_multiplier": 3.0},
 		},
 	})
+}
+
+func TestFetchAdminAllGroupsContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.FetchAdminAllGroupsContext(ctx, session)
+		result <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked group request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled group request must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("group request did not stop after context cancellation")
+	}
 }
 
 // TestFetchSub2APIAdminGroups_DedicatedMultiplier 验证 FetchSub2APIAdminGroups 按分组 ID

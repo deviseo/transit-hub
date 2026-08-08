@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -70,11 +71,15 @@ var sub2apiCredentialBaseURLFields = []string{
 // ResolveProbeCredential 平台中性地解析某个账号/渠道的探活凭据。
 // 失败时返回 *ProbeCredentialError（reason 已脱敏）。
 func (s *PlatformService) ResolveProbeCredential(session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
+	return s.ResolveProbeCredentialContext(context.Background(), session, account)
+}
+
+func (s *PlatformService) ResolveProbeCredentialContext(ctx context.Context, session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.resolveNewAPIChannelCredential(session, account)
+		return s.resolveNewAPIChannelCredentialContext(ctx, session, account)
 	default:
-		return s.resolveSub2APIAccountCredential(session, account)
+		return s.resolveSub2APIAccountCredentialContext(ctx, session, account)
 	}
 }
 
@@ -83,6 +88,10 @@ func (s *PlatformService) ResolveProbeCredential(session Session, account AdminG
 //   - key 只能通过 POST /api/channel/:id/key 临时获取；根权限/安全验证不足时标记
 //     secure_verification_required，其它失败标记 credential_unavailable。
 func (s *PlatformService) resolveNewAPIChannelCredential(session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
+	return s.resolveNewAPIChannelCredentialContext(context.Background(), session, account)
+}
+
+func (s *PlatformService) resolveNewAPIChannelCredentialContext(ctx context.Context, session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
 	baseURL := strings.TrimSpace(account.BaseURL)
 	if baseURL == "" {
 		return ProbeCredential{}, newProbeCredentialError(ReasonBaseURLUnavailable)
@@ -90,7 +99,7 @@ func (s *PlatformService) resolveNewAPIChannelCredential(session Session, accoun
 	if strings.TrimSpace(account.ID) == "" {
 		return ProbeCredential{}, newProbeCredentialError(ReasonCredentialUnavailable)
 	}
-	key, err := s.FetchNewAPIChannelKey(session, account.ID)
+	key, err := s.fetchNewAPIChannelKeyContext(ctx, session, account.ID)
 	if err != nil {
 		return ProbeCredential{}, err // 已是脱敏后的 *ProbeCredentialError
 	}
@@ -108,10 +117,14 @@ func (s *PlatformService) resolveNewAPIChannelCredential(session Session, accoun
 //
 // 返回值是明文 key，调用方必须只在内存中短暂使用，绝不落库/日志/前端。
 func (s *PlatformService) FetchNewAPIChannelKey(session Session, channelID string) (string, error) {
+	return s.fetchNewAPIChannelKeyContext(context.Background(), session, channelID)
+}
+
+func (s *PlatformService) fetchNewAPIChannelKeyContext(ctx context.Context, session Session, channelID string) (string, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return "", newProbeCredentialError(ReasonSecureVerificationRequired)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+url.PathEscape(channelID)+"/key", requestOptions{
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/channel/"+url.PathEscape(channelID)+"/key", requestOptions{
 		Cookie:      session.Cookie,
 		UserID:      session.UserID,
 		AccessToken: session.AccessToken,
@@ -146,6 +159,10 @@ func (s *PlatformService) FetchNewAPIChannelKey(session Session, channelID strin
 //   - credentials 里没有任何明文 key（仍是脱敏形态）-> credentials_redacted。
 //   - 缺少可用 base_url -> base_url_unavailable。
 func (s *PlatformService) resolveSub2APIAccountCredential(session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
+	return s.resolveSub2APIAccountCredentialContext(context.Background(), session, account)
+}
+
+func (s *PlatformService) resolveSub2APIAccountCredentialContext(ctx context.Context, session Session, account AdminGroupAccountInfo) (ProbeCredential, error) {
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return ProbeCredential{}, newProbeCredentialError(ReasonCredentialUnavailable)
 	}
@@ -155,7 +172,7 @@ func (s *PlatformService) resolveSub2APIAccountCredential(session Session, accou
 	}
 
 	exportURL := session.BaseURL + "/api/v1/admin/accounts/data?ids=" + url.QueryEscape(accountID) + "&include_proxies=false"
-	response, err := s.httpClient.requestJSON(exportURL, adminAuthOptions(session))
+	response, err := s.httpClient.requestJSONWithContext(ctx, exportURL, adminAuthOptions(session))
 	if err != nil {
 		// 导出接口不可用（旧版本路由被 /:id 抢占、404、权限不足等）：统一标记导出不可用。
 		return ProbeCredential{}, newProbeCredentialError(ReasonExportUnavailable)

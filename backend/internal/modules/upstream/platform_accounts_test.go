@@ -1,11 +1,13 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestListAdminGroupAccounts_Sub2APIGroupQueryPagingAndFields 验证 sub2api 分组账号读取：
@@ -214,5 +216,38 @@ func TestListAdminGroupAccounts_NewAPIFallsBackToLocalCommaFilter(t *testing.T) 
 	}
 	if len(channels) != 2 {
 		t.Fatalf("expected exactly 2 matched channels, got %d", len(channels))
+	}
+}
+
+func TestListAdminGroupAccountsContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.ListAdminGroupAccountsContext(ctx, session, AdminGroupInfo{ID: "42", Name: "vip"})
+		result <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked account request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled account request must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("account request did not stop after context cancellation")
 	}
 }

@@ -414,7 +414,7 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 		return nil, err
 	}
 	if len(probeResults) > 0 {
-		s.syncCurrentWorkspacePriorities(ctx, userID, adminAccountID)
+		s.evaluateCurrentWorkspacePriorities(ctx, userID, adminAccountID, priorityActionProbe)
 	}
 	for _, result := range probeResults {
 		modelHealth := toModelHealth(result.spec.modelName, *result.state)

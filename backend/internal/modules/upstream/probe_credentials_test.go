@@ -1,10 +1,46 @@
 package upstream
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
+
+func TestResolveProbeCredentialContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformNewAPI, BaseURL: server.URL, Cookie: "s=1", UserID: "1"}
+	account := AdminGroupAccountInfo{ID: "100", BaseURL: "https://up.example.com", Models: "gpt-4o"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := service.ResolveProbeCredentialContext(ctx, session, account)
+		result <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked credential request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled credential request must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("credential request did not stop after context cancellation")
+	}
+}
 
 // TestResolveProbeCredential_NewAPIChannelKeySuccess 验证 new-api：
 //   - base_url 来自 channel 列表字段（account.BaseURL），不从 GET /api/channel/:id 取（那里没有 key）。

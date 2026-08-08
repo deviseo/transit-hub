@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"log"
 	"net/url"
 	"strconv"
@@ -42,17 +43,25 @@ type AdminGroupAccountInfo struct {
 // sub2api 走 /api/v1/admin/accounts?group=<groupID>，new-api 走 channel 查询。
 // 返回的每个条目都不含敏感字段。
 func (s *PlatformService) ListAdminGroupAccounts(session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
+	return s.ListAdminGroupAccountsContext(context.Background(), session, group)
+}
+
+func (s *PlatformService) ListAdminGroupAccountsContext(ctx context.Context, session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.listNewAPIGroupChannels(session, group)
+		return s.listNewAPIGroupChannelsContext(ctx, session, group)
 	default:
-		return s.listSub2APIGroupAccounts(session, group)
+		return s.listSub2APIGroupAccountsContext(ctx, session, group)
 	}
 }
 
 // listSub2APIGroupAccounts 分页拉取 sub2api 某分组下的账号。
 // 注意 query 参数是 group=<分组ID>（不是 group_id）。逐页拉取直到没有下一页或达到 total。
 func (s *PlatformService) listSub2APIGroupAccounts(session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
+	return s.listSub2APIGroupAccountsContext(context.Background(), session, group)
+}
+
+func (s *PlatformService) listSub2APIGroupAccountsContext(ctx context.Context, session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
@@ -67,7 +76,7 @@ func (s *PlatformService) listSub2APIGroupAccounts(session Session, group AdminG
 	for page := 1; page <= maxPages; page++ {
 		pageURL := session.BaseURL + "/api/v1/admin/accounts?group=" + url.QueryEscape(group.ID) +
 			"&page=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(pageSize)
-		response, err := s.httpClient.requestJSON(pageURL, authOptions)
+		response, err := s.httpClient.requestJSONWithContext(ctx, pageURL, authOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -121,6 +130,10 @@ func parseSub2APIAccount(record map[string]any) AdminGroupAccountInfo {
 // 优先使用 /api/channel/search?group=<分组名>（server 端已按分组过滤，兼容较老部署也普遍支持）；
 // search 失败时兜底 /api/channel/ 分页拉取后在本地按「逗号分组精确匹配」过滤。
 func (s *PlatformService) listNewAPIGroupChannels(session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
+	return s.listNewAPIGroupChannelsContext(context.Background(), session, group)
+}
+
+func (s *PlatformService) listNewAPIGroupChannelsContext(ctx context.Context, session Session, group AdminGroupInfo) ([]AdminGroupAccountInfo, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
@@ -129,16 +142,23 @@ func (s *PlatformService) listNewAPIGroupChannels(session Session, group AdminGr
 		return []AdminGroupAccountInfo{}, nil
 	}
 
-	channels, err := s.searchNewAPIGroupChannels(session, groupName)
+	channels, err := s.searchNewAPIGroupChannelsContext(ctx, session, groupName)
 	if err == nil {
 		return channels, nil
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	log.Printf("[connection-health] new-api /api/channel/search 拉取失败，回退 /api/channel/ 本地过滤 base_url=%s group=%s err=%v", session.BaseURL, groupName, err)
-	return s.listNewAPIChannelsWithLocalFilter(session, groupName)
+	return s.listNewAPIChannelsWithLocalFilterContext(ctx, session, groupName)
 }
 
 // searchNewAPIGroupChannels 通过 /api/channel/search?group= 分页读取指定分组的 channel。
 func (s *PlatformService) searchNewAPIGroupChannels(session Session, groupName string) ([]AdminGroupAccountInfo, error) {
+	return s.searchNewAPIGroupChannelsContext(context.Background(), session, groupName)
+}
+
+func (s *PlatformService) searchNewAPIGroupChannelsContext(ctx context.Context, session Session, groupName string) ([]AdminGroupAccountInfo, error) {
 	cookieOptions := newAPIAuthOptions(session)
 	const pageSize = 100
 	const maxPages = 100
@@ -146,7 +166,7 @@ func (s *PlatformService) searchNewAPIGroupChannels(session Session, groupName s
 	for page := 1; page <= maxPages; page++ {
 		pageURL := session.BaseURL + "/api/channel/search?group=" + url.QueryEscape(groupName) +
 			"&p=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(pageSize)
-		response, err := s.httpClient.requestJSON(pageURL, cookieOptions)
+		response, err := s.httpClient.requestJSONWithContext(ctx, pageURL, cookieOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -176,13 +196,17 @@ func (s *PlatformService) searchNewAPIGroupChannels(session Session, groupName s
 // 再在本地按「逗号分组精确匹配」过滤出属于 groupName 的 channel。
 // 精确匹配：channel.group 按逗号拆分后逐段 TrimSpace 比较，避免 "vip" 命中 "vip2"（substring）。
 func (s *PlatformService) listNewAPIChannelsWithLocalFilter(session Session, groupName string) ([]AdminGroupAccountInfo, error) {
+	return s.listNewAPIChannelsWithLocalFilterContext(context.Background(), session, groupName)
+}
+
+func (s *PlatformService) listNewAPIChannelsWithLocalFilterContext(ctx context.Context, session Session, groupName string) ([]AdminGroupAccountInfo, error) {
 	cookieOptions := newAPIAuthOptions(session)
 	const pageSize = 100
 	const maxPages = 100
 	channels := make([]AdminGroupAccountInfo, 0)
 	for page := 1; page <= maxPages; page++ {
 		pageURL := session.BaseURL + "/api/channel/?p=" + strconvInt(int64(page)) + "&page_size=" + strconvInt(pageSize)
-		response, err := s.httpClient.requestJSON(pageURL, cookieOptions)
+		response, err := s.httpClient.requestJSONWithContext(ctx, pageURL, cookieOptions)
 		if err != nil {
 			return nil, err
 		}

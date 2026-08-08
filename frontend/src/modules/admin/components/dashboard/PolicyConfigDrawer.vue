@@ -39,6 +39,9 @@ const DEFAULTS = {
   unschedulableProbeIntervalMinutes: 60,
   priorityMinWriteIntervalSeconds: 30,
   priorityMaxPendingAgeSeconds: 300,
+  priorityReconcileIntervalSeconds: 30,
+  inventorySnapshotTtlSeconds: 60,
+  reconcileFailureBackoffSeconds: 30,
   maxProbeTokens: 1,
 }
 
@@ -60,6 +63,9 @@ const priorityMode = ref<ConnectionHealthPriorityMode>('none')
 const strategyMode = ref<ConnectionHealthStrategyMode>('health_probe')
 const priorityMinWriteIntervalSeconds = ref(DEFAULTS.priorityMinWriteIntervalSeconds)
 const priorityMaxPendingAgeSeconds = ref(DEFAULTS.priorityMaxPendingAgeSeconds)
+const priorityReconcileIntervalSeconds = ref(DEFAULTS.priorityReconcileIntervalSeconds)
+const inventorySnapshotTtlSeconds = ref(DEFAULTS.inventorySnapshotTtlSeconds)
+const reconcileFailureBackoffSeconds = ref(DEFAULTS.reconcileFailureBackoffSeconds)
 const modelTargets = ref<ModelTargetInput[]>([])
 const validationError = ref<string | null>(null)
 const runFlowOpen = ref(false)
@@ -93,6 +99,9 @@ const resetForm = () => {
   strategyMode.value = p ? resolveConnectionHealthStrategyMode(p) : 'health_probe'
   priorityMinWriteIntervalSeconds.value = p?.prioritySyncPreset?.minWriteIntervalSeconds ?? DEFAULTS.priorityMinWriteIntervalSeconds
   priorityMaxPendingAgeSeconds.value = p?.prioritySyncPreset?.maxPendingAgeSeconds ?? DEFAULTS.priorityMaxPendingAgeSeconds
+  priorityReconcileIntervalSeconds.value = p?.prioritySyncPreset?.reconcileIntervalSeconds ?? DEFAULTS.priorityReconcileIntervalSeconds
+  inventorySnapshotTtlSeconds.value = p?.prioritySyncPreset?.inventorySnapshotTtlSeconds ?? DEFAULTS.inventorySnapshotTtlSeconds
+  reconcileFailureBackoffSeconds.value = p?.prioritySyncPreset?.reconcileFailureBackoffSeconds ?? DEFAULTS.reconcileFailureBackoffSeconds
 
   // 已有模型目标全部同一个 provider 时直接复用该 provider 初始化——必须从"唯一值"取，
   // 不能从 modelTargets[0] 取，否则历史数据里第一条 provider 恰好为空、后面几条其实
@@ -172,6 +181,14 @@ const handleSave = () => {
     validationError.value = t(`${prefix}.errors.priorityWriteIntervalInvalid`)
     return
   }
+  if (
+    !Number.isInteger(priorityReconcileIntervalSeconds.value) || priorityReconcileIntervalSeconds.value <= 0
+    || !Number.isInteger(inventorySnapshotTtlSeconds.value) || inventorySnapshotTtlSeconds.value <= 0
+    || !Number.isInteger(reconcileFailureBackoffSeconds.value) || reconcileFailureBackoffSeconds.value <= 0
+  ) {
+    validationError.value = t(`${prefix}.errors.priorityFrequencyInvalid`)
+    return
+  }
 
   const ownGroup = props.ownGroupOptions.find(g => g.id === ownGroupId.value)
   const input: PolicyInput = {
@@ -196,6 +213,9 @@ const handleSave = () => {
     prioritySyncPreset: {
       minWriteIntervalSeconds: priorityMinWriteIntervalSeconds.value,
       maxPendingAgeSeconds: preservePriorityMaxPendingAge(priorityMaxPendingAgeSeconds.value, priorityMinWriteIntervalSeconds.value),
+      reconcileIntervalSeconds: priorityReconcileIntervalSeconds.value,
+      inventorySnapshotTtlSeconds: inventorySnapshotTtlSeconds.value,
+      reconcileFailureBackoffSeconds: reconcileFailureBackoffSeconds.value,
       driftAction: 'alert_only',
       readMode: 'inventory_snapshot',
     },
@@ -509,9 +529,23 @@ const handleSave = () => {
                   {{ t(`${prefix}.priorityWriteIntervalLabel`) }}
                   <HelpTooltip :text="t(`${prefix}.tooltips.priorityWriteInterval`)" />
                 </div>
-                <div class="mt-2 flex items-center gap-2">
-                  <input v-model.number="priorityMinWriteIntervalSeconds" type="number" min="1" class="h-9 w-24 rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
-                  <span class="text-xs text-muted-foreground">{{ t(`${prefix}.secondsUnit`) }}</span>
+                <div class="mt-3 grid grid-cols-2 gap-3">
+                  <label class="space-y-1.5 text-xs text-muted-foreground">
+                    <span>{{ t(`${prefix}.priorityWriteIntervalShortLabel`) }}</span>
+                    <input v-model.number="priorityMinWriteIntervalSeconds" type="number" min="1" class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
+                  </label>
+                  <label class="space-y-1.5 text-xs text-muted-foreground">
+                    <span>{{ t(`${prefix}.reconcileIntervalLabel`) }}</span>
+                    <input v-model.number="priorityReconcileIntervalSeconds" type="number" min="1" class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
+                  </label>
+                  <label class="space-y-1.5 text-xs text-muted-foreground">
+                    <span>{{ t(`${prefix}.snapshotTtlLabel`) }}</span>
+                    <input v-model.number="inventorySnapshotTtlSeconds" type="number" min="1" class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
+                  </label>
+                  <label class="space-y-1.5 text-xs text-muted-foreground">
+                    <span>{{ t(`${prefix}.reconcileBackoffLabel`) }}</span>
+                    <input v-model.number="reconcileFailureBackoffSeconds" type="number" min="1" class="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-sm text-foreground" />
+                  </label>
                 </div>
                 <p class="mt-2 text-xs leading-5 text-muted-foreground">{{ t(`${prefix}.priorityWriteIntervalHelp`) }}</p>
               </div>

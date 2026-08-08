@@ -251,7 +251,7 @@ func TestSetAdminGroupPolicyConfiguration_PersistsProbeSortFallbackMultiplier(t 
 	}
 }
 
-func TestSetAdminGroupPolicyConfiguration_SynchronizesPriorityImmediately(t *testing.T) {
+func TestSetAdminGroupPolicyConfiguration_QueuesPriorityWithoutImmediateWrite(t *testing.T) {
 	repo := newFakeRepository()
 	policy := probePolicy()
 	policy.PriorityMode = PriorityModeMultiplier
@@ -272,14 +272,23 @@ func TestSetAdminGroupPolicyConfiguration_SynchronizesPriorityImmediately(t *tes
 	service.sites = fakeSiteLookup{}
 	service.priorityActions = actions
 	fallback := 0.08
+	inventory, err := service.loadAdminInventory(context.Background(), "user1", "ws1", make(adminInventoryCache))
+	if err != nil {
+		t.Fatalf("prime inventory snapshot: %v", err)
+	}
+	service.putAdminInventorySnapshot(context.Background(), "user1", "ws1", inventory, time.Now().UTC(), time.Minute)
 
-	if _, err := service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
+	if _, err = service.SetAdminGroupPolicyConfiguration(context.Background(), "user1", "g1", AdminGroupPolicyConfigurationInput{
 		PolicyIDs: []string{policy.ID}, ProbeSortFallbackMultiplier: &fallback,
 	}); err != nil {
 		t.Fatalf("save group configuration: %v", err)
 	}
-	if len(actions.calls) != 1 || actions.calls[0].targetID != "100" || actions.calls[0].priority != 10 {
-		t.Fatalf("priority must synchronize immediately after saving group configuration: %+v", actions.calls)
+	if len(actions.calls) != 0 {
+		t.Fatalf("policy save must not write priority directly: %+v", actions.calls)
+	}
+	state := priorityWorkspaceState(t, repo)
+	if state.PendingSignature == "" || state.LastActionSource != priorityActionPolicy || state.LastDecision != "pending" {
+		t.Fatalf("policy save must queue the latest local ordering: %+v", state)
 	}
 }
 

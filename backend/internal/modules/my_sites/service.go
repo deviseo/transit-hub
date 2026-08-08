@@ -552,9 +552,9 @@ func (s *Service) ListUpstreamKeys(ctx context.Context, userID string, siteID st
 	var keys []upstream.Sub2APIKeyItem
 	switch session.Platform {
 	case upstream.PlatformNewAPI:
-		keys, err = s.platformService.ListNewAPITokens(session)
+		keys, err = s.platformService.ListNewAPITokensContext(ctx, session)
 	default:
-		keys, err = s.platformService.ListSub2APIKeys(session)
+		keys, err = s.platformService.ListSub2APIKeysContext(ctx, session)
 	}
 	if err != nil {
 		log.Printf("[list-upstream-keys] 获取上游 key 列表失败 site=%s platform=%s err=%v", upstreamSite.Name, session.Platform, err)
@@ -936,7 +936,7 @@ func (s *Service) validatedState(ctx context.Context, state *State) (*State, err
 	if !state.Session.IsAuthenticated() {
 		return nil, requestError(ErrorAuthRequired)
 	}
-	refreshedSession, err := s.platformService.RefreshSession(state.Session)
+	refreshedSession, err := s.platformService.RefreshSessionContext(ctx, state.Session)
 	if err != nil {
 		return nil, requestError(ErrorAdminOnly)
 	}
@@ -947,7 +947,7 @@ func (s *Service) validatedState(ctx context.Context, state *State) (*State, err
 			return nil, err
 		}
 	}
-	if err := s.platformService.VerifyAdmin(state.Session); err != nil {
+	if err := s.platformService.VerifyAdminContext(ctx, state.Session); err != nil {
 		return nil, requestError(ErrorAdminOnly)
 	}
 	return state, nil

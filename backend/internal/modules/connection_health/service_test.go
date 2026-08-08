@@ -296,6 +296,33 @@ func TestSavePolicy_OmittedUnschedulableProbeSettingsPreservesExistingValues(t *
 	}
 }
 
+func TestSavePolicy_BEraPresetPreservesCFields(t *testing.T) {
+	repo := newFakeRepository()
+	repo.policies = []Policy{{
+		ID: "p1", UserID: "user1", AdminAccountID: "ws1", Name: "existing", Enabled: true,
+		PrioritySyncPreset: PrioritySyncPreset{
+			MinWriteIntervalSeconds: 45, MaxPendingAgeSeconds: 240,
+			ReconcileIntervalSeconds: 11, InventorySnapshotTTLSeconds: 19,
+			ReconcileFailureBackoffSeconds: 23,
+			DriftAction:                    PriorityDriftActionAlertOnly, ReadMode: PriorityReadModeInventory,
+		},
+	}}
+	service := &Service{repo: repo, accounts: fakeAdminAccountResolver{id: "ws1"}}
+
+	saved, err := service.SavePolicy(context.Background(), "user1", PolicyInput{
+		ID: "p1", Name: "B client update", Enabled: true,
+		PrioritySyncPreset: &PrioritySyncPreset{MinWriteIntervalSeconds: 45, MaxPendingAgeSeconds: 240},
+	})
+	if err != nil {
+		t.Fatalf("SavePolicy() error = %v", err)
+	}
+	if saved.PrioritySyncPreset.ReconcileIntervalSeconds != 11 ||
+		saved.PrioritySyncPreset.InventorySnapshotTTLSeconds != 19 ||
+		saved.PrioritySyncPreset.ReconcileFailureBackoffSeconds != 23 {
+		t.Fatalf("B-era partial preset must preserve C fields: %+v", saved.PrioritySyncPreset)
+	}
+}
+
 func TestBuildPolicyAndTargets_RejectsNonPositiveUnschedulableProbeInterval(t *testing.T) {
 	invalid := 0
 	_, _, err := buildPolicyAndTargets("user1", "ws1", "p1", PolicyInput{
@@ -679,6 +706,16 @@ func (f *fakeRepository) ListAllPrioritySyncStates(ctx context.Context) ([]Prior
 	out := make([]PrioritySyncState, 0, len(f.priorityStates))
 	for _, state := range f.priorityStates {
 		out = append(out, state)
+	}
+	return out, nil
+}
+
+func (f *fakeRepository) ListAllPriorityWorkspaceSyncStates(ctx context.Context) ([]PriorityWorkspaceSyncState, error) {
+	out := make([]PriorityWorkspaceSyncState, 0, len(f.priorityWorkspaceStates))
+	for _, state := range f.priorityWorkspaceStates {
+		if state.PendingSignature != "" {
+			out = append(out, state)
+		}
 	}
 	return out, nil
 }

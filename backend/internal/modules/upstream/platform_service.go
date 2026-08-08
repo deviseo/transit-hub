@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -164,6 +165,11 @@ func (s *PlatformService) LoginWithUserKey(baseURL string, userID string, access
 }
 
 func (s *PlatformService) RefreshSession(session Session) (Session, error) {
+	return s.RefreshSessionContext(context.Background(), session)
+}
+
+// RefreshSessionContext keeps scheduler shutdown responsive while a refresh request is in flight.
+func (s *PlatformService) RefreshSessionContext(ctx context.Context, session Session) (Session, error) {
 	if session.Platform == PlatformNewAPI {
 		return session, nil
 	}
@@ -171,11 +177,15 @@ func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 	if session.RefreshToken == "" || (session.ExpiresAt != nil && *session.ExpiresAt-now > refreshSkewMS) {
 		return session, nil
 	}
-	return s.refreshSub2APISession(session)
+	return s.refreshSub2APISessionContext(ctx, session)
 }
 
 func (s *PlatformService) refreshSub2APISession(session Session) (Session, error) {
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/auth/refresh", requestOptions{
+	return s.refreshSub2APISessionContext(context.Background(), session)
+}
+
+func (s *PlatformService) refreshSub2APISessionContext(ctx context.Context, session Session) (Session, error) {
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/v1/auth/refresh", requestOptions{
 		Method: http.MethodPost,
 		Body: map[string]string{
 			"refresh_token": session.RefreshToken,
@@ -257,11 +267,16 @@ func (s *PlatformService) LoginAdminWithKey(baseURL string, platform Platform, k
 
 // VerifyAdmin 平台中性的 admin 校验：按 session.Platform 分发到对应平台的校验逻辑。
 func (s *PlatformService) VerifyAdmin(session Session) error {
+	return s.VerifyAdminContext(context.Background(), session)
+}
+
+// VerifyAdminContext is the cancellable counterpart used by scheduled work.
+func (s *PlatformService) VerifyAdminContext(ctx context.Context, session Session) error {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.VerifyNewAPIAdmin(session)
+		return s.VerifyNewAPIAdminContext(ctx, session)
 	default:
-		return s.VerifySub2APIAdmin(session)
+		return s.VerifySub2APIAdminContext(ctx, session)
 	}
 }
 
@@ -311,10 +326,14 @@ func (s *PlatformService) LoginNewAPIAdmin(baseURL string, username string, pass
 
 // VerifyNewAPIAdmin 调用 /api/user/self 校验 new-api 用户是否为 admin（role >= 10）。
 func (s *PlatformService) VerifyNewAPIAdmin(session Session) error {
+	return s.VerifyNewAPIAdminContext(context.Background(), session)
+}
+
+func (s *PlatformService) VerifyNewAPIAdminContext(ctx context.Context, session Session) error {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self", newAPIAuthOptions(session))
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/user/self", newAPIAuthOptions(session))
 	if err != nil {
 		return err
 	}
@@ -344,13 +363,17 @@ func (s *PlatformService) fetchNewAPIQuotaPerUnit(session Session) float64 {
 }
 
 func (s *PlatformService) VerifySub2APIAdmin(session Session) error {
+	return s.VerifySub2APIAdminContext(context.Background(), session)
+}
+
+func (s *PlatformService) VerifySub2APIAdminContext(ctx context.Context, session Session) error {
 	if session.Platform != PlatformSub2API {
 		log.Printf("my-sites sub2api admin verify skipped invalid_platform=%s base_url=%s", session.Platform, session.BaseURL)
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	if strings.TrimSpace(session.AdminAPIKey) != "" {
 		requestURL := session.BaseURL + "/api/v1/admin/groups?page=1&page_size=1"
-		_, err := s.httpClient.requestJSON(requestURL, adminAuthOptions(session))
+		_, err := s.httpClient.requestJSONWithContext(ctx, requestURL, adminAuthOptions(session))
 		if err != nil {
 			log.Printf("my-sites sub2api admin key verify failed url=%s err=%v", requestURL, err)
 		}
@@ -358,7 +381,7 @@ func (s *PlatformService) VerifySub2APIAdmin(session Session) error {
 	}
 	requestURL := session.BaseURL + "/api/v1/auth/me"
 	log.Printf("my-sites sub2api admin verify request url=%s token_type=%s access_token_set=%t", requestURL, session.TokenType, session.AccessToken != "")
-	response, err := s.httpClient.requestJSON(requestURL, sub2APIUserAuthOptions(session))
+	response, err := s.httpClient.requestJSONWithContext(ctx, requestURL, sub2APIUserAuthOptions(session))
 	if err != nil {
 		log.Printf("my-sites sub2api admin verify request failed url=%s err=%v", requestURL, err)
 		return err
@@ -745,11 +768,15 @@ type AdminGroupInfo struct {
 // FetchSub2APIAdminAllGroups 通过 /api/v1/admin/groups 获取管理端全量分组列表，
 // 包括专属分组、已禁用分组等 /api/v1/groups/available 不返回的条目。
 func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGroupInfo, error) {
+	return s.fetchSub2APIAdminAllGroupsContext(context.Background(), session)
+}
+
+func (s *PlatformService) fetchSub2APIAdminAllGroupsContext(ctx context.Context, session Session) ([]AdminGroupInfo, error) {
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	authOptions := adminAuthOptions(session)
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups", authOptions)
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/v1/admin/groups", authOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -1507,10 +1534,14 @@ func todayEnd() int64 {
 // ListSub2APIKeys 获取上游 Sub2API 站点的 API Key 列表。
 // 按创建时间倒序返回，最多 100 条。每条包含 ID、Key 值、名称、所属分组等信息。
 func (s *PlatformService) ListSub2APIKeys(session Session) ([]Sub2APIKeyItem, error) {
+	return s.ListSub2APIKeysContext(context.Background(), session)
+}
+
+func (s *PlatformService) ListSub2APIKeysContext(ctx context.Context, session Session) ([]Sub2APIKeyItem, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	response, err := s.httpClient.requestJSON(
+	response, err := s.httpClient.requestJSONWithContext(ctx,
 		session.BaseURL+"/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc",
 		requestOptions{
 			AccessToken: session.AccessToken,
@@ -1844,33 +1875,47 @@ func (s *PlatformService) FetchAdminGroupDailyStatsForDate(session Session, grou
 
 // FetchAdminAllGroups 平台中性的全量分组列表获取（包含管理端专有字段）。
 func (s *PlatformService) FetchAdminAllGroups(session Session) ([]AdminGroupInfo, error) {
+	return s.FetchAdminAllGroupsContext(context.Background(), session)
+}
+
+func (s *PlatformService) FetchAdminAllGroupsContext(ctx context.Context, session Session) ([]AdminGroupInfo, error) {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.fetchNewAPIAdminAllGroups(session)
+		return s.fetchNewAPIAdminAllGroupsContext(ctx, session)
 	default:
-		return s.FetchSub2APIAdminAllGroups(session)
+		return s.fetchSub2APIAdminAllGroupsContext(ctx, session)
 	}
 }
 
 // fetchNewAPIAdminAllGroups 获取 new-api 全量分组列表。
 // new-api 的 /api/group/ 返回纯分组名数组，结合 /api/user/self/groups 获取 ratio。
 func (s *PlatformService) fetchNewAPIAdminAllGroups(session Session) ([]AdminGroupInfo, error) {
+	return s.fetchNewAPIAdminAllGroupsContext(context.Background(), session)
+}
+
+func (s *PlatformService) fetchNewAPIAdminAllGroupsContext(ctx context.Context, session Session) ([]AdminGroupInfo, error) {
 	if !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	cookieOptions := newAPIAuthOptions(session)
 	// 获取分组名列表
-	groupListPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/group/", cookieOptions)
+	groupListPayload, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/group/", cookieOptions)
 	if err != nil {
 		return nil, err
 	}
 	// 获取分组倍率
-	groupsPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self/groups", cookieOptions)
+	groupsPayload, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/user/self/groups", cookieOptions)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		groupsPayload = jsonResponse{Payload: map[string]any{}}
 	}
-	pricingPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/pricing", cookieOptions)
+	pricingPayload, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/pricing", cookieOptions)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		pricingPayload = jsonResponse{Payload: map[string]any{}}
 	}
 
@@ -2046,10 +2091,14 @@ func (s *PlatformService) FetchNewAPITokenKey(session Session, tokenID string) (
 // ListNewAPITokens 列出上游 new-api 站点的 token 列表。
 // 返回与 Sub2APIKeyItem 相同的结构，便于前端统一使用。
 func (s *PlatformService) ListNewAPITokens(session Session) ([]Sub2APIKeyItem, error) {
+	return s.ListNewAPITokensContext(context.Background(), session)
+}
+
+func (s *PlatformService) ListNewAPITokensContext(ctx context.Context, session Session) ([]Sub2APIKeyItem, error) {
 	if session.Platform != PlatformNewAPI {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/?p=1&page_size=100", requestOptions{
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/token/?p=1&page_size=100", requestOptions{
 		Cookie:      session.Cookie,
 		UserID:      session.UserID,
 		AccessToken: session.AccessToken,
@@ -2312,13 +2361,17 @@ func (s *PlatformService) updateNewAPIGroupRatio(session Session, groupName stri
 // 若 GET 失败（接口不存在、权限不足或 channel 已被删除），直接把错误透传给调用方，
 // 调用方应记录为 remote_action=unsupported 并停止后续动作，不做任何猜测性的 PUT 请求。
 func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, channelID string, weight int, status int) error {
+	return s.UpdateNewAPIChannelWeightStatusContext(context.Background(), session, channelID, weight, status)
+}
+
+func (s *PlatformService) UpdateNewAPIChannelWeightStatusContext(ctx context.Context, session Session, channelID string, weight int, status int) error {
 	if session.Platform != PlatformNewAPI {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	cookieOptions := newAPIAuthOptions(session)
 
 	getURL := session.BaseURL + "/api/channel/" + channelID
-	response, err := s.httpClient.requestJSON(getURL, cookieOptions)
+	response, err := s.httpClient.requestJSONWithContext(ctx, getURL, cookieOptions)
 	if err != nil {
 		return err
 	}
@@ -2348,7 +2401,7 @@ func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, chann
 
 	// new-api 的 UpdateChannel 用 ShouldBindJSON(&PatchChannel) 直接绑定请求体，
 	// 字段必须在 JSON 顶层，不能像 CreateNewAPIChannel 那样包一层 "channel"。
-	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/channel/", requestOptions{
+	_, err = s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/channel/", requestOptions{
 		Cookie:      session.Cookie,
 		UserID:      session.UserID,
 		AccessToken: session.AccessToken,
@@ -2363,21 +2416,29 @@ func (s *PlatformService) UpdateNewAPIChannelWeightStatus(session Session, chann
 // connection_health 的倍率排序策略使用，平台差异和各自安全的更新语义都封装在 upstream
 // 模块内部，避免健康模块了解上游请求体细节。
 func (s *PlatformService) UpdateAdminTargetPriority(session Session, targetID string, priority int) error {
+	return s.UpdateAdminTargetPriorityContext(context.Background(), session, targetID, priority)
+}
+
+func (s *PlatformService) UpdateAdminTargetPriorityContext(ctx context.Context, session Session, targetID string, priority int) error {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.updateNewAPIChannelPriority(session, targetID, priority)
+		return s.updateNewAPIChannelPriorityContext(ctx, session, targetID, priority)
 	case PlatformSub2API:
-		return s.updateSub2APIAdminAccountPriority(session, targetID, priority)
+		return s.updateSub2APIAdminAccountPriorityContext(ctx, session, targetID, priority)
 	default:
 		return newRequestError(ErrorAuth, session.Platform)
 	}
 }
 
 func (s *PlatformService) updateNewAPIChannelPriority(session Session, channelID string, priority int) error {
+	return s.updateNewAPIChannelPriorityContext(context.Background(), session, channelID, priority)
+}
+
+func (s *PlatformService) updateNewAPIChannelPriorityContext(ctx context.Context, session Session, channelID string, priority int) error {
 	if session.Platform != PlatformNewAPI || strings.TrimSpace(channelID) == "" {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+url.PathEscape(channelID), newAPIAuthOptions(session))
+	response, err := s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/channel/"+url.PathEscape(channelID), newAPIAuthOptions(session))
 	if err != nil {
 		return err
 	}
@@ -2401,7 +2462,7 @@ func (s *PlatformService) updateNewAPIChannelPriority(session Session, channelID
 			payload["id"] = channelID
 		}
 	}
-	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/channel/", requestOptions{
+	_, err = s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/channel/", requestOptions{
 		Cookie: session.Cookie, UserID: session.UserID, AccessToken: session.AccessToken, TokenType: session.TokenType,
 		Method: http.MethodPut, Body: payload,
 	})
@@ -2409,7 +2470,11 @@ func (s *PlatformService) updateNewAPIChannelPriority(session Session, channelID
 }
 
 func (s *PlatformService) updateSub2APIAdminAccountPriority(session Session, accountID string, priority int) error {
-	return s.bulkUpdateSub2APIAdminAccount(session, accountID, sub2APIAdminAccountBulkUpdate{
+	return s.updateSub2APIAdminAccountPriorityContext(context.Background(), session, accountID, priority)
+}
+
+func (s *PlatformService) updateSub2APIAdminAccountPriorityContext(ctx context.Context, session Session, accountID string, priority int) error {
+	return s.bulkUpdateSub2APIAdminAccountContext(ctx, session, accountID, sub2APIAdminAccountBulkUpdate{
 		Priority: &priority,
 	})
 }
@@ -2427,6 +2492,10 @@ type sub2APIAdminAccountBulkUpdate struct {
 // 404/405/501 表示没有该能力，则转换为明确的升级错误；其它状态继续保留原始请求错误。
 // 这里禁止回退到整对象 PUT，因为详情缺字段时整对象回写可能把倍率等用户配置覆盖成默认值。
 func (s *PlatformService) bulkUpdateSub2APIAdminAccount(session Session, accountID string, payload sub2APIAdminAccountBulkUpdate) error {
+	return s.bulkUpdateSub2APIAdminAccountContext(context.Background(), session, accountID, payload)
+}
+
+func (s *PlatformService) bulkUpdateSub2APIAdminAccountContext(ctx context.Context, session Session, accountID string, payload sub2APIAdminAccountBulkUpdate) error {
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
@@ -2438,7 +2507,7 @@ func (s *PlatformService) bulkUpdateSub2APIAdminAccount(session Session, account
 	options := adminAuthOptions(session)
 	options.Method = http.MethodPost
 	options.Body = payload
-	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/bulk-update", options)
+	_, err = s.httpClient.requestJSONWithContext(ctx, session.BaseURL+"/api/v1/admin/accounts/bulk-update", options)
 	if requestErr, ok := err.(*RequestError); ok {
 		switch requestErr.StatusCode {
 		case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
@@ -2453,7 +2522,11 @@ func (s *PlatformService) bulkUpdateSub2APIAdminAccount(session Session, account
 // UpdateSub2APIAdminAccountStatus 通过字段级批量接口更新 sub2api 转发账号的启用状态
 // （"active"/"inactive"），供 connection_health 模块的自动降级/恢复动作使用。
 func (s *PlatformService) UpdateSub2APIAdminAccountStatus(session Session, accountID string, status string) error {
-	return s.bulkUpdateSub2APIAdminAccount(session, accountID, sub2APIAdminAccountBulkUpdate{
+	return s.UpdateSub2APIAdminAccountStatusContext(context.Background(), session, accountID, status)
+}
+
+func (s *PlatformService) UpdateSub2APIAdminAccountStatusContext(ctx context.Context, session Session, accountID string, status string) error {
+	return s.bulkUpdateSub2APIAdminAccountContext(ctx, session, accountID, sub2APIAdminAccountBulkUpdate{
 		Status: &status,
 	})
 }

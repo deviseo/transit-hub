@@ -42,6 +42,27 @@ type fakePlatformActioner struct {
 	sub2APIErr error
 }
 
+type contextPlatformActioner struct {
+	*fakePlatformActioner
+	contextCalls int
+}
+
+func (f *contextPlatformActioner) UpdateNewAPIChannelWeightStatusContext(ctx context.Context, session upstream.Session, channelID string, weight int, status int) error {
+	f.contextCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.UpdateNewAPIChannelWeightStatus(session, channelID, weight, status)
+}
+
+func (f *contextPlatformActioner) UpdateSub2APIAdminAccountStatusContext(ctx context.Context, session upstream.Session, accountID string, status string) error {
+	f.contextCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.UpdateSub2APIAdminAccountStatus(session, accountID, status)
+}
+
 func (f *fakePlatformActioner) UpdateNewAPIChannelWeightStatus(session upstream.Session, channelID string, weight int, status int) error {
 	if f.panicValue != nil {
 		panic(f.panicValue)
@@ -81,6 +102,21 @@ func TestActions_NewAPIDegradeSuccess(t *testing.T) {
 	}
 	if len(platform.calls) != 1 || platform.calls[0].weight != 0 || platform.calls[0].status != 2 {
 		t.Fatalf("expected one call with weight=0 status=2, got %+v", platform.calls)
+	}
+}
+
+func TestActions_TargetStateUpdateUsesCancelableContext(t *testing.T) {
+	platform := &contextPlatformActioner{fakePlatformActioner: &fakePlatformActioner{}}
+	dispatcher := newRemoteActionDispatcher(fakeSiteLookup{}, fakeSessionProvider{}, platform)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := dispatcher.ApplyTargetState(ctx, upstream.Session{Platform: upstream.PlatformNewAPI}, AdminProbeTarget{
+		Platform: string(upstream.PlatformNewAPI), AccountID: "42",
+	}, nil, "active")
+
+	if !errors.Is(err, context.Canceled) || platform.contextCalls != 1 || len(platform.calls) != 0 {
+		t.Fatalf("target action must use the canceled context: err=%v context_calls=%d calls=%+v", err, platform.contextCalls, platform.calls)
 	}
 }
 

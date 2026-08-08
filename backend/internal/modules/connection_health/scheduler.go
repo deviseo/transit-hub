@@ -10,22 +10,27 @@ import (
 )
 
 const (
-	schedulerTickInterval   = 30 * time.Second
-	maxJobsPerTick          = 100
-	globalProbeConcurrency  = 5
-	perSiteProbeConcurrency = 2
+	probeSchedulerScanInterval = 30 * time.Second
+	maxJobsPerTick             = 100
+	globalProbeConcurrency     = 5
+	perSiteProbeConcurrency    = 2
 )
 
 // adminProbeJob 是调度器一轮扫描出的、针对一个独立探活目标的到期任务集合。
 // 一个目标下可能有多个到期模型，共用一次凭据解析（避免重复命中受保护的 key 接口）。
 type adminProbeJob struct {
-	userID         string
-	adminAccountID string
-	session        upstream.Session
-	target         AdminProbeTarget
-	account        upstream.AdminGroupAccountInfo
-	models         []probeModelSpec
-	dueSpecs       []probeModelSpec
+	userID             string
+	adminAccountID     string
+	session            upstream.Session
+	target             AdminProbeTarget
+	account            upstream.AdminGroupAccountInfo
+	memberships        []adminTargetMembership
+	snapshotBacked     bool
+	snapshotFetchedAt  time.Time
+	snapshotExpiresAt  time.Time
+	snapshotGeneration uint64
+	models             []probeModelSpec
+	dueSpecs           []probeModelSpec
 }
 
 type probePolicyEventGroup struct {
@@ -41,20 +46,56 @@ type adminInventoryGroup struct {
 }
 
 type adminWorkspaceInventory struct {
-	session upstream.Session
-	groups  []adminInventoryGroup
+	session                upstream.Session
+	groups                 []adminInventoryGroup
+	complete               bool
+	multiplierLookup       upstreamMultiplierLookup
+	multiplierLookupLoaded bool
 }
 
 type adminInventoryCacheEntry struct {
-	inventory *adminWorkspaceInventory
-	err       error
+	inventory          *adminWorkspaceInventory
+	err                error
+	snapshot           bool
+	snapshotFetchedAt  time.Time
+	snapshotExpiresAt  time.Time
+	snapshotGeneration uint64
 }
 
 type adminInventoryCache map[string]adminInventoryCacheEntry
 
+func (s *Service) fetchAdminAllGroups(ctx context.Context, session upstream.Session) ([]upstream.AdminGroupInfo, error) {
+	if reader, ok := s.platformGroups.(PlatformGroupContextReader); ok {
+		return reader.FetchAdminAllGroupsContext(ctx, session)
+	}
+	return s.platformGroups.FetchAdminAllGroups(session)
+}
+
+func (s *Service) listAdminGroupAccounts(ctx context.Context, session upstream.Session, group upstream.AdminGroupInfo) ([]upstream.AdminGroupAccountInfo, error) {
+	if reader, ok := s.platformGroups.(PlatformGroupContextReader); ok {
+		return reader.ListAdminGroupAccountsContext(ctx, session, group)
+	}
+	return s.platformGroups.ListAdminGroupAccounts(session, group)
+}
+
+func (s *Service) resolveProbeCredential(ctx context.Context, session upstream.Session, account upstream.AdminGroupAccountInfo) (upstream.ProbeCredential, error) {
+	if reader, ok := s.platformGroups.(PlatformProbeCredentialContextReader); ok {
+		return reader.ResolveProbeCredentialContext(ctx, session, account)
+	}
+	return s.platformGroups.ResolveProbeCredential(session, account)
+}
+
 func (s *Service) loadAdminInventory(ctx context.Context, userID string, adminAccountID string, cache adminInventoryCache) (*adminWorkspaceInventory, error) {
 	key := userID + "|" + adminAccountID
 	if cached, ok := cache[key]; ok {
+		if cached.snapshot {
+			current, valid := s.getAdminInventorySnapshot(userID, adminAccountID, s.schedulerNow())
+			if !valid || current.generation != cached.snapshotGeneration ||
+				!current.fetchedAt.Equal(cached.snapshotFetchedAt) || !s.schedulerNow().Before(cached.snapshotExpiresAt) {
+				cache[key] = adminInventoryCacheEntry{err: errInventorySnapshotUnavailable}
+				return nil, errInventorySnapshotUnavailable
+			}
+		}
 		return cached.inventory, cached.err
 	}
 	session, err := s.mySites.RequireSession(ctx, userID, adminAccountID)
@@ -62,36 +103,27 @@ func (s *Service) loadAdminInventory(ctx context.Context, userID string, adminAc
 		cache[key] = adminInventoryCacheEntry{err: err}
 		return nil, err
 	}
-	groups, err := s.platformGroups.FetchAdminAllGroups(session)
+	groups, err := s.fetchAdminAllGroups(ctx, session)
 	if err != nil {
 		cache[key] = adminInventoryCacheEntry{err: err}
 		return nil, err
 	}
-	inventory := &adminWorkspaceInventory{session: session, groups: make([]adminInventoryGroup, 0, len(groups))}
+	inventory := &adminWorkspaceInventory{session: session, groups: make([]adminInventoryGroup, 0, len(groups)), complete: true}
 	for _, group := range groups {
-		accounts, accountsErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		accounts, accountsErr := s.listAdminGroupAccounts(ctx, session, group)
+		if accountsErr != nil {
+			inventory.complete = false
+		}
 		inventory.groups = append(inventory.groups, adminInventoryGroup{group: group, accounts: accounts, err: accountsErr})
 	}
 	cache[key] = adminInventoryCacheEntry{inventory: inventory}
 	return inventory, nil
 }
 
-// StartScheduler 启动后台探活调度：立即跑一次，之后每 30s 一次。tick 和每个探活 goroutine
-// 都有独立的 panic recover，任意一次探活失败或 panic 都不能影响调度器持续运行。
+// StartScheduler starts the independent C-phase inventory reconcile, priority writeback and
+// probe loops. A successful initial reconcile wakes the first probe scan.
 func (s *Service) StartScheduler(ctx context.Context) {
-	go func() {
-		s.runSchedulerTickSafely(ctx)
-		ticker := time.NewTicker(schedulerTickInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.runSchedulerTickSafely(ctx)
-			}
-		}
-	}()
+	s.startFrequencySchedulers(ctx)
 }
 
 func (s *Service) runSchedulerTickSafely(ctx context.Context) {
@@ -138,25 +170,14 @@ func (s *Service) runSchedulerTick(ctx context.Context) {
 		log.Printf("[connection-health] scheduler list group target exclusions failed: %v", err)
 		return
 	}
-	priorityStates, err := s.repo.ListAllPrioritySyncStates(ctx)
-	if err != nil {
-		log.Printf("[connection-health] scheduler list priority sync states failed: %v", err)
-		return
-	}
-	targetActionStates, err := s.repo.ListAllTargetActionStates(ctx)
-	if err != nil {
-		log.Printf("[connection-health] scheduler list target action states failed: %v", err)
-		return
-	}
-	if len(assignments) == 0 && len(groupAssignments) == 0 && len(priorityStates) == 0 && len(targetActionStates) == 0 {
+	if len(assignments) == 0 && len(groupAssignments) == 0 {
 		// 没有任何显式或分组分配：不解析凭据、不探活、不修改优先级。
 		return
 	}
 
-	// 优先级同步和探活使用同一份有效策略关系。优先级写入失败只记录日志，不阻断探活。
-	inventoryCache := make(adminInventoryCache)
-	s.syncMultiplierPrioritiesWithCache(ctx, policies, assignments, groupAssignments, exclusions, priorityStates, inventoryCache)
-	s.restoreUnmanagedTargetActions(ctx, policies, assignments, groupAssignments, exclusions, targetActionStates, inventoryCache)
+	// C-phase probes consume only a valid reconcile snapshot. A missing or failed snapshot must
+	// never fall through to a probe-triggered upstream inventory read.
+	inventoryCache := s.inventoryCacheForSchedulerInputs(policies, assignments, groupAssignments)
 	if len(policies) == 0 {
 		return
 	}
@@ -188,10 +209,9 @@ func (s *Service) runSchedulerTick(ctx context.Context) {
 		go s.runAdminProbeJob(ctx, j, releaseSlot, &wg)
 	}
 	wg.Wait()
-	// 探活会在本轮改变健康档位和延迟排序。所有已启动任务完成后复用正式手动探活的
-	// workspace 同步入口，让生产 priority 在同一轮反映最新状态，而不是等待下一次 tick。
+	// 探活只更新本地排序签名和最新 pending。独立写回循环决定何时触碰主站。
 	for _, workspace := range probedWorkspaces {
-		s.syncCurrentWorkspacePriorities(ctx, workspace.userID, workspace.adminAccountID)
+		s.evaluateCurrentWorkspacePriorities(ctx, workspace.userID, workspace.adminAccountID, priorityActionProbe)
 	}
 }
 
@@ -212,33 +232,47 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, release
 		return
 	}
 	defer release()
-	freshTarget, freshAccount, memberships, found, accountsReadError, refreshErr := s.findAdminTargetWithMemberships(ctx, j.session, j.adminAccountID, j.target.AccountID)
-	if refreshErr != nil || accountsReadError || !found || freshTarget.TargetID != j.target.TargetID {
-		log.Printf("[connection-health] refresh scheduled target failed target_id=%s found=%t partial=%t err=%v", j.target.TargetID, found, accountsReadError, refreshErr)
-		return
+	jobCtx := ctx
+	if j.snapshotBacked {
+		now := s.schedulerNow()
+		current, valid := s.getAdminInventorySnapshot(j.userID, j.adminAccountID, now)
+		if !valid || current.generation != j.snapshotGeneration || !current.fetchedAt.Equal(j.snapshotFetchedAt) ||
+			!current.expiresAt.Equal(j.snapshotExpiresAt) || !now.Before(j.snapshotExpiresAt) {
+			return
+		}
+		jobCtx = current.ctx
+		if err := jobCtx.Err(); err != nil {
+			return
+		}
 	}
-	j.target = freshTarget
-	j.account = freshAccount
-	currentSpecs, queuedSpecs, policyOK := s.currentScheduledProbeSpecs(ctx, j.userID, j.adminAccountID, j.target, memberships, j.dueSpecs)
+	currentSpecs, queuedSpecs, policyOK := s.currentScheduledProbeSpecs(jobCtx, j.userID, j.adminAccountID, j.target, j.memberships, j.dueSpecs)
 	if !policyOK {
 		log.Printf("[connection-health] refresh scheduled policy decision failed target_id=%s", j.target.TargetID)
 		return
 	}
 	j.models = currentSpecs
-	j.dueSpecs = s.recheckAdminProbeSpecs(ctx, j.userID, j.adminAccountID, j.target, queuedSpecs, time.Now().UTC())
+	j.dueSpecs = s.recheckAdminProbeSpecs(jobCtx, j.userID, j.adminAccountID, j.target, queuedSpecs, time.Now().UTC())
 	if len(j.dueSpecs) == 0 {
 		return
 	}
+	if err := jobCtx.Err(); err != nil {
+		return
+	}
 
-	cred, err := s.platformGroups.ResolveProbeCredential(j.session, j.account)
+	cred, err := s.resolveProbeCredential(jobCtx, j.session, j.account)
 	if err != nil {
 		reason := upstream.ProbeCredentialReason(err)
-		s.recordTargetCredentialUnavailable(ctx, j.userID, j.adminAccountID, j.target, j.dueSpecs, reason)
+		if jobCtx.Err() == nil {
+			s.recordTargetCredentialUnavailable(jobCtx, j.userID, j.adminAccountID, j.target, j.dueSpecs, reason)
+		}
 		return
 	}
 	results := make([]targetProbeResult, 0, len(j.dueSpecs))
 	for _, spec := range j.dueSpecs {
-		result, err := s.probeTargetOnce(ctx, j.userID, j.adminAccountID, j.target, cred, spec, true)
+		if err := jobCtx.Err(); err != nil {
+			return
+		}
+		result, err := s.probeTargetOnce(jobCtx, j.userID, j.adminAccountID, j.target, cred, spec, true)
 		if err != nil {
 			log.Printf("[connection-health] scheduled target probe failed target_id=%s model=%s err=%v", j.target.TargetID, spec.modelName, err)
 			continue
@@ -247,7 +281,10 @@ func (s *Service) runAdminProbeJob(ctx context.Context, j adminProbeJob, release
 			results = append(results, *result)
 		}
 	}
-	if err := s.finishTargetProbeBatch(ctx, j.userID, j.adminAccountID, j.session, j.target, j.models, results, EventSourceScheduled); err != nil {
+	if err := jobCtx.Err(); err != nil {
+		return
+	}
+	if err := s.finishTargetProbeBatch(jobCtx, j.userID, j.adminAccountID, j.session, j.target, j.models, results, EventSourceScheduled); err != nil {
 		log.Printf("[connection-health] finish scheduled target probe failed target_id=%s err=%v", j.target.TargetID, err)
 	}
 }
@@ -493,6 +530,8 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 		type targetCandidate struct {
 			target        AdminProbeTarget
 			account       upstream.AdminGroupAccountInfo
+			memberships   []adminTargetMembership
+			membershipIDs map[string]struct{}
 			policies      []Policy
 			policySources map[string]probePolicyEventGroup
 		}
@@ -532,10 +571,14 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				candidate, exists := candidates[target.TargetID]
 				if !exists {
 					candidate = &targetCandidate{
-						target: target, account: acc, policySources: make(map[string]probePolicyEventGroup),
+						target: target, account: acc, membershipIDs: make(map[string]struct{}), policySources: make(map[string]probePolicyEventGroup),
 					}
 					candidates[target.TargetID] = candidate
 					targetOrder = append(targetOrder, target.TargetID)
+				}
+				if _, seenMembership := candidate.membershipIDs[group.ID]; !seenMembership {
+					candidate.membershipIDs[group.ID] = struct{}{}
+					candidate.memberships = append(candidate.memberships, adminTargetMembership{groupID: group.ID, groupName: group.Name})
 				}
 				for _, policy := range assignedTargets[target.TargetID] {
 					// An explicit target assignment has no single group owner, even when the
@@ -619,9 +662,13 @@ func (s *Service) collectAdminProbeJobsWithGroupsAndCache(ctx context.Context, p
 				modelBudget--
 			}
 			if len(dueSpecs) > 0 {
+				cacheEntry := inventoryCache[ws.userID+"|"+ws.adminAccountID]
 				jobs = append(jobs, adminProbeJob{
 					userID: ws.userID, adminAccountID: ws.adminAccountID, session: session,
-					target: candidate.target, account: candidate.account, models: specs, dueSpecs: dueSpecs,
+					target: candidate.target, account: candidate.account, memberships: candidate.memberships,
+					snapshotBacked: cacheEntry.snapshot, snapshotFetchedAt: cacheEntry.snapshotFetchedAt,
+					snapshotExpiresAt: cacheEntry.snapshotExpiresAt, snapshotGeneration: cacheEntry.snapshotGeneration,
+					models: specs, dueSpecs: dueSpecs,
 				})
 			}
 		}

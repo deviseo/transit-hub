@@ -247,6 +247,9 @@ export interface ConnectionHealthOverview {
 export interface PrioritySyncPreset {
   minWriteIntervalSeconds: number
   maxPendingAgeSeconds: number
+  reconcileIntervalSeconds: number
+  inventorySnapshotTtlSeconds: number
+  reconcileFailureBackoffSeconds: number
   driftAction: 'alert_only' | string
   readMode: 'inventory_snapshot' | string
 }
@@ -257,15 +260,36 @@ export interface PriorityWorkspaceSyncState {
   lastWriteAttemptAt?: string | null
   lastWriteSuccessAt?: string | null
   lastDriftAt?: string | null
+  lastReconcileAttemptAt?: string | null
+  lastReconcileSuccessAt?: string | null
+  lastReconcileFailureAt?: string | null
+  nextReconcileAt?: string | null
+  inventorySnapshotExpiresAt?: string | null
   lastDecision: string
   lastSuppressionReason: string
   lastError: string
+  lastInventoryError: string
+  inventoryStatus: string
+  lastActionSource: string
+  policyVersion: string
   minWriteIntervalSeconds: number
   maxPendingAgeSeconds: number
+  reconcileIntervalSeconds: number
+  inventorySnapshotTtlSeconds: number
+  reconcileFailureBackoffSeconds: number
   driftAction: string
   readMode: string
+  pendingAgeSeconds: number
+  lastInventoryReadDurationMs: number
+  lastWriteDurationMs: number
   evaluationCount: number
+  probeEvaluationCount: number
   signatureChangeCount: number
+  reconcileAttemptCount: number
+  reconcileSuccessCount: number
+  reconcileFailureCount: number
+  snapshotHitCount: number
+  snapshotMissCount: number
   writeAttemptCount: number
   writeSuccessCount: number
   writeFailureCount: number

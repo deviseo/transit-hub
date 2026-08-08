@@ -49,6 +49,7 @@ type healthRepository interface {
 	ListGroupProbeSortSettings(ctx context.Context, userID string, adminAccountID string) ([]GroupProbeSortSetting, error)
 	ListPrioritySyncStates(ctx context.Context, userID string, adminAccountID string) ([]PrioritySyncState, error)
 	ListAllPrioritySyncStates(ctx context.Context) ([]PrioritySyncState, error)
+	ListAllPriorityWorkspaceSyncStates(ctx context.Context) ([]PriorityWorkspaceSyncState, error)
 	UpsertPrioritySyncState(ctx context.Context, state PrioritySyncState) error
 	DeletePrioritySyncState(ctx context.Context, userID string, adminAccountID string, targetID string) error
 	GetPriorityWorkspaceSyncState(ctx context.Context, userID string, adminAccountID string) (*PriorityWorkspaceSyncState, error)
@@ -64,19 +65,29 @@ type healthRepository interface {
 // Service 组装 connection_health 模块的全部业务逻辑：聚合查询、策略管理、手动动作、
 // 真实探活执行。所有对外可见字段都不含 upstream_key，符合任务书的敏感信息约束。
 type Service struct {
-	repo               healthRepository
-	mySites            MySitesReader
-	sites              SiteLookup
-	accounts           AdminAccountResolver
-	dispatcher         RemoteActionRunner
-	probeRunner        *RealProbeRunner
-	modelDiscovery     *ModelDiscoveryRunner
-	platformGroups     PlatformGroupReader
-	priorityActions    TargetPriorityActioner
-	schedulableActions TargetSchedulableActioner
-	probeLimiterMu     sync.Mutex
-	probeLimiter       *probeConcurrencyLimiter
-	now                func() time.Time
+	repo                        healthRepository
+	mySites                     MySitesReader
+	sites                       SiteLookup
+	accounts                    AdminAccountResolver
+	dispatcher                  RemoteActionRunner
+	probeRunner                 *RealProbeRunner
+	modelDiscovery              *ModelDiscoveryRunner
+	platformGroups              PlatformGroupReader
+	priorityActions             TargetPriorityActioner
+	schedulableActions          TargetSchedulableActioner
+	probeLimiterMu              sync.Mutex
+	probeLimiter                *probeConcurrencyLimiter
+	inventorySnapshotMu         sync.RWMutex
+	inventorySnapshots          map[string]adminInventorySnapshot
+	inventorySnapshotGeneration uint64
+	schedulerSignalsOnce        sync.Once
+	schedulerStartOnce          sync.Once
+	schedulerCancel             context.CancelFunc
+	schedulerWG                 sync.WaitGroup
+	probeSchedulerWake          chan struct{}
+	priorityReconcileWake       chan struct{}
+	priorityWritebackWake       chan struct{}
+	now                         func() time.Time
 }
 
 func NewService(repo *Repository, mySites MySitesReader, sites SiteLookup, platform PlatformActioner) *Service {
@@ -752,6 +763,20 @@ func (s *Service) SavePolicy(ctx context.Context, userID string, in PolicyInput)
 		if in.PrioritySyncPreset == nil {
 			preset := existing.PrioritySyncPreset
 			in.PrioritySyncPreset = &preset
+		} else {
+			// B-era clients send a non-nil preset but do not know the C cadence
+			// fields. Preserve the stored values for omitted fields during rollout.
+			preset := *in.PrioritySyncPreset
+			if preset.ReconcileIntervalSeconds == 0 {
+				preset.ReconcileIntervalSeconds = existing.PrioritySyncPreset.ReconcileIntervalSeconds
+			}
+			if preset.InventorySnapshotTTLSeconds == 0 {
+				preset.InventorySnapshotTTLSeconds = existing.PrioritySyncPreset.InventorySnapshotTTLSeconds
+			}
+			if preset.ReconcileFailureBackoffSeconds == 0 {
+				preset.ReconcileFailureBackoffSeconds = existing.PrioritySyncPreset.ReconcileFailureBackoffSeconds
+			}
+			in.PrioritySyncPreset = &preset
 		}
 	}
 
@@ -866,10 +891,13 @@ func normalizeStrategyMode(mode string) string {
 
 func normalizePrioritySyncPreset(input *PrioritySyncPreset) (PrioritySyncPreset, error) {
 	preset := PrioritySyncPreset{
-		MinWriteIntervalSeconds: defaultPriorityMinWriteIntervalSeconds,
-		MaxPendingAgeSeconds:    defaultPriorityMaxPendingAgeSeconds,
-		DriftAction:             PriorityDriftActionAlertOnly,
-		ReadMode:                PriorityReadModeInventory,
+		MinWriteIntervalSeconds:        defaultPriorityMinWriteIntervalSeconds,
+		MaxPendingAgeSeconds:           defaultPriorityMaxPendingAgeSeconds,
+		ReconcileIntervalSeconds:       defaultPriorityReconcileIntervalSeconds,
+		InventorySnapshotTTLSeconds:    defaultInventorySnapshotTTLSeconds,
+		ReconcileFailureBackoffSeconds: defaultReconcileFailureBackoffSeconds,
+		DriftAction:                    PriorityDriftActionAlertOnly,
+		ReadMode:                       PriorityReadModeInventory,
 	}
 	if input == nil {
 		return preset, nil
@@ -880,6 +908,15 @@ func normalizePrioritySyncPreset(input *PrioritySyncPreset) (PrioritySyncPreset,
 	if input.MaxPendingAgeSeconds != 0 {
 		preset.MaxPendingAgeSeconds = input.MaxPendingAgeSeconds
 	}
+	if input.ReconcileIntervalSeconds != 0 {
+		preset.ReconcileIntervalSeconds = input.ReconcileIntervalSeconds
+	}
+	if input.InventorySnapshotTTLSeconds != 0 {
+		preset.InventorySnapshotTTLSeconds = input.InventorySnapshotTTLSeconds
+	}
+	if input.ReconcileFailureBackoffSeconds != 0 {
+		preset.ReconcileFailureBackoffSeconds = input.ReconcileFailureBackoffSeconds
+	}
 	if strings.TrimSpace(input.DriftAction) != "" {
 		preset.DriftAction = strings.TrimSpace(input.DriftAction)
 	}
@@ -887,6 +924,7 @@ func normalizePrioritySyncPreset(input *PrioritySyncPreset) (PrioritySyncPreset,
 		preset.ReadMode = strings.TrimSpace(input.ReadMode)
 	}
 	if preset.MinWriteIntervalSeconds <= 0 || preset.MaxPendingAgeSeconds < preset.MinWriteIntervalSeconds ||
+		preset.ReconcileIntervalSeconds <= 0 || preset.InventorySnapshotTTLSeconds <= 0 || preset.ReconcileFailureBackoffSeconds <= 0 ||
 		preset.DriftAction != PriorityDriftActionAlertOnly || preset.ReadMode != PriorityReadModeInventory {
 		return PrioritySyncPreset{}, requestError(ErrorRequest)
 	}

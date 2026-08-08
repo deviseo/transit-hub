@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Check, ChevronDown, History, KeyRound, Link2, Loader2, Megaphone, RefreshCw, Search, ServerCog, Sparkles, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { getMySiteMappingOptions, realConnect, realBind, listAdminResources, listUpstreamKeys, listRealConnections, realDisconnect } from '../api/mySites'
 import { getDashboardAdminStatus } from '../api/dashboardAdmin'
+import { listUpstreamSites } from '../api/upstream'
 import { useGroupRates } from '../composables/useGroupRates'
 import type { GroupRate, GroupRateHistoryRow } from '../types/groupRates'
 import type { AdminResourceOption, ConnectionCapabilities, MySiteMapping, MySiteMappingOwnGroupOption, RealConnection, UpstreamKeyItem } from '../types/mySites'
+import type { UpstreamSiteResponse } from '../types/upstream'
 import { LEGACY_NEW_API_CHANNEL_SUGGESTIONS, NEW_API_CHANNEL_TYPES } from '../types/mySites'
 
 import { t, locale } from '@/locales'
 const router = useRouter()
+const route = useRoute()
 
 const {
   rates,
@@ -24,6 +27,7 @@ const {
   platforms,
   typeFilter,
   platformFilter,
+  siteFilter,
   statusFilter,
   sortMode,
   statusCounts,
@@ -39,9 +43,11 @@ const {
   setSearch,
   setTypeFilter,
   setPlatformFilter,
+  setSiteFilter,
   setStatusFilter,
   setSortMode,
   goToPage,
+  focusGroup: focusRateGroup,
 } = useGroupRates()
 
 const selectedRate = ref<GroupRate | null>(null)
@@ -56,6 +62,9 @@ const mySiteMappings = ref<MySiteMapping[]>([])
 const hasLoadedMappingOptions = ref(false)
 const connectionCapabilities = ref<ConnectionCapabilities | null>(null)
 const searchQuery = ref('')
+const upstreamSiteOptions = ref<UpstreamSiteResponse[]>([])
+const focusedRateKey = ref('')
+const pendingFocusGroup = ref('')
 const realConnectionsData = ref<RealConnection[]>([])
 const disconnectingRate = ref<GroupRate | null>(null)
 const disconnectMode = ref<'unlink' | 'full'>('unlink')
@@ -113,6 +122,57 @@ const addToPricingMapping = ref(true)
 const connectOperationId = ref('')
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
+const queryValue = (value: unknown): string => {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+  return typeof value === 'string' ? value : ''
+}
+
+siteFilter.value = queryValue(route.query.siteId)
+pendingFocusGroup.value = queryValue(route.query.focusGroup)
+
+const siteOptions = computed(() => {
+  const options = new Map(upstreamSiteOptions.value.map(site => [site.id, site.name]))
+  for (const rate of rates.value) {
+    if (!options.has(rate.siteId)) options.set(rate.siteId, rate.siteName)
+  }
+  return Array.from(options, ([id, name]) => ({ id, name }))
+    .sort((first, second) => first.name.localeCompare(second.name))
+})
+
+const rateFocusKey = (rate: GroupRate): string => `${rate.siteId}\u0000${rate.groupName}`
+
+const clearRateHighlight = () => {
+  focusedRateKey.value = ''
+  if (!route.query.focusGroup) return
+  const query = { ...route.query }
+  delete query.focusGroup
+  void router.replace({ query })
+}
+
+const consumeRouteFocus = async () => {
+  const groupName = pendingFocusGroup.value.trim()
+  if (!groupName || !siteFilter.value) return
+  const located = focusRateGroup(groupName)
+  if (located) {
+    const target = rates.value.find(rate => rate.siteId === siteFilter.value && rate.groupName === groupName)
+    if (target) focusedRateKey.value = rateFocusKey(target)
+  }
+  pendingFocusGroup.value = ''
+  if (route.query.focusGroup) {
+    const query = { ...route.query }
+    delete query.focusGroup
+    await router.replace({ query })
+  }
+}
+
+const loadUpstreamSiteOptions = async () => {
+  try {
+    upstreamSiteOptions.value = await listUpstreamSites()
+  } catch {
+    upstreamSiteOptions.value = []
+  }
+}
+
 const editTypeOptions = computed(() => {
   const options = new Set(types.value)
   if (editingRate.value?.type) options.add(editingRate.value.type)
@@ -169,9 +229,10 @@ const filteredRates = computed(() => {
   const filtered = rates.value.filter(rate => {
     const typeMatch = !typeFilter.value || rate.type === typeFilter.value
     const platformMatch = !platformFilter.value || rate.platform === platformFilter.value
+    const siteMatch = !siteFilter.value || rate.siteId === siteFilter.value
 
     if (statusFilter.value === 'deleted') {
-      return typeMatch && platformMatch && rate.deleted
+      return typeMatch && platformMatch && siteMatch && rate.deleted
     }
 
     if (rate.deleted) return false
@@ -180,7 +241,7 @@ const filteredRates = computed(() => {
       (statusFilter.value === 'mapped' && rate.mapped) ||
       (statusFilter.value === 'unmapped' && !rate.mapped)
 
-    return typeMatch && platformMatch && mappedMatch
+    return typeMatch && platformMatch && siteMatch && mappedMatch
   })
 
   return [...filtered].sort((a, b) => {
@@ -210,6 +271,7 @@ const hasActiveRateFilters = computed(() => Boolean(
   searchQuery.value.trim() ||
   typeFilter.value ||
   platformFilter.value ||
+  siteFilter.value ||
   statusFilter.value !== 'all',
 ))
 
@@ -227,9 +289,10 @@ watch(isAnyDialogOpen, async (open) => {
   previouslyFocusedElement = null
 })
 
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('keydown', handleDialogKeydown)
-	void Promise.all([loadRates(), loadRealConnections(), loadAdminPlatform()])
+  await Promise.all([loadRates(), loadRealConnections(), loadAdminPlatform(), loadUpstreamSiteOptions()])
+  await consumeRouteFocus()
 })
 
 onBeforeUnmount(() => {
@@ -275,6 +338,7 @@ const canSubmitConnect = computed(() => {
 
 const handleTypeChange = async (event: Event) => {
   const target = event.target as HTMLSelectElement
+  clearRateHighlight()
   await setTypeFilter(target.value)
 }
 
@@ -510,16 +574,30 @@ const refreshAfterMutation = async () => {
 
 const handlePlatformChange = async (event: Event) => {
   const target = event.target as HTMLSelectElement
+  clearRateHighlight()
   await setPlatformFilter(target.value)
+}
+
+const handleSiteChange = async (event: Event) => {
+  const target = event.target as HTMLSelectElement
+  clearRateHighlight()
+  await setSiteFilter(target.value)
+  const query = { ...route.query }
+  if (target.value) query.siteId = target.value
+  else delete query.siteId
+  delete query.focusGroup
+  await router.replace({ query })
 }
 
 const handleStatusChange = async (status: 'all' | 'mapped' | 'unmapped' | 'deleted') => {
   if (status === statusFilter.value || isLoading.value) return
+  clearRateHighlight()
   await setStatusFilter(status)
 }
 
 const handleSortChange = async (event: Event) => {
   const target = event.target as HTMLSelectElement
+  clearRateHighlight()
   await setSortMode(target.value as 'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc')
 }
 
@@ -653,7 +731,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
 </script>
 
 <template>
-  <div class="flex min-h-[calc(100dvh-8rem)] flex-col space-y-6 lg:h-[calc(100dvh-8rem)]">
+  <div class="flex min-h-[calc(100dvh-8rem)] flex-col space-y-6 lg:h-[calc(100dvh-8rem)]" @click.capture="clearRateHighlight">
     <div class="flex max-w-full w-fit shrink-0 items-center gap-1 overflow-x-auto rounded-lg border border-border/50 bg-surface p-1" role="tablist" :aria-label="t('admin.menu.groupRates')">
       <button
         v-for="tab in (['all', 'mapped', 'unmapped', 'deleted'] as const)"
@@ -694,6 +772,19 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             spellcheck="false"
             class="h-10 w-full rounded-lg border border-border/50 bg-surface pl-10 pr-4 text-sm text-foreground outline-none transition-[color,background-color,border-color,box-shadow] placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
+        </div>
+
+        <div class="relative w-full sm:w-56 sm:shrink-0">
+          <select
+            v-model="siteFilter"
+            :aria-label="t('admin.groupRates.filters.siteLabel')"
+            class="h-10 w-full appearance-none rounded-lg border border-border/50 bg-surface px-3 pr-8 text-sm text-foreground outline-none transition-[color,background-color,border-color,box-shadow] focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
+            @change="handleSiteChange"
+          >
+            <option value="">{{ t('admin.groupRates.common.allSites') }}</option>
+            <option v-for="site in siteOptions" :key="site.id" :value="site.id">{{ site.name }}</option>
+          </select>
+          <ChevronDown class="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         </div>
 
         <div class="relative w-full sm:w-48 sm:shrink-0">
@@ -783,7 +874,13 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             </tr>
           </thead>
           <tbody class="divide-y divide-border/50">
-            <tr v-for="rate in filteredRates" :key="`${rate.siteId}-${rate.groupName}-${rate.platform ?? 'all'}`" class="transition-colors hover:bg-surface/30">
+            <tr
+              v-for="rate in filteredRates"
+              :key="`${rate.siteId}-${rate.groupName}-${rate.platform ?? 'all'}`"
+              class="transition-colors hover:bg-surface/30"
+              :class="focusedRateKey === rateFocusKey(rate) ? 'bg-primary/[0.10] outline outline-1 -outline-offset-1 outline-primary/50' : ''"
+              @click="clearRateHighlight"
+            >
               <td class="px-4 py-2.5">
                 <div class="font-medium text-foreground">{{ rate.siteName }}</div>
               </td>

@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, ArrowUpDown, ChevronDown, ChevronUp } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
 import { getStrategySettings } from '../api/settings'
+import { getConnectionHealthAdminGroups } from '../api/connectionHealth'
+import { listRealConnections } from '../api/mySites'
 import { useUpstreamSites } from '../composables/useUpstreamSites'
 import SiteSettingsModal from '../components/upstream/SiteSettingsModal.vue'
 import type { UpstreamGroupInfo, UpstreamMetricValue, UpstreamSite, UpstreamSiteForm, UpstreamStatus } from '../types/upstream'
+import type { AdminGroupHealth } from '../types/connectionHealth'
+import type { RealConnection } from '../types/mySites'
 
 import { t, locale } from '@/locales'
+const router = useRouter()
 const searchQuery = ref('')
 const isAddModalOpen = ref(false)
 const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, addSite, updateSite, deleteSite, streamRefreshSites, refreshSingleSite } = useUpstreamSites()
@@ -234,10 +240,87 @@ const deletingSite = computed(() => upstreamSites.value.find((site) => site.id =
 // Groups Modal Logic
 const isGroupsModalOpen = ref(false)
 const selectedSiteForGroups = ref<UpstreamSite | null>(null)
+const realConnections = ref<RealConnection[]>([])
+const adminGroupHealth = ref<AdminGroupHealth[]>([])
+
+type GroupCardState = 'unconnected' | 'unscheduled' | 'scheduled'
+
+// 可用分组弹窗卡片尺寸配置：保持布局流正常，只放大卡片本身和卡片内容间距。
+const GROUP_CARD_SCALE = 1.5
+const GROUP_CARD_SIZE_STYLE = {
+  minHeight: `${Math.round(120 * GROUP_CARD_SCALE)}px`,
+  padding: `${Math.round(12 * GROUP_CARD_SCALE)}px`,
+}
+
+const connectionMatchesGroup = (connection: RealConnection, siteId: string, group: UpstreamGroupInfo): boolean => (
+  connection.upstreamSiteId === siteId &&
+  (
+    connection.upstreamGroupId === group.id ||
+    ((!connection.upstreamGroupId || !group.id) && connection.upstreamGroupName === group.name)
+  )
+)
+
+const connectionsForGroup = (siteId: string, group: UpstreamGroupInfo): RealConnection[] => (
+  realConnections.value.filter(connection => connectionMatchesGroup(connection, siteId, group))
+)
+
+const groupHasEnabledProbePolicy = (group: AdminGroupHealth): boolean => (
+  group.hasEnabledProbePolicy ??
+  group.hasEnabledPolicy ??
+  group.assignedPolicies?.some(policy => policy.enabled) ??
+  Boolean(group.hasAssignedPolicy)
+)
+
+const connectedAdminGroups = (connections: RealConnection[]): AdminGroupHealth[] => {
+  const ids = new Set(connections.flatMap(connection => connection.ownGroupIds ?? []))
+  const names = new Set(connections.flatMap(connection => connection.ownGroupNames ?? []))
+  return adminGroupHealth.value.filter(group => ids.has(group.id) || names.has(group.name))
+}
+
+const groupCardState = (siteId: string, group: UpstreamGroupInfo): GroupCardState => {
+  const connections = connectionsForGroup(siteId, group)
+  if (connections.length === 0) return 'unconnected'
+  return connectedAdminGroups(connections).some(groupHasEnabledProbePolicy) ? 'scheduled' : 'unscheduled'
+}
+
+const groupCardClasses = (siteId: string, group: UpstreamGroupInfo): string => {
+  const state = groupCardState(siteId, group)
+  if (state === 'scheduled') return 'border-emerald-500/50 bg-emerald-500/[0.08] hover:border-emerald-500/75 hover:bg-emerald-500/[0.13]'
+  if (state === 'unscheduled') return 'border-primary/50 bg-primary/[0.08] hover:border-primary/75 hover:bg-primary/[0.13]'
+  return 'border-border/70 bg-white dark:bg-surface-elevated hover:border-border hover:bg-surface-elevated'
+}
+
+const groupStatusClasses = (state: GroupCardState): string => {
+  if (state === 'unconnected') return ''
+  return state === 'scheduled'
+    ? 'border-emerald-500/35 bg-emerald-500/[0.12] text-emerald-700 dark:text-emerald-300'
+    : 'border-primary/30 bg-primary/[0.12] text-primary'
+}
+
+const groupMultiplierClasses = (state: GroupCardState): string => {
+  if (state === 'scheduled') return 'border-emerald-500/35 bg-emerald-500/[0.10] text-emerald-700 dark:text-emerald-300'
+  if (state === 'unscheduled') return 'border-primary/35 bg-primary/[0.10] text-primary'
+  return 'border-border/70 bg-surface-elevated/90 text-foreground'
+}
+
+const groupStatusLabel = (state: GroupCardState): string => {
+  if (state === 'unconnected') return ''
+  return t(state === 'scheduled' ? 'admin.upstream.fields.groupScheduling' : 'admin.upstream.fields.groupNotScheduling')
+}
+
+const loadGroupNavigationData = async () => {
+  const [connectionsResult, healthResult] = await Promise.allSettled([
+    listRealConnections(),
+    getConnectionHealthAdminGroups(),
+  ])
+  realConnections.value = connectionsResult.status === 'fulfilled' ? connectionsResult.value : []
+  adminGroupHealth.value = healthResult.status === 'fulfilled' ? healthResult.value : []
+}
 
 const openGroupsModal = (site: UpstreamSite) => {
   selectedSiteForGroups.value = site
   isGroupsModalOpen.value = true
+  void loadGroupNavigationData()
 }
 
 const closeGroupsModal = () => {
@@ -276,6 +359,51 @@ const groupedGroups = computed<Record<string, UpstreamGroupInfo[]>>(() => {
   }, {})
 })
 
+const selectedGroupSiteId = computed(() => selectedSiteForGroups.value?.id ?? '')
+
+const formatMultiplier = (value: number): string => (
+  t('admin.groupRates.format.multiplier', { value: Number(value.toFixed(4)).toString() })
+)
+
+const convertedMultiplierDisplay = (site: UpstreamSite, group: UpstreamGroupInfo): string => {
+  if (group.multiplier === null || !Number.isFinite(group.multiplier) || site.rechargeRate <= 0 || !Number.isFinite(site.rechargeRate)) {
+    return group.multiplierDisplay
+  }
+  return formatMultiplier(group.multiplier * site.rechargeRate)
+}
+
+const multiplierFormula = (site: UpstreamSite, group: UpstreamGroupInfo): string => (
+  t('admin.upstream.fields.multiplierFormula', {
+    upstream: group.multiplier === null ? group.multiplierDisplay : formatMultiplier(group.multiplier),
+    recharge: Number(site.rechargeRate.toFixed(4)).toString(),
+  })
+)
+
+const openGroupDestination = (group: UpstreamGroupInfo) => {
+  const site = selectedSiteForGroups.value
+  if (!site) return
+  const connections = connectionsForGroup(site.id, group)
+  closeGroupsModal()
+  if (connections.length === 0) {
+    void router.push({
+      name: 'AdminGroupRates',
+      query: { siteId: site.id, focusGroup: group.name },
+    })
+    return
+  }
+
+  const connection = connections[0]
+  const ownGroupId = connection.ownGroupIds?.[0] ?? ''
+  const ownGroupName = connection.ownGroupNames?.[0] ?? ''
+  void router.push({
+    name: 'AdminConnectionHealth',
+    query: {
+      focusGroupId: ownGroupId || undefined,
+      focusGroupName: ownGroupId ? undefined : ownGroupName || undefined,
+    },
+  })
+}
+
 const cnyMetricDisplay = (site: UpstreamSite, metric: UpstreamMetricValue): string | null => {
   if (metric.value === null || !Number.isFinite(metric.value) || site.rechargeRate <= 0 || !Number.isFinite(site.rechargeRate)) return null
   return t('admin.upstream.currency.cnyValue', { amount: (metric.value * site.rechargeRate).toFixed(2) })
@@ -294,7 +422,7 @@ const lastUpdatedDisplay = (site: UpstreamSite): string => {
 }
 
 onMounted(() => {
-  void loadRefreshSettings()
+  void Promise.all([loadRefreshSettings(), loadGroupNavigationData()])
 })
 
 onBeforeUnmount(() => {
@@ -741,7 +869,7 @@ onBeforeUnmount(() => {
         ></div>
 
         <!-- Modal Content -->
-        <div role="dialog" aria-modal="true" :aria-label="t('admin.upstream.fields.availableGroups')" class="relative max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-hidden rounded-xl border border-border/60 border-t-2 border-t-primary bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+        <div role="dialog" aria-modal="true" :aria-label="t('admin.upstream.fields.availableGroups')" class="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border/60 border-t-2 border-t-primary bg-card shadow-2xl animate-in fade-in zoom-in-95 duration-200">
 
           <div class="flex items-center justify-between px-6 py-5 border-b border-border/40">
             <h3 class="text-lg font-semibold text-foreground">
@@ -753,24 +881,40 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div class="max-h-[60dvh] space-y-6 overflow-y-auto p-6 overscroll-contain">
+          <div class="min-h-0 flex-1 space-y-6 overflow-y-auto p-6 overscroll-contain">
             <div v-for="(groups, platform) in groupedGroups" :key="platform" class="space-y-3">
               <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                 <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
                 {{ platform }}
               </h4>
-              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
                 <button
                   v-for="group in groups"
                   :key="group.name"
-                  class="flex flex-col items-center justify-center p-3 rounded-xl border border-border/60 bg-surface/50 hover:bg-surface hover:border-primary/50 transition-colors text-center group"
+                  :style="GROUP_CARD_SIZE_STYLE"
+                  class="group flex flex-col items-center justify-center rounded-xl border text-center transition-colors"
+                  :class="groupCardClasses(selectedGroupSiteId, group)"
+                  @click="openGroupDestination(group)"
                 >
-                  <span class="text-sm font-medium text-foreground truncate w-full group-hover:text-primary transition-colors">{{ group.name }}</span>
+                  <span class="flex w-full items-center justify-center gap-1.5">
+                    <span class="min-w-0 truncate text-sm font-medium text-foreground group-hover:text-primary transition-colors">{{ group.name }}</span>
+                    <span
+                      v-if="groupCardState(selectedGroupSiteId, group) !== 'unconnected'"
+                      class="shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold leading-none"
+                      :class="groupStatusClasses(groupCardState(selectedGroupSiteId, group))"
+                    >
+                      {{ groupStatusLabel(groupCardState(selectedGroupSiteId, group)) }}
+                    </span>
+                  </span>
                   <span
                     v-if="group.multiplier !== null && selectedSiteForGroups && selectedSiteForGroups.rechargeRate > 0"
-                    class="mt-2 text-xs font-semibold text-primary px-2 py-0.5 rounded-md bg-primary/10 border border-primary/20"
+                    class="mt-3 rounded-md border px-3 py-2 text-center"
+                    :class="groupMultiplierClasses(groupCardState(selectedGroupSiteId, group))"
                   >
-                    {{ (group.multiplier * selectedSiteForGroups.rechargeRate).toFixed(2) }}
+                    <Tooltip :text="multiplierFormula(selectedSiteForGroups, group)" wide>
+                      <span class="block text-[10px] font-medium leading-none opacity-75">{{ t('admin.upstream.fields.effectiveCostMultiplier') }}</span>
+                      <span class="mt-1 block text-sm font-semibold leading-none">{{ convertedMultiplierDisplay(selectedSiteForGroups, group) }}</span>
+                    </Tooltip>
                   </span>
                   <template v-if="group.hasDedicatedMultiplier">
                     <Tooltip :text="t('admin.upstream.fields.dedicatedMultiplierTooltip')" wide>
@@ -782,7 +926,10 @@ onBeforeUnmount(() => {
                       {{ t('admin.upstream.fields.dedicatedMultiplierBadge') }}
                     </span>
                   </template>
-                  <span v-else class="text-[10px] text-muted-foreground mt-1">
+                  <span v-if="group.multiplier !== null" class="mt-2 text-[10px] text-muted-foreground">
+                    {{ t('admin.upstream.fields.upstreamMultiplier') }} {{ group.multiplierDisplay }}
+                  </span>
+                  <span v-else class="mt-2 text-[10px] text-muted-foreground">
                     {{ group.multiplierDisplay }}
                   </span>
                 </button>

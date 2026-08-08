@@ -695,6 +695,11 @@ func TestRunSchedulerTick_DoesNotWritePriorityWhenOneTargetHealthChangesWithoutR
 		platformGroups: reader, priorityActions: priorityActions, dispatcher: noopRemoteActionRunner{},
 		probeRunner: NewRealProbeRunner(),
 	}
+	inventory, err := service.loadAdminInventory(context.Background(), "user1", "ws1", make(adminInventoryCache))
+	if err != nil {
+		t.Fatalf("prime inventory snapshot: %v", err)
+	}
+	service.putAdminInventorySnapshot(context.Background(), "user1", "ws1", inventory, time.Now().UTC(), time.Minute)
 
 	service.runSchedulerTick(context.Background())
 
@@ -705,7 +710,7 @@ func TestRunSchedulerTick_DoesNotWritePriorityWhenOneTargetHealthChangesWithoutR
 	if len(priorityActions.calls) != 0 {
 		t.Fatalf("a health-only change without a global order change must not write priority: calls=%+v priority_states=%+v states=%+v", priorityActions.calls, repo.priorityStates, repo.states)
 	}
-	if repo.priorityLeaseCount["user1|ws1"] != 2 {
-		t.Fatalf("scheduler priority sync must use the workspace lease before and after probes: %+v", repo.priorityLeaseCount)
+	if repo.priorityLeaseCount["user1|ws1"] != 1 {
+		t.Fatalf("probe tick must only lease the local post-probe evaluation: %+v", repo.priorityLeaseCount)
 	}
 }

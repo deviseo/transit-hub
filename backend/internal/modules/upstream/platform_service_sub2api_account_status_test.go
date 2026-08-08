@@ -1,11 +1,89 @@
 package upstream
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+func TestUpdateAdminTargetPriorityContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token-1", TokenType: "Bearer"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- service.UpdateAdminTargetPriorityContext(ctx, session, "1515", 1)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked priority request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled priority request must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("priority request did not stop after context cancellation")
+	}
+}
+
+func TestUpdateSub2APIAdminAccountStatusContext_CancelsBlockedRequest(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() {
+		close(release)
+		server.Close()
+	}()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token-1", TokenType: "Bearer"}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- service.UpdateSub2APIAdminAccountStatusContext(ctx, session, "1515", "inactive")
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocked status request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled status request must return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status request did not stop after context cancellation")
+	}
+}
 
 // TestUpdateSub2APIAdminAccountStatus_UsesFieldOnlyBulkUpdate 验证状态更新不会读取或
 // 回写账号详情。请求体只能包含账号 ID 和目标状态，尤其不能携带倍率、凭据或分组字段。

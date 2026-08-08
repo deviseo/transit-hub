@@ -1255,10 +1255,24 @@ export default {
       },
       prioritySync: {
         decision: 'Priority 写回',
-        interval: '最短写回间隔',
+        interval: '写回/校验间隔',
         intervalValue: '{seconds} 秒',
+        intervalPairValue: '{write} 秒 / {reconcile} 秒',
+        reconcile: '主站校验成功/尝试',
+        snapshots: '快照命中/未命中',
+        probeEvaluations: '探活后排序 {count} 次',
+        pendingAge: '当前 pending 年龄',
+        pendingAgeValue: '{seconds} 秒',
         writes: '主站写入成功/尝试',
         skips: '已抑制写入',
+        actionSources: {
+          probe: '探活后本地排序',
+          policy_change: '策略变更',
+          reconcile: '主站校验',
+          writeback: '独立写回',
+          combined: '兼容同步',
+          unknown: '尚无动作'
+        },
         decisions: {
           applied: '已写回最新排序',
           observed_applied: '主站已是最新排序',
@@ -1274,13 +1288,17 @@ export default {
           none: '无',
           signature_unchanged: '稳定生产顺序未变化',
           min_write_interval: '窗口内保留最新排序',
+          writeback_queued: '最新排序已进入独立写回队列',
+          inventory_unknown: '主站读取失败，当前状态未知',
+          inventory_snapshot_unavailable: '有效 inventory 快照不可用',
           inventory_incomplete: '主站目标读取不完整',
           sort_input_unavailable: '排序输入暂不可用',
           priority_input_unavailable: '主站 priority 暂不可读',
           manual_priority_drift: '已告警，不覆盖人工 priority',
           priority_pending_overdue: 'pending 等待超过预期',
           priority_checkpoint_read_failed: 'priority checkpoint 读取失败',
-          priority_write_failed: '最近一次主站 priority 写入失败'
+          priority_write_failed: '最近一次主站 priority 写入失败',
+          inventory_read_failed: '最近一次主站 inventory 读取失败'
         }
       },
       stateLabels: {
@@ -1491,7 +1509,11 @@ export default {
         autoRemoteActionHelp: 'NewAPI 会修改 channel 权重/状态，Sub2API 会切换 admin 账号 active/inactive。关闭后只记录健康结果，不调用上游。',
         priorityModeLabel: '上游流量优先级',
         priorityWriteIntervalLabel: '最短 Priority 写回间隔',
-        priorityWriteIntervalHelp: '只限制主站 priority 写入，不改变探活频率。排序未变时不会写入；主站人工修改默认只告警，不自动覆盖。',
+        priorityWriteIntervalHelp: '探活、本地排序、主站写回和主站校验分别调度。排序未变时不会写入；主站人工修改默认只告警，不自动覆盖。',
+        priorityWriteIntervalShortLabel: '写回间隔（秒）',
+        reconcileIntervalLabel: '校验间隔（秒）',
+        snapshotTtlLabel: '快照有效期（秒）',
+        reconcileBackoffLabel: '读取失败退避（秒）',
         secondsUnit: '秒',
         priorityModes: {
           none: '保持上游设置',
@@ -1499,7 +1521,7 @@ export default {
         },
         priorityModeHelp: '健康探活模式按“健康档位、有效倍率、完整成功延迟、稳定目标 ID”排序；仅倍率模式仍只按主站分组倍率。一次性测试不影响排序，正式手动探活会在既有托管条件成立时刷新排序。',
         multiplierOnlySummaryTitle: '倍率越低，优先级越高',
-        multiplierOnlySummary: '系统约每 30 秒读取最新分组倍率并同步上游优先级，不解析探活凭据、不请求模型、不消耗探活预算，也不执行自动降级或远端动作。检测到人工修改时会停止覆盖。',
+        multiplierOnlySummary: '系统按策略中的校验与写回频率读取最新分组倍率并同步上游优先级，不解析探活凭据、不请求模型、不消耗探活预算，也不执行自动降级或远端动作。检测到人工修改时会停止覆盖。',
         providerLabel: '模型 Provider',
         providerPlaceholder: '请选择 Provider',
         providerMismatchWarning: '检测到该策略已有的模型探活目标使用了不同的 provider。请在上方选择一个 provider，保存后所有模型探活目标都会统一为你选择的这个 provider。',
@@ -1574,7 +1596,8 @@ export default {
           modelTargetRequired: '至少需要一个已填写模型名称的探活目标。',
           providerRequired: '请选择该策略的 provider。',
           unschedulableIntervalInvalid: '关闭调度后的探活间隔必须是正整数分钟。',
-          priorityWriteIntervalInvalid: '最短 Priority 写回间隔必须是正整数秒。'
+          priorityWriteIntervalInvalid: '最短 Priority 写回间隔必须是正整数秒。',
+          priorityFrequencyInvalid: '校验间隔、快照有效期和读取失败退避必须是正整数秒。'
         }
       },
       probeDialog: {
@@ -1728,6 +1751,11 @@ export default {
         availableGroups: '可用分组',
         viewAvailableGroups: '查看可用分组',
         closeGroupsModal: '关闭',
+        effectiveCostMultiplier: '换算后成本倍率',
+        upstreamMultiplier: '上游倍率',
+        multiplierFormula: '上游 {upstream} × 充值系数 {recharge}',
+        groupNotScheduling: '未调度',
+        groupScheduling: '调度中',
         dedicatedMultiplierBadge: '专属倍率',
         dedicatedMultiplierTooltip: '该用户命中了 sub2api 专属倍率，业务计算使用右侧倍率。',
         unknownPlatform: '未知类型',
@@ -1798,6 +1826,7 @@ export default {
       subtitle: '查看各上游站点分组倍率及最近变动，并追踪历史倍率记录。',
       common: {
         placeholder: '—',
+        allSites: '全部站点',
         allTypes: '全部类型',
         allPlatforms: '全部平台',
         unknown: '未知'
@@ -1843,6 +1872,7 @@ export default {
       filters: {
         searchLabel: '搜索',
         searchPlaceholder: '搜索站点或分组...',
+        siteLabel: '站点',
         typeLabel: '分组类型',
         platformLabel: '站点平台'
       },
