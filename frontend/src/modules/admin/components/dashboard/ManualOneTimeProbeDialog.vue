@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { AlertTriangle, CheckCircle2, Loader2, ShieldAlert, X, XCircle, Zap } from 'lucide-vue-next'
 import {
   connectionHealthMessageKey,
@@ -46,6 +46,28 @@ const results = ref<ManualProbeResult[]>([])
 const loadErrorKey = ref('')
 const testErrorKey = ref('')
 let loadSequence = 0
+let activeRequestController: AbortController | null = null
+
+const cancelActiveRequest = () => {
+  activeRequestController?.abort()
+  activeRequestController = null
+}
+
+const beginRequest = (): AbortController => {
+  cancelActiveRequest()
+  const controller = new AbortController()
+  activeRequestController = controller
+  return controller
+}
+
+const finishRequest = (controller: AbortController) => {
+  if (activeRequestController === controller) activeRequestController = null
+}
+
+onBeforeUnmount(() => {
+  loadSequence++
+  cancelActiveRequest()
+})
 
 const defaultSelection = (options: ManualProbeModelOption[]): Set<string> =>
   new Set(options.length > 0 ? [options.find((option) => option.id === 'gpt-5.6-sol')?.id ?? options[0].id] : [])
@@ -58,10 +80,13 @@ watch(
   async ([isOpen]) => {
     if (!isOpen || !props.target) {
       loadSequence++
+      cancelActiveRequest()
       return
     }
+    cancelActiveRequest()
     const targetId = props.target.targetId
     const sequence = ++loadSequence
+    const controller = beginRequest()
     const formalModels = props.target.formalModels ?? []
     mode.value = formalModels.length > 0 ? 'formal' : 'once'
     models.value = formalModels
@@ -73,7 +98,8 @@ watch(
     testErrorKey.value = ''
     phase.value = formalModels.length > 0 ? 'ready' : 'loading'
 
-    const outcome = await discoverModels(targetId)
+    const outcome = await discoverModels(targetId, controller.signal)
+    finishRequest(controller)
     if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
     if ('errorKey' in outcome) {
       loadErrorKey.value = outcome.errorKey
@@ -123,10 +149,12 @@ const retryLoad = async () => {
   if (!props.target) return
   const targetId = props.target.targetId
   const sequence = ++loadSequence
+  const controller = beginRequest()
   phase.value = 'loading'
 	onceLoadState.value = 'loading'
   loadErrorKey.value = ''
-  const outcome = await discoverModels(targetId)
+  const outcome = await discoverModels(targetId, controller.signal)
+  finishRequest(controller)
   if (sequence !== loadSequence || !props.open || props.target?.targetId !== targetId) return
   if ('errorKey' in outcome) {
     loadErrorKey.value = outcome.errorKey
@@ -145,25 +173,31 @@ const startTest = async () => {
   if (!canStartTest.value || !props.target) return
   phase.value = 'testing'
   testErrorKey.value = ''
-	if (mode.value === 'once') {
-		const outcome = await runManualProbeOnce(props.target.targetId, Array.from(selected.value))
-		if ('errorKey' in outcome) {
-			testErrorKey.value = outcome.errorKey
-			phase.value = 'ready'
-			return
-		}
-		results.value = outcome.results
-	} else {
-		const outcome = await manualProbeTarget(props.target.targetId, Array.from(selected.value))
-		if (outcome == null) {
-			testErrorKey.value = serviceErrorKey.value
-			phase.value = 'ready'
-			return
-		}
-		results.value = outcome.map(formalProbeResult)
-		emit('completed')
-	}
-  phase.value = 'ready'
+  const sequence = ++loadSequence
+  const controller = beginRequest()
+  try {
+    if (mode.value === 'once') {
+      const outcome = await runManualProbeOnce(props.target.targetId, Array.from(selected.value), controller.signal)
+      if (sequence !== loadSequence || !props.open) return
+      if ('errorKey' in outcome) {
+        testErrorKey.value = outcome.errorKey
+        return
+      }
+      results.value = outcome.results
+    } else {
+      const outcome = await manualProbeTarget(props.target.targetId, Array.from(selected.value), controller.signal)
+      if (sequence !== loadSequence || !props.open) return
+      if (outcome == null) {
+        testErrorKey.value = serviceErrorKey.value
+        return
+      }
+      results.value = outcome.map(formalProbeResult)
+      emit('completed')
+    }
+  } finally {
+    finishRequest(controller)
+    if (sequence === loadSequence && props.open) phase.value = 'ready'
+  }
 }
 
 const formalProbeResult = (model: ModelHealth): ManualProbeResult => ({
@@ -180,7 +214,8 @@ const resultLabel = (result: string): string => readableMessage(result)
 const resultIsSlow = (result: ManualProbeResult): boolean => result.result === 'slow_response'
 
 const close = () => {
-  if (phase.value === 'testing') return
+  loadSequence++
+  cancelActiveRequest()
   emit('close')
 }
 </script>

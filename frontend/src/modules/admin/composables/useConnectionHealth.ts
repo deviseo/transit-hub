@@ -284,11 +284,11 @@ export function useConnectionHealth() {
   // 返回值语义同 manualProbe：
   // null=失败（errorKey 已设置，含 credential_unavailable 等结构化不可探活错误）、
   // []=执行成功但无结果、非空=正常结果。
-  const manualProbeTarget = async (targetId: string, models?: string[]): Promise<ModelHealth[] | null> => {
+  const manualProbeTarget = async (targetId: string, models?: string[], signal?: AbortSignal): Promise<ModelHealth[] | null> => {
     isActionLoading.value = true
     errorKey.value = ''
     try {
-      return await probeTarget(targetId, models)
+      return await probeTarget(targetId, models, signal)
     } catch (err) {
       errorKey.value = err instanceof Error ? err.message : 'admin.connectionHealth.errors.request'
       return null
@@ -301,17 +301,17 @@ export function useConnectionHealth() {
   // 一次性交互，不影响主列表的探活状态徽标，因此不复用 isActionLoading/errorKey 这两个
   // 面向主列表操作的共享状态——弹窗组件自己持有 loading/error 展示，避免多个弹窗实例之间
   // 或与主列表操作互相污染 loading/错误提示。
-  const discoverModels = async (targetId: string): Promise<{ models: ManualProbeModelOption[] } | { errorKey: string }> => {
+  const discoverModels = async (targetId: string, signal?: AbortSignal): Promise<{ models: ManualProbeModelOption[] } | { errorKey: string }> => {
     try {
-      return { models: await discoverTargetModels(targetId) }
+      return { models: await discoverTargetModels(targetId, signal) }
     } catch (err) {
       return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
     }
   }
 
-  const runManualProbeOnce = async (targetId: string, models: string[]): Promise<{ results: ManualProbeResult[] } | { errorKey: string }> => {
+  const runManualProbeOnce = async (targetId: string, models: string[], signal?: AbortSignal): Promise<{ results: ManualProbeResult[] } | { errorKey: string }> => {
     try {
-      return { results: await manualProbeOnce(targetId, models) }
+      return { results: await manualProbeOnce(targetId, models, signal) }
     } catch (err) {
       return { errorKey: err instanceof Error ? err.message : 'admin.connectionHealth.errors.request' }
     }

@@ -95,7 +95,7 @@ func (s *Service) DiscoverTargetModels(ctx context.Context, userID string, targe
 	if err != nil {
 		return nil, err
 	}
-	cred, err := s.platformGroups.ResolveProbeCredential(session, account)
+	cred, err := s.resolveProbeCredential(ctx, session, account)
 	if err != nil {
 		return nil, requestError(reasonToErrorKey(upstream.ProbeCredentialReason(err)))
 	}

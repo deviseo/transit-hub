@@ -277,7 +277,7 @@ onActivated(refreshOnEntry)
 const documentVisibility = useDocumentVisibility()
 let autoRefreshInFlight = false
 const autoRefresh = async () => {
-  if (documentVisibility.value !== 'visible' || autoRefreshInFlight) return
+  if (documentVisibility.value !== 'visible' || autoRefreshInFlight || probeDialogOpen.value) return
   autoRefreshInFlight = true
   try {
     await Promise.all([loadAll({ silent: true }), loadEvents(selectedConnectionId.value || undefined)])

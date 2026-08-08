@@ -95,24 +95,26 @@ export const probeConnection = async (connectionId: string, models?: string[]): 
 
 // probeTarget 触发一次独立目标的手动探活：按 targetId + models 走，后端 server-only 解析凭据，
 // 请求体绝不携带 base_url/key/credentials。models 为空时后端探活该目标全部候选模型。
-export const probeTarget = async (targetId: string, models?: string[]): Promise<ModelHealth[]> =>
+export const probeTarget = async (targetId: string, models?: string[], signal?: AbortSignal): Promise<ModelHealth[]> =>
   requestJson<ModelHealth[]>(`/connection-health/targets/${encodeURIComponent(targetId)}/probe`, {
     method: 'POST',
     body: models && models.length > 0 ? JSON.stringify({ models }) : undefined,
+    signal,
   })
 
 // discoverTargetModels 是手动一次性探活弹窗打开时调用的 server-only 模型发现接口：
 // 后端用当前 admin session 临时解析该 target 的 base_url + key 请求上游 /v1/models，
 // 这里只拿到安全字段（id/name/ownedBy/providerFamily），前端绝不接触凭据本身。
-export const discoverTargetModels = async (targetId: string): Promise<ManualProbeModelOption[]> =>
-  requestJson<ManualProbeModelOption[]>(`/connection-health/targets/${encodeURIComponent(targetId)}/models`)
+export const discoverTargetModels = async (targetId: string, signal?: AbortSignal): Promise<ManualProbeModelOption[]> =>
+  requestJson<ManualProbeModelOption[]>(`/connection-health/targets/${encodeURIComponent(targetId)}/models`, { signal })
 
 // manualProbeOnce 触发一次「一次性」探活：不写策略状态/事件，结果仅用于弹窗内即时展示。
 // models 必须非空——手动一次性探活没有候选池概念，必须由用户在弹窗里显式勾选。
-export const manualProbeOnce = async (targetId: string, models: string[]): Promise<ManualProbeResult[]> =>
+export const manualProbeOnce = async (targetId: string, models: string[], signal?: AbortSignal): Promise<ManualProbeResult[]> =>
   requestJson<ManualProbeResult[]>(`/connection-health/targets/${encodeURIComponent(targetId)}/manual-probe`, {
     method: 'POST',
     body: JSON.stringify({ models }),
+    signal,
   })
 
 export interface TargetSchedulableActionResult {

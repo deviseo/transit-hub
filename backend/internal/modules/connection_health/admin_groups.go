@@ -170,7 +170,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	}
 	platform := string(session.Platform)
 
-	groups, err := s.platformGroups.FetchAdminAllGroups(session)
+	groups, err := s.fetchAdminAllGroups(ctx, session)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func (s *Service) AdminGroups(ctx context.Context, userID string) ([]AdminGroupH
 	inheritedPolicyIDsByTarget := make(map[string][]string)
 	decisionAccountByTarget := make(map[string]upstream.AdminGroupAccountInfo)
 	for _, group := range groups {
-		accounts, accErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		accounts, accErr := s.listAdminGroupAccounts(ctx, session, group)
 		accountsByGroup[group.ID] = groupAccountInventory{accounts: accounts, err: accErr}
 		if accErr != nil {
 			continue

@@ -6,10 +6,30 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
+
+type cancellableManualProbeReader struct {
+	fakePlatformGroupReader
+	credentialStarted chan struct{}
+}
+
+func (r cancellableManualProbeReader) FetchAdminAllGroupsContext(ctx context.Context, session upstream.Session) ([]upstream.AdminGroupInfo, error) {
+	return r.FetchAdminAllGroups(session)
+}
+
+func (r cancellableManualProbeReader) ListAdminGroupAccountsContext(ctx context.Context, session upstream.Session, group upstream.AdminGroupInfo) ([]upstream.AdminGroupAccountInfo, error) {
+	return r.ListAdminGroupAccounts(session, group)
+}
+
+func (r cancellableManualProbeReader) ResolveProbeCredentialContext(ctx context.Context, session upstream.Session, account upstream.AdminGroupAccountInfo) (upstream.ProbeCredential, error) {
+	close(r.credentialStarted)
+	<-ctx.Done()
+	return upstream.ProbeCredential{}, ctx.Err()
+}
 
 // TestManualProbeTarget_EmptyModelsRejected 验证 models 为空时明确拒绝，不静默退化成
 // "探活全部候选"（手动一次性探活没有候选池概念，必须由用户显式勾选）。
@@ -55,6 +75,42 @@ func TestManualProbeTarget_CredentialUnavailableReturnsStructuredError(t *testin
 	results, err := svc.ManualProbeTarget(context.Background(), "user1", "newapi:ws1:100", []string{"gpt-4o"})
 	if err == nil || err.Error() != ErrorBaseURLUnavailable {
 		t.Fatalf("expected base_url_unavailable error, got results=%v err=%v", results, err)
+	}
+}
+
+func TestManualProbeTarget_CancelsBlockedCredentialRequest(t *testing.T) {
+	repo := newFakeRepository()
+	mySites := fakeMySitesReader{session: upstream.Session{Platform: upstream.PlatformNewAPI}}
+	started := make(chan struct{})
+	reader := cancellableManualProbeReader{
+		fakePlatformGroupReader: fakePlatformGroupReader{
+			groups:        []upstream.AdminGroupInfo{{ID: "g1", Name: "vip"}},
+			accountsByGrp: map[string][]upstream.AdminGroupAccountInfo{"g1": {{ID: "100", Name: "ch", BaseURL: "https://up", Models: "gpt-4o"}}},
+		},
+		credentialStarted: started,
+	}
+	svc := newAdminGroupsService(reader, mySites, repo)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.ManualProbeTarget(ctx, "user1", "newapi:ws1:100", []string{"gpt-4o"})
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("credential request did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected the cancelled manual probe to return an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual probe did not return after context cancellation")
 	}
 }
 

@@ -394,7 +394,7 @@ func (s *Service) ProbeTarget(ctx context.Context, userID string, targetID strin
 	defer releaseSlot()
 
 	// 解析凭据（server-only，明文只在内存短暂存在）。失败 -> 结构化不可探活错误。
-	cred, err := s.platformGroups.ResolveProbeCredential(session, account)
+	cred, err := s.resolveProbeCredential(ctx, session, account)
 	if err != nil {
 		return nil, requestError(reasonToErrorKey(upstream.ProbeCredentialReason(err)))
 	}
@@ -444,13 +444,13 @@ func (s *Service) findAdminTarget(ctx context.Context, session upstream.Session,
 }
 
 func (s *Service) findAdminTargetWithMemberships(ctx context.Context, session upstream.Session, adminAccountID string, accountID string) (target AdminProbeTarget, account upstream.AdminGroupAccountInfo, memberships []adminTargetMembership, found bool, accountsReadError bool, err error) {
-	groups, err := s.platformGroups.FetchAdminAllGroups(session)
+	groups, err := s.fetchAdminAllGroups(ctx, session)
 	if err != nil {
 		return AdminProbeTarget{}, upstream.AdminGroupAccountInfo{}, nil, false, false, err
 	}
 	platform := string(session.Platform)
 	for _, group := range groups {
-		accounts, accErr := s.platformGroups.ListAdminGroupAccounts(session, group)
+		accounts, accErr := s.listAdminGroupAccounts(ctx, session, group)
 		if accErr != nil {
 			// 单分组失败不影响在其它分组里继续找，但记录下发生过读取错误。
 			accountsReadError = true

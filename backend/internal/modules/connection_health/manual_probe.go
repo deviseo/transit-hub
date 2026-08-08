@@ -59,7 +59,7 @@ func (s *Service) ManualProbeTarget(ctx context.Context, userID string, targetID
 	for _, spec := range effectiveSpecs {
 		specByModel[spec.modelName] = spec
 	}
-	cred, err := s.platformGroups.ResolveProbeCredential(session, account)
+	cred, err := s.resolveProbeCredential(ctx, session, account)
 	if err != nil {
 		return nil, requestError(reasonToErrorKey(upstream.ProbeCredentialReason(err)))
 	}
