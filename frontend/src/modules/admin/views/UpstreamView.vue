@@ -896,11 +896,11 @@ onBeforeUnmount(() => {
                   :class="groupCardClasses(selectedGroupSiteId, group)"
                   @click="openGroupDestination(group)"
                 >
-                  <span class="flex w-full items-center justify-center gap-1.5">
-                    <span class="min-w-0 truncate text-sm font-medium text-foreground group-hover:text-primary transition-colors">{{ group.name }}</span>
+                  <span class="flex w-full flex-wrap items-center justify-center gap-1.5">
+                    <span class="min-w-0 max-w-full whitespace-normal break-words text-center text-[22px] font-medium leading-tight text-foreground transition-colors group-hover:text-primary">{{ group.name }}</span>
                     <span
                       v-if="groupCardState(selectedGroupSiteId, group) !== 'unconnected'"
-                      class="shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-semibold leading-none"
+                      class="shrink-0 rounded-md border px-1.5 py-0.5 text-[17px] font-semibold leading-tight"
                       :class="groupStatusClasses(groupCardState(selectedGroupSiteId, group))"
                     >
                       {{ groupStatusLabel(groupCardState(selectedGroupSiteId, group)) }}
@@ -912,24 +912,23 @@ onBeforeUnmount(() => {
                     :class="groupMultiplierClasses(groupCardState(selectedGroupSiteId, group))"
                   >
                     <Tooltip :text="multiplierFormula(selectedSiteForGroups, group)" wide>
-                      <span class="block text-[10px] font-medium leading-none opacity-75">{{ t('admin.upstream.fields.effectiveCostMultiplier') }}</span>
-                      <span class="mt-1 block text-sm font-semibold leading-none">{{ convertedMultiplierDisplay(selectedSiteForGroups, group) }}</span>
+                      <span class="block text-[22px] font-semibold leading-tight">{{ convertedMultiplierDisplay(selectedSiteForGroups, group) }}</span>
                     </Tooltip>
                   </span>
                   <template v-if="group.hasDedicatedMultiplier">
                     <Tooltip :text="t('admin.upstream.fields.dedicatedMultiplierTooltip')" wide>
-                      <span class="text-[10px] text-muted-foreground mt-1">
+                      <span class="mt-1 text-[18px] leading-tight text-muted-foreground">
                         {{ group.defaultMultiplierDisplay }} -&gt; {{ group.dedicatedMultiplierDisplay }}
                       </span>
                     </Tooltip>
-                    <span class="mt-1 text-[9px] font-semibold text-accent px-1.5 py-0.5 rounded bg-accent/10 border border-accent/20">
+                    <span class="mt-1 rounded border border-accent/20 bg-accent/10 px-1.5 py-0.5 text-[17px] font-semibold leading-tight text-accent">
                       {{ t('admin.upstream.fields.dedicatedMultiplierBadge') }}
                     </span>
                   </template>
-                  <span v-if="group.multiplier !== null" class="mt-2 text-[10px] text-muted-foreground">
+                  <span v-if="group.multiplier !== null" class="mt-2 text-[18px] leading-tight text-muted-foreground">
                     {{ t('admin.upstream.fields.upstreamMultiplier') }} {{ group.multiplierDisplay }}
                   </span>
-                  <span v-else class="mt-2 text-[10px] text-muted-foreground">
+                  <span v-else class="mt-2 text-[18px] leading-tight text-muted-foreground">
                     {{ group.multiplierDisplay }}
                   </span>
                 </button>
