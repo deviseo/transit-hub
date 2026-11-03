@@ -73,6 +73,7 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "real_connections", SQL: `DELETE FROM real_connections WHERE user_id = $1 AND workspace_admin_account_id = $2`},
 	{Name: "dashboard_daily_stats", SQL: `DELETE FROM dashboard_daily_stats WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "dashboard_balance_filter", SQL: `DELETE FROM dashboard_balance_filter WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "dashboard_pricing", SQL: `DELETE FROM dashboard_pricing WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "upstream_sites", SQL: `DELETE FROM upstream_sites WHERE user_id = $1 AND admin_account_id = $2`},
 }
 
@@ -95,6 +96,7 @@ var legacyWorkspaceTables = []workspaceTableDescriptor{
 	{Name: "real_connections", WorkspaceColumn: "workspace_admin_account_id"},
 	{Name: "dashboard_daily_stats", WorkspaceColumn: "admin_account_id"},
 	{Name: "dashboard_balance_filter", WorkspaceColumn: "admin_account_id"},
+	{Name: "dashboard_pricing", WorkspaceColumn: "admin_account_id"},
 	{Name: "mass_email_batches", WorkspaceColumn: "admin_account_id"},
 	{Name: "mass_email_batch_items", WorkspaceColumn: "admin_account_id"},
 	{Name: "group_rate_campaigns", WorkspaceColumn: "admin_account_id"},

@@ -48,6 +48,8 @@ type Service struct {
 	// AfterSync 在站点同步成功后被调用，传入同步前后的指标数据。
 	// 由系统设置模块注入，用于余额预警和倍率变更检测。
 	AfterSync func(ctx context.Context, userID, adminAccountID, siteID, siteName string, oldMetrics, newMetrics Metrics)
+	// staleRefresh 记录仪表盘触发的补同步（见 RefreshStaleSites）。
+	staleRefresh staleRefreshState
 }
 
 func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
@@ -228,8 +230,9 @@ func (s *Service) FetchGroupDailyStats(ctx context.Context, userID string, id st
 }
 
 // KeyUsageToday 返回当前工作区所有上游站点中，今天有消费的 key 明细（仪表盘「今日成本」下钻数据源）。
-// 只处理有 session 且 rechargeRate > 0 的站点：这与 dashboard.MetricsService.LiveMetrics() 中
-// todayPurchase 的统计口径完全一致（rechargeRate <= 0 的站点被整体跳过），确保弹窗总额与卡片数值一致。
+// 只处理有 session 且 rechargeRate > 0 的站点，筛选条件与 dashboard.MetricsService.LiveMetrics() 的 todayPurchase 相同；
+// 但取数方式不同：这里实时逐个 key 查询，卡片读取各站点最近一次同步的账号级合计，所以两者可能有差异
+// （查询时间不同；今天已删除的 key 不在这里的列表中，但计入了账号合计）。
 // 站点级并发限制 4；任一站点请求上游平台失败即让整个方法返回错误，不允许把失败站点当 0 处理。
 func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageTodayItem, error) {
 	adminAccountID, err := s.requireCurrentAdminAccountID(ctx, userID)

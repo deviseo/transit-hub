@@ -24,6 +24,7 @@ const (
 	ErrorMissingCredentials          = "admin.dashboard.adminAuth.errors.missingCredentials"
 	ErrorInvalidURL                  = "admin.dashboard.adminAuth.errors.invalidUrl"
 	ErrorAdminOnly                   = "admin.dashboard.adminAuth.errors.adminOnly"
+	ErrorInvalidPricing              = "admin.dashboard.pricing.errors.invalid"
 	ErrorNetwork                     = "admin.dashboard.adminAuth.errors.network"
 	ErrorPlatformUnsupported         = "admin.dashboard.adminAuth.errors.platformUnsupported"
 	ErrorUnknown                     = "admin.dashboard.adminAuth.errors.unknown"

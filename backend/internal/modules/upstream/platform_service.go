@@ -941,25 +941,61 @@ func sub2APIGroupDailyCost(item any) float64 {
 	return *cost
 }
 
+// FetchNewAPIGroupDailyStats 统计「当前登录用户自己」今日在各分组的消费（/api/log/self/stat）。
+// 只适用于上游站点的普通用户会话（我在上游各分组花了多少）；本站（admin 工作区）的分组用量
+// 必须走 FetchAdminGroupDailyStats 的全站口径，否则只会统计到管理员本人的调用。
 func (s *PlatformService) FetchNewAPIGroupDailyStats(session Session, groups []GroupInfo) ([]GroupDailyStat, error) {
+	return s.fetchNewAPIGroupDailyStats(session, groups, newAPISelfLogStatPath)
+}
+
+// fetchNewAPIGroupDailyStats 按分组逐个查询 statPath 在今日窗口内的消费额度。
+// 整个循环共用同一个时间窗口，避免跨零点时不同分组落在不同的「今天」。
+func (s *PlatformService) fetchNewAPIGroupDailyStats(session Session, groups []GroupInfo, statPath string) ([]GroupDailyStat, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := newAPIAuthOptions(session)
+	startTS, endTS := todayStart(), todayEnd()
 	stats := make([]GroupDailyStat, 0, len(groups))
 	for _, group := range groups {
 		name := strings.TrimSpace(group.Name)
 		if name == "" || name == defaultDisplay {
 			continue
 		}
-		statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(todayStart()) + "&end_timestamp=" + strconvInt(todayEnd()) + "&group=" + url.QueryEscape(name)
-		payload, err := s.httpClient.requestJSON(statURL, cookieOptions)
+		amount, err := s.fetchNewAPIConsumeUSD(session, statPath, startTS, endTS, url.Values{"group": []string{name}})
 		if err != nil {
 			return nil, err
 		}
-		stats = append(stats, GroupDailyStat{GroupName: name, TodayActualCost: quotaToUSDValueWithUnit(firstNumber(dataRecord(payload.Payload), []string{"quota"}), session.QuotaPerUnit)})
+		stats = append(stats, GroupDailyStat{GroupName: name, TodayActualCost: amount})
 	}
 	return stats, nil
+}
+
+const (
+	// newAPISiteLogStatPath 是 new-api 管理员的全站日志统计接口（AdminAuth / PAT scope log:read），
+	// 汇总所有用户的消费，支持 group / channel / username 等过滤。本站营收与分组用量必须使用它。
+	newAPISiteLogStatPath = "/api/log/stat"
+	// newAPISelfLogStatPath 只统计当前登录用户自己的消费（new-api controller GetLogsSelfStat 固定按
+	// 当前用户名过滤）。适用于上游站点的普通用户会话，绝不能用来计算本站营收。
+	newAPISelfLogStatPath = "/api/log/self/stat"
+)
+
+// fetchNewAPIConsumeUSD 查询 new-api 日志统计接口在 [startTS, endTS] 内的消费额度（type=2），
+// 并按 quotaPerUnit 换算为美元口径额度。filters 为可选过滤条件（例如 group）。
+func (s *PlatformService) fetchNewAPIConsumeUSD(session Session, statPath string, startTS int64, endTS int64, filters url.Values) (float64, error) {
+	query := url.Values{}
+	query.Set("type", "2")
+	query.Set("start_timestamp", strconvInt(startTS))
+	query.Set("end_timestamp", strconvInt(endTS))
+	for key, values := range filters {
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+statPath+"?"+query.Encode(), newAPIAuthOptions(session))
+	if err != nil {
+		return 0, err
+	}
+	return quotaToUSDValueWithUnit(firstNumber(dataRecord(response.Payload), []string{"quota"}), session.QuotaPerUnit), nil
 }
 
 // FetchKeyUsageToday 按平台分发获取上游站点今天各 key 的消费统计。
@@ -1534,30 +1570,32 @@ func (s *PlatformService) FetchAdminUsageStats(session Session, startDate, endDa
 	}
 }
 
-// fetchNewAPIAdminUsageStats 调用 new-api /api/log/self/stat 获取指定日期范围内的总消费 quota。
+// fetchNewAPIAdminUsageStats 调用 new-api 管理员全站统计接口 /api/log/stat，获取指定日期范围内
+// 本站所有用户的消费额度（即本站营收）。旧实现误用 /api/log/self/stat，只统计到管理员本人的调用。
+// 日期边界按服务进程本地时区（TZ）切分，与仪表盘「今日」的口径保持一致。
 func (s *PlatformService) fetchNewAPIAdminUsageStats(session Session, startDate, endDate string) (float64, error) {
 	if !session.IsAuthenticated() {
 		return 0, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	start, err := time.Parse("2006-01-02", startDate)
+	startTS, endTS, err := localDateRangeUnix(startDate, endDate, time.Local)
 	if err != nil {
 		return 0, err
 	}
-	end, err := time.Parse("2006-01-02", endDate)
+	return s.fetchNewAPIConsumeUSD(session, newAPISiteLogStatPath, startTS, endTS, nil)
+}
+
+// localDateRangeUnix 把 YYYY-MM-DD 日期区间换算为 [起始日 00:00:00, 结束日 23:59:59] 的 Unix 秒，
+// 日期边界按 loc 时区计算。旧实现用 time.Parse（固定 UTC），在北京时间下窗口整体偏移 8 小时。
+func localDateRangeUnix(startDate string, endDate string, loc *time.Location) (int64, int64, error) {
+	start, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(startDate), loc)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	startTS := start.Unix()
-	endTS := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, end.Location()).Unix()
-	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS)
-	cookieOptions := newAPIAuthOptions(session)
-	response, err := s.httpClient.requestJSON(statURL, cookieOptions)
+	end, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(endDate), loc)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	data := dataRecord(response.Payload)
-	quota := firstNumber(data, []string{"quota"})
-	return quotaToUSDValueWithUnit(quota, session.QuotaPerUnit), nil
+	return start.Unix(), end.AddDate(0, 0, 1).Unix() - 1, nil
 }
 
 // FetchAdminSiteBalanceFiltered 平台中性的站点用户总余额统计。
@@ -1713,12 +1751,13 @@ func (s *PlatformService) fetchNewAPIAdminGroups(session Session) ([]GroupInfo, 
 	return newAPIGroups(groupsPayload.Payload, pricingPayload.Payload), nil
 }
 
-// FetchAdminGroupDailyStats 平台中性的分组今日用量统计。
-// sub2api 复用 FetchSub2APIGroupDailyStats 的多级降级策略，new-api 复用 FetchNewAPIGroupDailyStats 的逐组查询。
+// FetchAdminGroupDailyStats 平台中性的本站（admin 工作区）分组今日用量统计。
+// sub2api 复用 FetchSub2APIGroupDailyStats 的多级降级策略；new-api 使用管理员全站统计接口逐组查询
+// （不能复用上游口径的 FetchNewAPIGroupDailyStats，它只统计当前登录用户自己）。
 func (s *PlatformService) FetchAdminGroupDailyStats(session Session, groups []GroupInfo) ([]GroupDailyStat, error) {
 	switch session.Platform {
 	case PlatformNewAPI:
-		return s.FetchNewAPIGroupDailyStats(session, groups)
+		return s.fetchNewAPIGroupDailyStats(session, groups, newAPISiteLogStatPath)
 	default:
 		return s.FetchSub2APIGroupDailyStats(session, groups)
 	}

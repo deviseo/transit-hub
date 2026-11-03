@@ -21,6 +21,7 @@ const keys = ref<UpstreamKeyUsageTodayItem[]>([])
 const total = ref(0)
 const failedSites = ref(0)
 const totalSites = ref(0)
+const queriedAt = ref<string | null>(null)
 // 默认按金额从高到低排序；toggle 后按金额从低到高，金额相同时用 key 名排序，均不触发新的请求。
 const sortAsc = ref(false)
 
@@ -56,6 +57,7 @@ const loadData = async () => {
     total.value = response.total ?? 0
     failedSites.value = response.failedSites ?? 0
     totalSites.value = response.totalSites ?? 0
+    queriedAt.value = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())
   } catch (err) {
     error.value = loadErrorKey(err)
   } finally {
@@ -83,7 +85,7 @@ watch(() => props.open, (isOpen) => {
         <div class="absolute left-0 right-0 top-0 h-1 bg-gradient-to-r from-primary via-accent to-primary" />
 
         <div class="flex items-start justify-between gap-4 px-6 pt-6">
-          <div class="flex items-center gap-3">
+          <div class="flex min-w-0 items-center gap-3">
             <div class="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
               <ShoppingCart class="h-5 w-5" />
             </div>
@@ -92,9 +94,12 @@ watch(() => props.open, (isOpen) => {
               <p class="text-sm text-muted-foreground">
                 {{ t('admin.dashboard.upstreamKeyUsage.subtitle', { count: keys.length, total: formatCny(total) }) }}
               </p>
+              <p v-if="queriedAt" class="mt-0.5 text-xs text-muted-foreground">
+                {{ t('admin.dashboard.upstreamKeyUsage.liveNote', { time: queriedAt }) }}
+              </p>
             </div>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <button
               type="button"
               :disabled="loading || !!error || keys.length === 0"

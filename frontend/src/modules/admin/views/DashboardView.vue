@@ -26,6 +26,7 @@ import AdminLoginModal from '../components/dashboard/AdminLoginModal.vue'
 import BalanceFilterModal from '../components/dashboard/BalanceFilterModal.vue'
 import DashboardEChart from '../components/dashboard/DashboardEChart.vue'
 import GroupUsageTodayModal from '../components/dashboard/GroupUsageTodayModal.vue'
+import SitePricingModal from '../components/dashboard/SitePricingModal.vue'
 import StatCard from '../components/dashboard/StatCard.vue'
 import UpstreamBalanceBreakdownModal from '../components/dashboard/UpstreamBalanceBreakdownModal.vue'
 import UpstreamKeyUsageTodayModal from '../components/dashboard/UpstreamKeyUsageTodayModal.vue'
@@ -34,6 +35,7 @@ import {
   getDashboardTrends,
   getGroupUsageToday,
   getUpstreamBalanceBreakdown,
+  type DashboardMetricsResponse,
   type GroupUsageTodayResponse,
   type UpstreamBalanceBreakdownResponse,
 } from '../api/dashboardAdmin'
@@ -83,6 +85,7 @@ const adminLoginInitialValue = computed(() => ({
 }))
 
 const balanceFilterOpen = ref(false)
+const pricingOpen = ref(false)
 const groupUsageTodayOpen = ref(false)
 const upstreamKeyUsageTodayOpen = ref(false)
 const upstreamBalanceBreakdownOpen = ref(false)
@@ -90,6 +93,9 @@ const upstreamBalanceBreakdownOpen = ref(false)
 const openBalanceFilter = () => { balanceFilterOpen.value = true }
 const closeBalanceFilter = () => { balanceFilterOpen.value = false }
 const onBalanceFilterSaved = () => { void loadAllData({ skipStatusCheck: true }) }
+const openPricing = () => { pricingOpen.value = true }
+const closePricing = () => { pricingOpen.value = false }
+const onPricingSaved = () => { void loadAllData({ skipStatusCheck: true }) }
 const openGroupUsageToday = () => { groupUsageTodayOpen.value = true }
 const closeGroupUsageToday = () => { groupUsageTodayOpen.value = false }
 const openUpstreamKeyUsageToday = () => { upstreamKeyUsageTodayOpen.value = true }
@@ -116,6 +122,22 @@ const handleMetricCardClick = (key: string) => {
 }
 
 const groupCount = ref<number | null>(null)
+// 今日成本的数据来源说明：计入的站点数、今天未同步成功的站点数、最早同步时间；以及营收换算用的售价。
+interface CostMeta {
+  siteUnitPrice: number
+  costSites: number
+  costStaleSites: number
+  costSyncedAt: number | null
+}
+const costMeta = ref<CostMeta | null>(null)
+const applyCostMeta = (live: DashboardMetricsResponse) => {
+  costMeta.value = {
+    siteUnitPrice: live.siteUnitPrice ?? 1,
+    costSites: live.costSites ?? 0,
+    costStaleSites: live.costStaleSites ?? 0,
+    costSyncedAt: live.costSyncedAt ?? null,
+  }
+}
 const groupUsage = ref<GroupUsageTodayResponse | null>(null)
 const balanceBreakdown = ref<UpstreamBalanceBreakdownResponse | null>(null)
 const healthSummary = ref<ConnectionHealthStoredSummary | null>(null)
@@ -133,6 +155,7 @@ const hydrateSnapshot = (snapshot: DashboardDataSnapshot | null): boolean => {
   if (!snapshot) return false
   adminStatus.value = snapshot.adminStatus
   groupCount.value = snapshot.live.groupCount ?? null
+  applyCostMeta(snapshot.live)
   groupUsage.value = snapshot.groupUsage ?? null
   balanceBreakdown.value = snapshot.balanceBreakdown ?? null
   healthSummary.value = snapshot.healthSummary ?? null
@@ -193,6 +216,7 @@ const loadAllData = async (options: { skipStatusCheck?: boolean } = {}) => {
       getDashboardTrends(30),
     ])
     groupCount.value = liveData.groupCount ?? null
+    applyCostMeta(liveData)
     applyRawData(liveData, trendsData)
     const updatedAt = Date.now()
     lastUpdatedAt.value = updatedAt
@@ -292,7 +316,26 @@ interface DashboardCoreCard {
   deltaText: string
   clickable: boolean
   negativeWhenUp: boolean
+  note?: string
+  noteTone?: 'muted' | 'warning'
 }
+
+const priceFormatter = computed(() => new Intl.NumberFormat(locale.value, { maximumFractionDigits: 4 }))
+const formatClock = (value: number): string => new Intl.DateTimeFormat(locale.value, { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
+
+// 今日成本卡片的说明：有站点今天还没同步成功时给出警示（它们没有计入），否则显示计入站点数与最早同步时间。
+const costNote = computed<{ text: string; tone: 'muted' | 'warning' } | null>(() => {
+  const meta = costMeta.value
+  if (!meta) return null
+  if (meta.costStaleSites > 0) {
+    return { text: t('admin.dashboard.cost.staleSites', { count: meta.costStaleSites }), tone: 'warning' }
+  }
+  if (meta.costSites > 0 && meta.costSyncedAt) {
+    return { text: t('admin.dashboard.cost.syncedAt', { count: meta.costSites, time: formatClock(meta.costSyncedAt) }), tone: 'muted' }
+  }
+  return null
+})
+const revenueNote = computed(() => (costMeta.value ? t('admin.dashboard.pricing.cardNote', { price: priceFormatter.value.format(costMeta.value.siteUnitPrice) }) : ''))
 
 const cards = computed<DashboardCoreCard[]>(() => {
   const result: DashboardCoreCard[] = (['todayProfit', 'todayPurchase', 'netProfit'] as DashboardMetricKey[]).flatMap((key) => {
@@ -309,6 +352,8 @@ const cards = computed<DashboardCoreCard[]>(() => {
       deltaText: formatCny(Math.abs(delta.amount)),
       clickable: key === 'todayProfit' || key === 'todayPurchase',
       negativeWhenUp: key === 'todayPurchase',
+      note: key === 'todayPurchase' ? costNote.value?.text : key === 'todayProfit' ? revenueNote.value : undefined,
+      noteTone: key === 'todayPurchase' ? costNote.value?.tone : 'muted',
     }]
   })
   const marginDelta = computeDelta(marginSeries.value)
@@ -681,9 +726,17 @@ const lastProbeLabel = computed(() => {
             :delta-caption="deltaCaption"
             :clickable="card.clickable"
             :negative-when-up="card.negativeWhenUp"
+            :note="card.note"
+            :note-tone="card.noteTone"
             @click="handleMetricCardClick(card.key)"
           />
         </section>
+        <p v-if="costMeta" class="-mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          <span>{{ t('admin.dashboard.pricing.basis', { price: priceFormatter.format(costMeta.siteUnitPrice) }) }}</span>
+          <button type="button" class="font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="openPricing">
+            {{ t('admin.dashboard.pricing.edit') }}
+          </button>
+        </p>
 
         <section class="grid gap-4 xl:grid-cols-12">
           <article class="min-w-0 rounded-lg border border-border/60 bg-card p-4 shadow-sm sm:p-5 xl:col-span-8">
@@ -921,6 +974,7 @@ const lastProbeLabel = computed(() => {
       @close="closeAdminModal"
     />
     <BalanceFilterModal :open="balanceFilterOpen" @close="closeBalanceFilter" @saved="onBalanceFilterSaved" />
+    <SitePricingModal :open="pricingOpen" @close="closePricing" @saved="onPricingSaved" />
     <GroupUsageTodayModal :open="groupUsageTodayOpen" @close="closeGroupUsageToday" />
     <UpstreamKeyUsageTodayModal :open="upstreamKeyUsageTodayOpen" @close="closeUpstreamKeyUsageToday" />
     <UpstreamBalanceBreakdownModal :open="upstreamBalanceBreakdownOpen" @close="closeUpstreamBalanceBreakdown" />

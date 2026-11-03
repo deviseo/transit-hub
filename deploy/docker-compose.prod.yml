@@ -16,6 +16,8 @@ services:
       - "10621:10621"
     environment:
       PORT: "10621"
+      # 业务时区：决定仪表盘「今日」统计的日期边界，需与午夜快照调度使用的 Asia/Shanghai 保持一致。
+      TZ: Asia/Shanghai
       # PostgreSQL 连接串。这里的密码必须和 postgres.POSTGRES_PASSWORD 保持一致。
       DATABASE_URL: postgres://transithub:change-this-db-password@postgres:5432/transithub?sslmode=disable
       REDIS_URL: redis://redis:6379/0

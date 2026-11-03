@@ -510,9 +510,34 @@ export default {
           asc: 'Amount: Low to High'
         }
       },
+      cost: {
+        syncedAt: 'From {count} upstream sites · earliest sync {time}',
+        staleSites: '{count} upstream sites have not synced successfully today and are not counted (retrying in the background)'
+      },
+      pricing: {
+        title: 'My site pricing',
+        subtitle: 'Converts revenue and user balances to CNY',
+        label: 'Price per $1 (1 unit) of site balance',
+        unit: 'CNY / $1',
+        helpRevenue: 'Revenue and total user balance = site amount × price. Defaults to 1, i.e. $1 counts as ¥1.',
+        helpExample: 'If you sell $1 of credit for ¥0.8, enter 0.8; for ¥7.2, enter 7.2.',
+        helpCost: 'Upstream cost uses each upstream site\'s recharge multiplier (what you actually paid per $1 of upstream credit), so both sides are in CNY and net profit and margin are meaningful.',
+        helpHistory: 'Changes apply from today; days that were already finalized are not recalculated.',
+        cardNote: 'At ¥{price}/$1',
+        basis: 'Revenue and site balance use your price of ¥{price}/$1; cost uses each upstream site\'s recharge multiplier.',
+        edit: 'Edit price',
+        save: 'Save',
+        cancel: 'Cancel',
+        close: 'Close',
+        errors: {
+          invalid: 'Enter a price greater than 0 and at most 10000.',
+          request: 'Could not save the price. Please try again.'
+        }
+      },
       upstreamKeyUsage: {
         title: 'Today\'s Cost Breakdown',
         subtitle: '{count} keys, {total} total',
+        liveNote: 'Queried key by key at {time}. The card uses each upstream site\'s account total from its latest sync, so the totals can differ slightly: the query times differ and keys deleted today are not listed here.',
         close: 'Close',
         empty: 'No keys with usage today.',
         loadError: 'Failed to load today\'s cost breakdown. Check upstream site connections and retry.',
@@ -1430,8 +1455,8 @@ export default {
           userKeyPlaceholder: 'Paste a New-API access token (nap_…) or system access token',
           userKeyHelp: 'Recommended: a personal access token (PAT) with the profile:read, usage:read, api_key:read and api_key:reveal scopes (add api_key:write if TransitHub should create upstream keys) and a long expiry.',
           rechargeRate: 'Recharge Multiplier',
-          rechargeRatePlaceholder: 'Enter the USD to CNY multiplier, e.g. 7',
-          rechargeRateHelp: 'Required. CNY amount = USD amount × this multiplier.',
+          rechargeRatePlaceholder: 'What you paid per $1 of upstream credit (CNY), e.g. 1 or 0.5',
+          rechargeRateHelp: 'Required. Enter how much CNY you actually paid for $1 of upstream credit: 1 if ¥1 buys $1, 0.5 at half price, or the exchange rate (about 7.2) only if you pay in USD. Today\'s cost = upstream spend (USD) × this multiplier.',
           remark: 'Remark',
           remarkPlaceholder: 'Enter remark (optional)'
         }

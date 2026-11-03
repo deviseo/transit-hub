@@ -14,6 +14,9 @@ const props = defineProps<{
   deltaCaption: string
   clickable?: boolean
   negativeWhenUp?: boolean
+  // note：卡片底部的补充说明（例如数据同步时间）；noteTone 为 warning 时用警示色。
+  note?: string
+  noteTone?: 'muted' | 'warning'
 }>()
 
 const emit = defineEmits<{
@@ -40,7 +43,7 @@ const deltaIcon = computed(() => {
   <component
     :is="clickable ? 'button' : 'div'"
     :type="clickable ? 'button' : undefined"
-    class="min-h-[132px] w-full rounded-lg border border-border/60 bg-card p-4 text-left shadow-sm sm:min-h-[142px] sm:p-5"
+    class="flex min-h-[132px] w-full flex-col justify-start rounded-lg border border-border/60 bg-card p-4 text-left shadow-sm sm:min-h-[142px] sm:p-5"
     :class="{ 'cursor-pointer transition-[border-color,box-shadow,transform] hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-px': clickable }"
     @click="clickable && emit('click')"
   >
@@ -60,5 +63,12 @@ const deltaIcon = computed(() => {
       </span>
       <span class="text-muted-foreground">{{ deltaCaption }}</span>
     </div>
+    <p
+      v-if="note"
+      class="mt-1.5 text-xs leading-5"
+      :class="noteTone === 'warning' ? 'text-amber-700 dark:text-amber-300' : 'text-muted-foreground'"
+    >
+      {{ note }}
+    </p>
   </component>
 </template>

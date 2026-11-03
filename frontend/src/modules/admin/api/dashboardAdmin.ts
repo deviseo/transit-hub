@@ -85,6 +85,14 @@ export interface DashboardMetricsResponse {
   netProfit: number
   upstreamBalance: number
   groupCount: number
+  /** 我的站点售价：站点余额 1 个单位卖多少元（营收与站点用户余额按此换算）。 */
+  siteUnitPrice?: number
+  /** 计入今日成本的上游站点数。 */
+  costSites?: number
+  /** 今天还没有同步成功、没有计入今日成本的上游站点数。 */
+  costStaleSites?: number
+  /** 计入站点中最早的一次同步时间（毫秒）。 */
+  costSyncedAt?: number | null
 }
 
 /** 历史趋势单日数据点。 */
@@ -111,6 +119,22 @@ export interface BalanceFilterConfig {
 /** 获取当前用户的余额筛选配置。 */
 export const getBalanceFilter = async (): Promise<BalanceFilterConfig> =>
   requestJson<BalanceFilterConfig>('/dashboard/balance-filter')
+
+/** 我的站点售价配置。 */
+export interface DashboardPricingConfig {
+  siteUnitPrice: number
+}
+
+/** 获取当前工作区的售价配置。 */
+export const getDashboardPricing = async (): Promise<DashboardPricingConfig> =>
+  requestJson<DashboardPricingConfig>('/dashboard/pricing')
+
+/** 保存当前工作区的售价配置。 */
+export const saveDashboardPricing = async (config: DashboardPricingConfig): Promise<DashboardPricingConfig> =>
+  requestJson<DashboardPricingConfig>('/dashboard/pricing', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  })
 
 /** 保存余额筛选配置。 */
 export const saveBalanceFilter = async (config: BalanceFilterConfig): Promise<BalanceFilterConfig> =>

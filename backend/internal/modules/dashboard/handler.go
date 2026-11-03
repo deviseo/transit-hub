@@ -30,6 +30,8 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, metricsService *Metric
 	mux.HandleFunc("GET /api/dashboard/upstream-balance-breakdown", handler.upstreamBalanceBreakdown)
 	mux.HandleFunc("GET /api/dashboard/balance-filter", handler.getBalanceFilter)
 	mux.HandleFunc("PUT /api/dashboard/balance-filter", handler.saveBalanceFilter)
+	mux.HandleFunc("GET /api/dashboard/pricing", handler.getPricing)
+	mux.HandleFunc("PUT /api/dashboard/pricing", handler.savePricing)
 }
 
 func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +221,41 @@ func (h *Handler) saveBalanceFilter(w http.ResponseWriter, r *http.Request) {
 		config.ExcludeBalances = []float64{}
 	}
 	if err := h.metricsService.SaveBalanceFilter(r.Context(), userID, config); err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, config)
+}
+
+// getPricing 返回当前工作区的「我的站点售价」（营收与站点用户余额换算成人民币的比例）。
+func (h *Handler) getPricing(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	config, err := h.metricsService.GetPricing(r.Context(), userID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, config)
+}
+
+// savePricing 保存当前工作区的「我的站点售价」。
+func (h *Handler) savePricing(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var request PricingConfig
+	if err := httpjson.Decode(r, &request); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, ErrorInvalidPricing)
+		return
+	}
+	config, err := h.metricsService.SavePricing(r.Context(), userID, request.SiteUnitPrice)
+	if err != nil {
 		writeError(w, err)
 		return
 	}

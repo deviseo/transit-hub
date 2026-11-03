@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"transithub/backend/internal/modules/upstream"
 )
@@ -14,6 +15,21 @@ type fakeUpstreamLister struct {
 	keyUsageErr   error
 	balanceItems  []upstream.BalanceBreakdownItem
 	balanceErr    error
+
+	sites         []upstream.Response
+	refreshSince  []time.Time
+	consume       map[string]upstream.DailyConsume
+	consumeErr    error
+	consumeCalled []string
+}
+
+func (f *fakeUpstreamLister) RefreshStaleSites(ctx context.Context, userID string, adminAccountID string, since time.Time, wait time.Duration) {
+	f.refreshSince = append(f.refreshSince, since)
+}
+
+func (f *fakeUpstreamLister) ConsumeOnDate(ctx context.Context, userID string, adminAccountID string, date string, timezone string) (upstream.DailyConsume, error) {
+	f.consumeCalled = append(f.consumeCalled, date+"@"+timezone)
+	return f.consume[date], f.consumeErr
 }
 
 func (f *fakeUpstreamLister) List(ctx context.Context, userID string) []upstream.Response {
@@ -21,7 +37,7 @@ func (f *fakeUpstreamLister) List(ctx context.Context, userID string) []upstream
 }
 
 func (f *fakeUpstreamLister) ListForAccount(ctx context.Context, userID, adminAccountID string) []upstream.Response {
-	return nil
+	return f.sites
 }
 
 func (f *fakeUpstreamLister) KeyUsageToday(ctx context.Context, userID string) ([]upstream.KeyUsageTodayItem, error) {

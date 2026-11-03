@@ -49,6 +49,7 @@ func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 		"real_connections",
 		"dashboard_daily_stats",
 		"dashboard_balance_filter",
+		"dashboard_pricing",
 		"upstream_sites",
 	}
 	if len(workspaceDeleteStatements) != len(want) {

@@ -12,6 +12,7 @@ import (
 // fakeSessionStore 是 SessionStore 的内存实现，仅供测试使用。
 type fakeSessionStore struct {
 	records map[string]*AdminSession // key: userID+"|"+adminAccountID
+	active  []ActiveSessionRef
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -45,7 +46,7 @@ func (f *fakeSessionStore) Delete(ctx context.Context, userID string, adminAccou
 }
 
 func (f *fakeSessionStore) ActiveSessions(ctx context.Context) ([]ActiveSessionRef, error) {
-	return nil, nil
+	return f.active, nil
 }
 
 // fakeAdminAccounts 是 AdminAccountService 的内存实现，按 userID 返回固定的当前工作区。
@@ -90,6 +91,9 @@ type fakePlatformClient struct {
 	capturedAdminKey     string
 	capturedUserID       string
 	capturedPlatform     upstream.Platform
+	// usageStats 按 startDate 返回我的站点营收（站点余额单位）；siteBalance 是站点用户余额合计。
+	usageStats  map[string]float64
+	siteBalance float64
 }
 
 func (f *fakePlatformClient) NormalizeURL(value string) (string, error) { return value, nil }
@@ -124,11 +128,11 @@ func (f *fakePlatformClient) RefreshSession(session upstream.Session) (upstream.
 }
 
 func (f *fakePlatformClient) FetchAdminUsageStats(session upstream.Session, startDate, endDate string) (float64, error) {
-	return 0, nil
+	return f.usageStats[startDate], nil
 }
 
 func (f *fakePlatformClient) FetchAdminSiteBalanceFiltered(session upstream.Session, filter upstream.BalanceFilter) (upstream.AdminSiteBalance, error) {
-	return upstream.AdminSiteBalance{}, nil
+	return upstream.AdminSiteBalance{Balance: f.siteBalance}, nil
 }
 
 func (f *fakePlatformClient) FetchAdminGroups(session upstream.Session) ([]upstream.GroupInfo, error) {

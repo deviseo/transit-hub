@@ -3,14 +3,27 @@ package dashboard
 import "time"
 
 // MetricsResponse 是 GET /api/dashboard/metrics 返回的实时指标数据。
-// 所有金额均以 CNY 计价，上游指标已乘以站点的 rechargeRate。
+// 所有金额均以 CNY 计价：我的站点的营收与用户余额乘以「我的站点售价」（siteUnitPrice），上游指标乘以各站点的 rechargeRate。
 type MetricsResponse struct {
-	TodayProfit     float64 `json:"todayProfit"`     // 今日盈利额度：管理员站点今日总实际消费
-	SiteBalance     float64 `json:"siteBalance"`     // 站点用户总余额：所有非 admin 用户余额之和
-	TodayPurchase   float64 `json:"todayPurchase"`   // 今日进货额度：所有上游站点今日消费（CNY）之和
+	TodayProfit     float64 `json:"todayProfit"`     // 今日营收：我的站点今日总实际消费 × 售价
+	SiteBalance     float64 `json:"siteBalance"`     // 站点用户总余额：所有非 admin 用户余额之和 × 售价
+	TodayPurchase   float64 `json:"todayPurchase"`   // 今日成本：今天已同步的上游站点今日消费 × 充值倍率之和
 	NetProfit       float64 `json:"netProfit"`       // 今日净利润：todayProfit - todayPurchase
 	UpstreamBalance float64 `json:"upstreamBalance"` // 上游总余额：所有上游站点余额（CNY）之和
 	GroupCount      int     `json:"groupCount"`      // 管理员站点分组总数，省去前端单独请求
+	SiteUnitPrice   float64 `json:"siteUnitPrice"`   // 我的站点售价：站点余额 1 个单位卖多少元
+	// CostSites 是计入今日成本的站点数；CostStaleSites 是今天还没有同步成功、没有计入的站点数
+	// （它们缓存里的「今日消费」还是之前某天的值）；CostSyncedAt 是计入站点中最早的一次同步时间（毫秒）。
+	CostSites      int    `json:"costSites"`
+	CostStaleSites int    `json:"costStaleSites"`
+	CostSyncedAt   *int64 `json:"costSyncedAt"`
+}
+
+// PricingConfig 是工作区的售价配置。
+type PricingConfig struct {
+	UserID         string  `json:"-"`
+	AdminAccountID string  `json:"-"`
+	SiteUnitPrice  float64 `json:"siteUnitPrice"`
 }
 
 // TrendResponse 是 GET /api/dashboard/trends 返回的历史趋势数据。

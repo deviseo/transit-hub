@@ -510,9 +510,34 @@ export default {
           asc: '金额从低到高'
         }
       },
+      cost: {
+        syncedAt: '按 {count} 个上游站点计算 · 最早同步于 {time}',
+        staleSites: '{count} 个上游站点今天还没有同步成功，未计入（已在后台重试）'
+      },
+      pricing: {
+        title: '我的站点售价',
+        subtitle: '把营收和站点用户余额换算成人民币',
+        label: '站点余额每 1 美元（1 个单位）售价',
+        unit: '元 / $1',
+        helpRevenue: '今日营收、站点用户总余额 = 站点金额 × 售价；默认 1，即 1 美元按 1 元计。',
+        helpExample: '例如你按 ¥0.8 卖出 $1 额度就填 0.8；按 ¥7.2 卖 $1 就填 7.2。',
+        helpCost: '上游成本按各上游站点的「充值倍率」（每 $1 上游额度的实际进货价）换算，两边都是人民币，净利润与利润率才准确。',
+        helpHistory: '修改后从今天起生效，之前定稿的历史数据不会重算。',
+        cardNote: '按 ¥{price}/$1 换算',
+        basis: '营收与站点余额按售价 ¥{price}/$1 换算，成本按各上游「充值倍率」换算。',
+        edit: '修改售价',
+        save: '保存',
+        cancel: '取消',
+        close: '关闭',
+        errors: {
+          invalid: '请输入大于 0、不超过 10000 的售价。',
+          request: '售价设置保存失败，请稍后重试。'
+        }
+      },
       upstreamKeyUsage: {
         title: '今日成本明细',
         subtitle: '共 {count} 个 key，合计 {total}',
+        liveNote: '明细于 {time} 实时逐个 key 查询；卡片按各上游站点最近一次同步的账号合计计算。两者查询时间不同，且今天已删除的 key 不在明细中，合计可能略有差异。',
         close: '关闭',
         empty: '暂无今日消费的 key。',
         loadError: '加载今日成本明细失败，请检查上游站点连接后重试。',
@@ -1430,8 +1455,8 @@ export default {
           userKeyPlaceholder: '粘贴 New-API 访问令牌（nap_ 开头）或系统访问令牌',
           userKeyHelp: '推荐使用新版个人访问令牌（PAT），勾选 profile:read、usage:read、api_key:read、api_key:reveal 权限（需要由 TransitHub 自动创建上游 Key 时再加 api_key:write），并设置较长有效期。',
           rechargeRate: '充值倍率',
-          rechargeRatePlaceholder: '输入 USD 转 CNY 的倍率，如 7',
-          rechargeRateHelp: '必填。人民币金额 = USD 金额 × 此倍率。',
+          rechargeRatePlaceholder: '每 $1 上游额度的实际进货价（元），如 1 或 0.5',
+          rechargeRateHelp: '必填。填你买 1 美元上游额度实际花了多少元：¥1 买 $1 填 1，打 5 折填 0.5，按美元汇率付费才填汇率（约 7.2）。今日成本 = 上游消费（美元）× 此倍率。',
           remark: '备注',
           remarkPlaceholder: '输入备注信息（可选）'
         }

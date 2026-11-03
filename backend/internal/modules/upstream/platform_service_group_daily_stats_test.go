@@ -51,10 +51,14 @@ func TestFetchAdminGroupDailyStats_DispatchesByPlatform(t *testing.T) {
 		}
 	})
 
-	t.Run("new-api uses per-group log stat with quota conversion", func(t *testing.T) {
+	t.Run("new-api uses site-wide per-group log stat with quota conversion", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/log/self/stat" {
+			// 本站分组用量必须走管理员全站统计接口；/api/log/self/stat 只会统计管理员本人。
+			if r.URL.Path != "/api/log/stat" {
 				t.Fatalf("unexpected new-api path: %s", r.URL.Path)
+			}
+			if r.URL.Query().Get("type") != "2" {
+				t.Fatalf("expected consume log type=2, got %q", r.URL.Query().Get("type"))
 			}
 			group := r.URL.Query().Get("group")
 			quota := map[string]float64{"default": 100000, "vip": 250000}[group]

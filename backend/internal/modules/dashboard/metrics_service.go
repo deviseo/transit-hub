@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -14,8 +16,7 @@ import (
 	"transithub/backend/internal/modules/upstream"
 )
 
-// UpstreamLister 抽象上游站点列表读取，由 upstream.Service 实现。
-// 仪表盘只需要读取已同步的站点数据，不需要修改或触发同步。
+// UpstreamLister 抽象上游站点读取，由 upstream.Service 实现。
 // List 用于用户请求路径（自动使用当前工作区），
 // ListForAccount 用于后台调度等需要显式指定工作区的内部流程。
 type UpstreamLister interface {
@@ -25,17 +26,52 @@ type UpstreamLister interface {
 	// 由 upstream.Service 实现（持有 session/cache，能校验站点归属和当前工作区）。
 	KeyUsageToday(ctx context.Context, userID string) ([]upstream.KeyUsageTodayItem, error)
 	BalanceBreakdown(ctx context.Context, userID string) ([]upstream.BalanceBreakdownItem, error)
+	// RefreshStaleSites 补同步今天（since 之后）还没有同步成功的站点，最多等待 wait。
+	RefreshStaleSites(ctx context.Context, userID string, adminAccountID string, since time.Time, wait time.Duration)
+	// ConsumeOnDate 直接按日期查询各站点某天的消费 × 充值倍率（历史快照定稿用）。
+	ConsumeOnDate(ctx context.Context, userID string, adminAccountID string, date string, timezone string) (upstream.DailyConsume, error)
 }
 
-// MetricsService 负责仪表盘指标的实时计算、历史快照存储与午夜调度。
+// metricsStore 是 MetricsRepository 在本服务中用到的方法（便于测试替换）。
+type metricsStore interface {
+	Upsert(ctx context.Context, snapshot DailySnapshot) error
+	ListRange(ctx context.Context, userID, adminAccountID string, today time.Time, days int) ([]DailySnapshot, error)
+	GetBalanceFilter(ctx context.Context, userID, adminAccountID string) (BalanceFilterConfig, error)
+	SaveBalanceFilter(ctx context.Context, config BalanceFilterConfig) error
+	GetPricing(ctx context.Context, userID, adminAccountID string) (PricingConfig, error)
+	SavePricing(ctx context.Context, config PricingConfig) error
+	FinalizeSnapshot(ctx context.Context, snapshot DailySnapshot, keepBalances bool) error
+	UnfinalizedDates(ctx context.Context, userID, adminAccountID string, from time.Time, to time.Time) ([]time.Time, error)
+	IsFinalized(ctx context.Context, userID, adminAccountID string, date time.Time) (bool, error)
+}
+
+const (
+	// dashboardTimezone 是仪表盘「今天 / 昨天」的时区（与上游 sub2api 默认时区一致）。
+	dashboardTimezone = "Asia/Shanghai"
+	// staleRefreshWait 是打开仪表盘时等待补同步的最长时间，超时的站点先不计入，同步在后台继续。
+	staleRefreshWait = 8 * time.Second
+	// finalizeInterval 是定稿任务的检查间隔：零点后尽快定稿昨天；遇到站点暂时查询失败时下一轮重试。
+	finalizeInterval     = time.Hour
+	startupFinalizeDelay = time.Minute
+	// finalizeLookbackDays 内已有快照但还没定稿的日期都会尝试定稿；finalizeRetryDays 内遇到站点查询失败时
+	// 先不定稿、下一轮重试，更早的日期则用能查到的站点数据定稿，避免一直停留在白天的部分数据。
+	finalizeLookbackDays = 7
+	finalizeRetryDays    = 2
+	// endOfDayWindow 内定稿昨天时，此刻的余额可以当作昨天结束时的余额；更晚则保留快照里已有的余额。
+	endOfDayWindow   = 2 * time.Hour
+	maxSiteUnitPrice = 10000
+)
+
+// MetricsService 负责仪表盘指标的实时计算、历史快照存储与定稿调度。
 // 与同包的 Service（admin 会话管理）职责分离，共享 SessionStore 和 PlatformClient。
 type MetricsService struct {
 	store       SessionStore
 	platform    PlatformClient
 	upstreams   UpstreamLister
-	metricsRepo *MetricsRepository
+	metricsRepo metricsStore
 	accounts    AdminAccountService
 	sessionSync MySiteStateSync
+	now         func() time.Time
 }
 
 func (s *MetricsService) SetMySiteSync(sync MySiteStateSync) {
@@ -81,18 +117,19 @@ func (s *MetricsService) freshAdminSession(ctx context.Context, userID string, a
 	return refreshed, nil
 }
 
-func NewMetricsService(store SessionStore, platform PlatformClient, upstreams UpstreamLister, metricsRepo *MetricsRepository, accounts AdminAccountService) *MetricsService {
-	return &MetricsService{store: store, platform: platform, upstreams: upstreams, metricsRepo: metricsRepo, accounts: accounts}
+func NewMetricsService(store SessionStore, platform PlatformClient, upstreams UpstreamLister, metricsRepo metricsStore, accounts AdminAccountService) *MetricsService {
+	return &MetricsService{store: store, platform: platform, upstreams: upstreams, metricsRepo: metricsRepo, accounts: accounts, now: time.Now}
 }
 
 // LiveMetrics 实时计算五项核心指标并返回。
-// 同时将当天的指标作为快照 upsert 到数据库，确保趋势图数据持续积累。
+// 同时将当天的指标作为快照 upsert 到数据库（零点后由定稿任务用全天数据覆盖），确保趋势图数据持续积累。
 //
-// 计算逻辑：
-//   - todayProfit:     管理员站点今日总实际消费，通过 sub2api /api/v1/admin/usage/stats 获取
-//   - siteBalance:     管理员站点所有非 admin 用户余额之和，通过 sub2api /api/v1/admin/users 分页求和
-//   - todayPurchase:   所有上游站点今日消费 × 站点倍率之和（复用已同步的内存数据，无额外请求）
-//   - upstreamBalance: 所有上游站点余额 × 站点倍率之和（复用已同步的内存数据）
+// 计算逻辑（金额均为人民币）：
+//   - todayProfit:     我的站点今日总实际消费 × 我的站点售价
+//   - siteBalance:     我的站点所有非 admin 用户余额之和 × 我的站点售价
+//   - todayPurchase:   今天已同步成功的上游站点「今日消费」× 充值倍率之和；今天还没同步成功的站点先补同步，
+//     仍未成功的不计入（它们缓存里是之前某天的值），在 costStaleSites 中报告
+//   - upstreamBalance: 所有上游站点余额 × 充值倍率之和（读取缓存）
 //   - netProfit:       todayProfit - todayPurchase
 func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (MetricsResponse, error) {
 	// 获取并校验 admin 会话（平台感知：sub2api 检查 AccessToken，new-api 检查 Cookie+UserID）。
@@ -121,14 +158,16 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 
 	// 并行获取四项独立数据：今日盈利、站点余额、分组数量、上游指标。
 	// 各 goroutine 出错只记日志、降级为零值，不阻塞整体返回。
-	today := time.Now().Format("2006-01-02")
+	now := s.now()
+	today := now.Format("2006-01-02")
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	price := s.siteUnitPrice(ctx, userID, adminAccountID)
 	var (
-		todayProfit     float64
-		siteBalance     float64
-		groupCount      int
-		todayPurchase   float64
-		upstreamBalance float64
-		wg              sync.WaitGroup
+		todayProfit float64
+		siteBalance float64
+		groupCount  int
+		cost        upstreamCost
+		wg          sync.WaitGroup
 	)
 
 	// goroutine 1: 今日盈利额度（平台中性）。
@@ -140,17 +179,21 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 			log.Printf("dashboard metrics: fetch usage stats failed user_id=%s err=%v", userID, err)
 			return
 		}
-		todayProfit = profit
+		todayProfit = profit * price
 	}()
 
 	// goroutine 2: 站点用户总余额（平台中性）。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		filterConfig, err := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
-		if err != nil {
-			log.Printf("dashboard metrics: load balance filter failed user_id=%s err=%v, using defaults", userID, err)
-			filterConfig = BalanceFilterConfig{ExcludeAdmin: true, ExcludeBalances: []float64{}}
+		filterConfig := BalanceFilterConfig{ExcludeAdmin: true, ExcludeBalances: []float64{}}
+		if s.metricsRepo != nil {
+			loaded, err := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
+			if err != nil {
+				log.Printf("dashboard metrics: load balance filter failed user_id=%s err=%v, using defaults", userID, err)
+			} else {
+				filterConfig = loaded
+			}
 		}
 		balanceResult, err := s.platform.FetchAdminSiteBalanceFiltered(session, upstream.BalanceFilter{
 			ExcludeAdmin:    filterConfig.ExcludeAdmin,
@@ -160,7 +203,7 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 			log.Printf("dashboard metrics: fetch site balance failed user_id=%s err=%v", userID, err)
 			return
 		}
-		siteBalance = balanceResult.Balance
+		siteBalance = balanceResult.Balance * price
 	}()
 
 	// goroutine 3: 管理员站点分组数量（平台中性）。
@@ -175,35 +218,28 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 		groupCount = len(groups)
 	}()
 
-	// goroutine 4: 今日进货额度与上游总余额（读取 Redis 缓存，无外部 API 调用）。
-	// 使用 List（用户请求路径，自动过滤当前工作区站点）。
+	// goroutine 4: 今日成本与上游总余额。先补同步今天还没同步成功的站点（最多等 staleRefreshWait），
+	// 再读取缓存；仍未同步的站点不计入今日成本。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for _, site := range s.upstreams.List(ctx, userID) {
-			if site.RechargeRate <= 0 {
-				continue
-			}
-			if site.Metrics.TodayConsume.Value != nil {
-				todayPurchase += *site.Metrics.TodayConsume.Value * site.RechargeRate
-			}
-			if site.Metrics.Balance.Value != nil {
-				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
-			}
-		}
+		s.upstreams.RefreshStaleSites(ctx, userID, adminAccountID, todayStart, staleRefreshWait)
+		cost = summarizeUpstreamCost(s.upstreams.ListForAccount(ctx, userID, adminAccountID), todayStart)
 	}()
 
 	wg.Wait()
 
-	netProfit := todayProfit - todayPurchase
-
 	result := MetricsResponse{
 		TodayProfit:     todayProfit,
 		SiteBalance:     siteBalance,
-		TodayPurchase:   todayPurchase,
-		NetProfit:       netProfit,
-		UpstreamBalance: upstreamBalance,
+		TodayPurchase:   cost.Purchase,
+		NetProfit:       todayProfit - cost.Purchase,
+		UpstreamBalance: cost.Balance,
 		GroupCount:      groupCount,
+		SiteUnitPrice:   price,
+		CostSites:       cost.Sites,
+		CostStaleSites:  cost.Stale,
+		CostSyncedAt:    cost.OldestSync,
 	}
 
 	// 将当天指标 upsert 到数据库，即使部分指标获取失败也保存已有数据，
@@ -224,7 +260,7 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	if err != nil {
 		return TrendResponse{}, err
 	}
-	snapshots, err := s.metricsRepo.ListRange(ctx, userID, adminAccountID, days)
+	snapshots, err := s.metricsRepo.ListRange(ctx, userID, adminAccountID, time.Now(), days)
 	if err != nil {
 		return TrendResponse{}, err
 	}
@@ -242,131 +278,229 @@ func (s *MetricsService) Trends(ctx context.Context, userID string, days int) (T
 	return TrendResponse{Points: points}, nil
 }
 
-// StartScheduler 启动午夜快照调度协程。
-// 每天午夜（Asia/Shanghai 时区）为所有活跃 admin 用户保存当天的指标快照，
-// 确保即使用户当天未访问仪表盘，趋势图也不会出现空缺。
+// upstreamCost 是从上游站点缓存汇总出的今日成本与余额。
+type upstreamCost struct {
+	Purchase   float64
+	Balance    float64
+	Sites      int
+	Stale      int
+	OldestSync *int64
+}
+
+// summarizeUpstreamCost 汇总今日成本：只计入 since（今天零点）之后同步成功过的站点；
+// 之前同步的站点缓存里的「今日消费」属于之前某天，计为 Stale 不计入。余额不按天重置，所有站点都计入。
+func summarizeUpstreamCost(sites []upstream.Response, since time.Time) upstreamCost {
+	var cost upstreamCost
+	for _, site := range sites {
+		if site.RechargeRate <= 0 {
+			continue
+		}
+		if site.Metrics.Balance.Value != nil {
+			cost.Balance += *site.Metrics.Balance.Value * site.RechargeRate
+		}
+		if !upstream.SyncedSince(site.LastSyncedAt, since) {
+			cost.Stale++
+			continue
+		}
+		cost.Sites++
+		if site.Metrics.TodayConsume.Value != nil {
+			cost.Purchase += *site.Metrics.TodayConsume.Value * site.RechargeRate
+		}
+		if cost.OldestSync == nil || *site.LastSyncedAt < *cost.OldestSync {
+			synced := *site.LastSyncedAt
+			cost.OldestSync = &synced
+		}
+	}
+	return cost
+}
+
+// siteUnitPrice 读取工作区的「我的站点售价」，读取失败或未配置时按 1 元换算。
+func (s *MetricsService) siteUnitPrice(ctx context.Context, userID string, adminAccountID string) float64 {
+	if s.metricsRepo == nil {
+		return DefaultSiteUnitPrice
+	}
+	pricing, err := s.metricsRepo.GetPricing(ctx, userID, adminAccountID)
+	if err != nil || pricing.SiteUnitPrice <= 0 {
+		if err != nil {
+			log.Printf("dashboard metrics: load pricing failed user_id=%s err=%v", userID, err)
+		}
+		return DefaultSiteUnitPrice
+	}
+	return pricing.SiteUnitPrice
+}
+
+// GetPricing 返回当前工作区的售价配置。
+func (s *MetricsService) GetPricing(ctx context.Context, userID string) (PricingConfig, error) {
+	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
+	if err != nil {
+		return PricingConfig{}, err
+	}
+	return PricingConfig{UserID: userID, AdminAccountID: adminAccountID, SiteUnitPrice: s.siteUnitPrice(ctx, userID, adminAccountID)}, nil
+}
+
+// SavePricing 保存当前工作区的售价配置（每 1 个站点余额单位卖多少元）。
+func (s *MetricsService) SavePricing(ctx context.Context, userID string, siteUnitPrice float64) (PricingConfig, error) {
+	if math.IsNaN(siteUnitPrice) || math.IsInf(siteUnitPrice, 0) || siteUnitPrice <= 0 || siteUnitPrice > maxSiteUnitPrice {
+		return PricingConfig{}, requestError(ErrorInvalidPricing)
+	}
+	adminAccountID, err := s.requireCurrentAdminAccount(ctx, userID)
+	if err != nil {
+		return PricingConfig{}, err
+	}
+	config := PricingConfig{UserID: userID, AdminAccountID: adminAccountID, SiteUnitPrice: siteUnitPrice}
+	if err := s.metricsRepo.SavePricing(ctx, config); err != nil {
+		return PricingConfig{}, err
+	}
+	return config, nil
+}
+
+// StartScheduler 启动快照定稿任务：启动后先补一次（进程在零点时可能没有运行），之后每小时检查一次。
+// 白天写入的快照只是某次打开仪表盘时的数，零点后用按日期查询到的全天营收与成本覆盖（定稿）。
 func (s *MetricsService) StartScheduler(ctx context.Context) {
 	go func() {
-		loc, err := time.LoadLocation("Asia/Shanghai")
-		if err != nil {
-			log.Printf("dashboard scheduler: failed to load Asia/Shanghai timezone, using UTC: %v", err)
-			loc = time.UTC
-		}
-
+		timer := time.NewTimer(startupFinalizeDelay)
+		defer timer.Stop()
 		for {
-			now := time.Now().In(loc)
-			nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
-			timer := time.NewTimer(time.Until(nextMidnight))
-
 			select {
 			case <-ctx.Done():
-				timer.Stop()
 				return
 			case <-timer.C:
-				s.snapshotAll(ctx)
 			}
+			s.finalizeRecent(ctx)
+			timer.Reset(finalizeInterval)
 		}
 	}()
 }
 
-// snapshotAll 遍历所有活跃 admin 用户，为昨天的日期保存指标快照。
-// 午夜执行时，"今天"已经翻到新的一天，因此用昨天的日期查询 sub2api 的 usage stats，
-// 而上游站点的余额取当前值（余额不按天重置）。
-// 单用户出错只记日志，不影响其他用户和调度循环（与 refreshDueSessions 相同的容错模式）。
-//
-// 注意：此方法是后台调度路径，使用 ListForAccount 显式传入 adminAccountID，
-// 不依赖当前工作区上下文（避免 fail-closed 的 List 在无 workspace 上下文时返回空）。
-func (s *MetricsService) snapshotAll(ctx context.Context) {
+func dashboardLocation() *time.Location {
+	loc, err := time.LoadLocation(dashboardTimezone)
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return loc
+}
+
+// finalizeRecent 为所有持有 admin 会话的工作区定稿最近的快照：昨天（还没有快照时新建）以及最近几天里
+// 已有快照但还没定稿的日期。单个工作区出错只记日志，不影响其他工作区。
+func (s *MetricsService) finalizeRecent(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("dashboard scheduler panic recovered: %v", r)
+			log.Printf("dashboard finalize panic recovered: %v", r)
 		}
 	}()
-
-	refs, err := s.store.ActiveSessions(ctx)
-	if err != nil {
-		log.Printf("dashboard scheduler: list active users failed: %v", err)
+	if s.metricsRepo == nil {
 		return
 	}
-
-	loc, _ := time.LoadLocation("Asia/Shanghai")
-	if loc == nil {
-		loc = time.UTC
+	refs, err := s.store.ActiveSessions(ctx)
+	if err != nil {
+		log.Printf("dashboard finalize: list active users failed: %v", err)
+		return
 	}
-	yesterday := time.Now().In(loc).AddDate(0, 0, -1).Format("2006-01-02")
-
+	now := s.now().In(dashboardLocation())
+	today := calendarDate(now)
+	yesterday := today.AddDate(0, 0, -1)
 	for _, ref := range refs {
-		userID := ref.UserID
-		adminAccountID := ref.AdminAccountID
-		yesterdayDate, _ := time.Parse("2006-01-02", yesterday)
-		exists, err := s.metricsRepo.Exists(ctx, userID, adminAccountID, yesterdayDate)
+		dates := map[string]time.Time{}
+		finalized, err := s.metricsRepo.IsFinalized(ctx, ref.UserID, ref.AdminAccountID, yesterday)
 		if err != nil {
-			log.Printf("dashboard scheduler: check exists failed user_id=%s err=%v", userID, err)
+			log.Printf("dashboard finalize: check failed user_id=%s err=%v", ref.UserID, err)
 			continue
 		}
-		// 如果昨天的快照已存在（由白天的 LiveMetrics 调用写入），跳过该用户。
-		if exists {
-			continue
+		if !finalized {
+			dates[yesterday.Format("2006-01-02")] = yesterday
 		}
-
-		record, err := s.store.Get(ctx, userID, adminAccountID)
-		if err != nil || record == nil || !record.Session.IsAuthenticated() {
-			continue
-		}
-
-		session, err := s.freshAdminSession(ctx, userID, adminAccountID, record)
+		pending, err := s.metricsRepo.UnfinalizedDates(ctx, ref.UserID, ref.AdminAccountID, today.AddDate(0, 0, -finalizeLookbackDays), yesterday)
 		if err != nil {
-			log.Printf("dashboard scheduler: refresh session failed user_id=%s err=%v", userID, err)
+			log.Printf("dashboard finalize: list pending failed user_id=%s err=%v", ref.UserID, err)
 			continue
 		}
-
-		// 昨日盈利（平台中性）。
-		todayProfit, err := s.platform.FetchAdminUsageStats(session, yesterday, yesterday)
-		if err != nil {
-			log.Printf("dashboard scheduler: fetch usage stats failed user_id=%s err=%v", userID, err)
-			todayProfit = 0
+		for _, date := range pending {
+			dates[date.Format("2006-01-02")] = calendarDate(date)
 		}
-
-		// 站点用户总余额（平台中性）。
-		var siteBalance float64
-		filterCfg, _ := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
-		if result, err := s.platform.FetchAdminSiteBalanceFiltered(session, upstream.BalanceFilter{
-			ExcludeAdmin:    filterCfg.ExcludeAdmin,
-			ExcludeBalances: filterCfg.ExcludeBalances,
-		}); err == nil {
-			siteBalance = result.Balance
+		keys := make([]string, 0, len(dates))
+		for key := range dates {
+			keys = append(keys, key)
 		}
-
-		// 上游指标：使用 ListForAccount 显式传入 adminAccountID，
-		// 确保后台调度路径不依赖当前工作区上下文。
-		var todayPurchase, upstreamBalance float64
-		for _, site := range s.upstreams.ListForAccount(ctx, userID, adminAccountID) {
-			if site.RechargeRate <= 0 {
-				continue
-			}
-			if site.Metrics.TodayConsume.Value != nil {
-				todayPurchase += *site.Metrics.TodayConsume.Value * site.RechargeRate
-			}
-			if site.Metrics.Balance.Value != nil {
-				upstreamBalance += *site.Metrics.Balance.Value * site.RechargeRate
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := s.finalizeDay(ctx, ref.UserID, ref.AdminAccountID, dates[key], now); err != nil {
+				log.Printf("dashboard finalize: skipped user_id=%s admin_account_id=%s date=%s err=%v", ref.UserID, ref.AdminAccountID, key, err)
 			}
 		}
-
-		result := MetricsResponse{
-			TodayProfit:     todayProfit,
-			SiteBalance:     siteBalance,
-			TodayPurchase:   todayPurchase,
-			NetProfit:       todayProfit - todayPurchase,
-			UpstreamBalance: upstreamBalance,
-		}
-		s.upsertSnapshot(ctx, userID, adminAccountID, yesterday, result)
-		log.Printf("dashboard scheduler: snapshot saved user_id=%s admin_account_id=%s date=%s", userID, adminAccountID, yesterday)
 	}
+}
+
+// errFinalizeIncomplete 表示有上游站点暂时查不到这一天的消费，稍后重试。
+var errFinalizeIncomplete = errors.New("some upstream sites could not be queried")
+
+// finalizeDay 按日期直接查询某天的全天营收（我的站点）和成本（各上游站点）并写入快照。
+func (s *MetricsService) finalizeDay(ctx context.Context, userID string, adminAccountID string, day time.Time, now time.Time) error {
+	record, err := s.store.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	if record == nil || !record.Session.IsAuthenticated() {
+		return requestError(ErrorAdminOnly)
+	}
+	session, err := s.freshAdminSession(ctx, userID, adminAccountID, record)
+	if err != nil {
+		return err
+	}
+	date := day.Format("2006-01-02")
+	revenue, err := s.platform.FetchAdminUsageStats(session, date, date)
+	if err != nil {
+		return err
+	}
+	consume, err := s.upstreams.ConsumeOnDate(ctx, userID, adminAccountID, date, dashboardTimezone)
+	if err != nil {
+		return err
+	}
+	today := calendarDate(now)
+	if consume.Failed > 0 && !day.Before(today.AddDate(0, 0, -finalizeRetryDays)) {
+		return fmt.Errorf("%w: failed=%d", errFinalizeIncomplete, consume.Failed)
+	}
+	if consume.Failed > 0 || consume.Approximated > 0 {
+		log.Printf("dashboard finalize: partial upstream data user_id=%s date=%s failed=%d approximated=%d", userID, date, consume.Failed, consume.Approximated)
+	}
+	price := s.siteUnitPrice(ctx, userID, adminAccountID)
+	revenue *= price
+
+	// 零点后不久定稿昨天时，此刻的余额就是昨天结束时的余额；更晚定稿则保留快照里已有的余额（新建快照时才用当前值）。
+	keepBalances := !(day.Equal(today.AddDate(0, 0, -1)) && now.Sub(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())) < endOfDayWindow)
+	var siteBalance float64
+	filterCfg, _ := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
+	if result, err := s.platform.FetchAdminSiteBalanceFiltered(session, upstream.BalanceFilter{
+		ExcludeAdmin:    filterCfg.ExcludeAdmin,
+		ExcludeBalances: filterCfg.ExcludeBalances,
+	}); err == nil {
+		siteBalance = result.Balance * price
+	}
+	upstreamBalance := summarizeUpstreamCost(s.upstreams.ListForAccount(ctx, userID, adminAccountID), now).Balance
+
+	id, err := metricsRandomID()
+	if err != nil {
+		return err
+	}
+	return s.metricsRepo.FinalizeSnapshot(ctx, DailySnapshot{
+		ID:              id,
+		UserID:          userID,
+		AdminAccountID:  adminAccountID,
+		Date:            day,
+		TodayProfit:     revenue,
+		SiteBalance:     siteBalance,
+		TodayPurchase:   consume.Total,
+		NetProfit:       revenue - consume.Total,
+		UpstreamBalance: upstreamBalance,
+		CreatedAt:       now,
+	}, keepBalances)
 }
 
 // upsertSnapshot 将指标写入 dashboard_daily_stats 表。
 // 冲突时更新已有行，保证同一天内多次调用始终保留最新数据。
 func (s *MetricsService) upsertSnapshot(ctx context.Context, userID, adminAccountID, date string, metrics MetricsResponse) {
+	if s.metricsRepo == nil {
+		return
+	}
 	parsedDate, err := time.Parse("2006-01-02", date)
 	if err != nil {
 		log.Printf("dashboard metrics: invalid date %s: %v", date, err)

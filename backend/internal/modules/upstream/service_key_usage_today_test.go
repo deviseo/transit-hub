@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
-// fakeSiteCache 是 SiteCache 的内存实现，仅供测试使用。
+// fakeSiteCache 是 SiteCache 的内存实现，仅供测试使用（并发安全：站点同步会在多个 goroutine 中读写）。
 type fakeSiteCache struct {
+	mu    sync.Mutex
 	sites map[string]*Site
 }
 
@@ -18,11 +20,15 @@ func newFakeSiteCache() *fakeSiteCache {
 }
 
 func (f *fakeSiteCache) add(site *Site) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	stored := *site
 	f.sites[site.ID] = &stored
 }
 
 func (f *fakeSiteCache) Get(ctx context.Context, id string) (*Site, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	site, ok := f.sites[id]
 	if !ok {
 		return nil, nil
@@ -32,17 +38,23 @@ func (f *fakeSiteCache) Get(ctx context.Context, id string) (*Site, error) {
 }
 
 func (f *fakeSiteCache) Set(ctx context.Context, site *Site) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	stored := *site
 	f.sites[site.ID] = &stored
 	return nil
 }
 
 func (f *fakeSiteCache) Delete(ctx context.Context, id string, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	delete(f.sites, id)
 	return nil
 }
 
 func (f *fakeSiteCache) ListByUser(ctx context.Context, userID string) ([]*Site, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	result := make([]*Site, 0)
 	for _, site := range f.sites {
 		if site.UserID == userID {
