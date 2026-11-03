@@ -3,7 +3,7 @@
 -- events table may not exist yet on a fresh install when database migrations run.
 DO $$
 BEGIN
-    IF to_regclass('public.connection_health_events') IS NOT NULL THEN
+    IF to_regclass('connection_health_events') IS NOT NULL THEN
         ALTER TABLE connection_health_events
             ADD COLUMN IF NOT EXISTS policy_id text NOT NULL DEFAULT '';
         ALTER TABLE connection_health_events

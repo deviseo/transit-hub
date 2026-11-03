@@ -7,8 +7,8 @@ ALTER TABLE IF EXISTS connection_health_policies
 -- Existing installations have both tables and still receive the rolling-deployment backfill.
 DO $$
 BEGIN
-    IF to_regclass('public.connection_health_policies') IS NOT NULL
-       AND to_regclass('public.connection_health_model_targets') IS NOT NULL THEN
+    IF to_regclass('connection_health_policies') IS NOT NULL
+       AND to_regclass('connection_health_model_targets') IS NOT NULL THEN
         UPDATE connection_health_policies AS policy
         SET strategy_mode = 'multiplier_only'
         WHERE policy.priority_mode = 'multiplier'
