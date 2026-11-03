@@ -830,7 +830,7 @@ onBeforeUnmount(() => {
                     <input v-model="newSiteForm.authMode" type="radio" value="password" :disabled="isAdding" class="mt-1" />
                     <span class="space-y-1">
                       <span class="block font-medium text-foreground">{{ t('admin.upstream.modal.form.authModes.password') }}</span>
-                      <span class="block text-xs leading-5 text-muted-foreground">{{ t('admin.upstream.modal.form.authModes.passwordHelp') }}</span>
+                      <span class="block text-xs leading-5 text-muted-foreground">{{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.authModes.passwordHelpNewApi' : 'admin.upstream.modal.form.authModes.passwordHelp') }}</span>
                     </span>
                   </label>
                   <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-border/50 bg-surface p-3 text-sm transition-colors hover:border-primary/50">
@@ -929,7 +929,6 @@ onBeforeUnmount(() => {
               <template v-else>
                 <div class="space-y-2">
                   <label for="upstream-site-user-id" class="text-sm font-medium text-foreground flex items-center gap-1">
-                    <span class="text-red-500">*</span>
                     {{ t('admin.upstream.modal.form.userId') }}
                   </label>
                   <Input
@@ -940,7 +939,6 @@ onBeforeUnmount(() => {
                     :disabled="isAdding"
                     inputmode="numeric"
                     autocomplete="off"
-                    required
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
                 </div>

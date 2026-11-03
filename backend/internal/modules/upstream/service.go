@@ -209,24 +209,20 @@ func (s *Service) FetchGroupDailyStats(ctx context.Context, userID string, id st
 	if err != nil {
 		return nil, err
 	}
+	// 刷新成功后先写回会话，再处理统计结果：统计失败也不能丢掉已轮换的 refresh token。
+	s.writeBackRefreshedSession(ctx, id, userID, session, refreshedSession)
+
 	var stats []GroupDailyStat
-	if refreshedSession.Platform == PlatformNewAPI {
+	switch refreshedSession.Platform {
+	case PlatformNewAPI:
 		stats, err = s.platformService.FetchNewAPIGroupDailyStats(refreshedSession, groups)
-	} else if refreshedSession.Platform == PlatformSub2API {
+	case PlatformSub2API:
 		stats, err = s.platformService.FetchSub2APIGroupDailyStats(refreshedSession, groups)
-	} else {
+	default:
 		return nil, newRequestError(ErrorNotFound, "")
 	}
 	if err != nil {
 		return nil, err
-	}
-
-	// 将刷新后的会话写回缓存和数据库。
-	site, err = s.cache.Get(ctx, id)
-	if err == nil && site != nil && site.UserID == userID {
-		site.Session = &refreshedSession
-		_ = s.setCachedSite(ctx, site)
-		_ = s.saveSite(ctx, site)
 	}
 	return stats, nil
 }
@@ -284,18 +280,13 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 				recordFailure(refreshErr)
 				return
 			}
+			// 刷新成功后先写回会话，再拉取用量：拉取失败也不能丢掉已轮换的 refresh token。
+			s.writeBackRefreshedSession(ctx, site.ID, site.UserID, session, refreshedSession)
 
 			stats, fetchErr := s.platformService.FetchKeyUsageToday(refreshedSession, groups)
 			if fetchErr != nil {
 				recordFailure(fetchErr)
 				return
-			}
-
-			// 将刷新后的会话写回缓存和数据库，与 FetchGroupDailyStats 的写回模式一致。
-			if cached, cacheErr := s.cache.Get(ctx, site.ID); cacheErr == nil && cached != nil && cached.UserID == site.UserID {
-				cached.Session = &refreshedSession
-				_ = s.setCachedSite(ctx, cached)
-				_ = s.saveSite(ctx, cached)
 			}
 
 			mu.Lock()
@@ -444,6 +435,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	site.Status = StatusConnected
 	site.ErrorKey = nil
 	site.LastSyncedAt = &now
+	applyDiscoveredUserKeyAccount(site, dto.AuthMode, result.Session)
 
 	_ = s.setCachedSite(ctx, site)
 
@@ -491,6 +483,10 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 	site.Account = strings.TrimSpace(dto.Account)
 	if normalizedAuthMode(dto.AuthMode) == AuthModeUserKey {
 		site.Account = strings.TrimSpace(dto.UserID)
+		if site.Account == "" {
+			// 用户 ID 可选：留空时保留原值，重新登录成功后再用访问令牌识别出的用户 ID 回填。
+			site.Account = previousSite.Account
+		}
 	}
 	site.Remark = strings.TrimSpace(dto.Remark)
 	site.RechargeRate = dto.RechargeRate
@@ -534,6 +530,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 		site.Status = StatusConnected
 		site.ErrorKey = nil
 		site.LastSyncedAt = &now
+		applyDiscoveredUserKeyAccount(site, dto.AuthMode, result.Session)
 
 		_ = s.setCachedSite(ctx, site)
 
@@ -602,6 +599,34 @@ func normalizedAuthMode(authMode AuthMode) AuthMode {
 	default:
 		return AuthModePassword
 	}
+}
+
+// applyDiscoveredUserKeyAccount 在访问令牌登录成功后，用会话里的用户 ID（用户填写或由令牌自动识别）
+// 作为站点账号展示，保证未填写用户 ID 时站点列表仍能看到所属用户。
+func applyDiscoveredUserKeyAccount(site *Site, authMode AuthMode, session Session) {
+	if normalizedAuthMode(authMode) != AuthModeUserKey {
+		return
+	}
+	if userID := strings.TrimSpace(session.UserID); userID != "" {
+		site.Account = userID
+	}
+}
+
+// writeBackRefreshedSession 把刷新得到的新会话写回缓存和数据库。
+// refresh token 每次刷新都会轮换（sub2api 删除旧 token；new-api 在 30 秒容错窗口后把旧 token 视为
+// 重放并吊销整个登录会话），所以只要刷新成功，即使后续业务请求失败也必须写回。
+// 会话没有变化时不写，避免把调用方手里较旧的副本覆盖到其他流程刚写入的新会话上。
+func (s *Service) writeBackRefreshedSession(ctx context.Context, siteID string, ownerUserID string, previous Session, refreshed Session) {
+	if previous.sameCredentials(refreshed) {
+		return
+	}
+	site, err := s.cache.Get(ctx, siteID)
+	if err != nil || site == nil || site.UserID != ownerUserID {
+		return
+	}
+	site.Session = &refreshed
+	_ = s.setCachedSite(ctx, site)
+	_ = s.saveSite(ctx, site)
 }
 
 // Sync 手动触发单个站点的同步。
@@ -769,9 +794,10 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 
 	// 刷新会话并拉取指标（无锁操作，可能耗时较长）。
 	refreshedSession, refreshErr := s.platformService.RefreshSession(session)
+	syncErr := refreshErr
 	metrics := Metrics{}
 	if refreshErr == nil {
-		metrics, refreshErr = s.platformService.FetchMetrics(refreshedSession)
+		metrics, syncErr = s.platformService.FetchMetrics(refreshedSession)
 	}
 
 	// 重新读取站点确认仍存在（可能在同步期间被删除）。
@@ -783,13 +809,17 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 	// 在覆盖前保存旧指标，用于同步后的预警检测。
 	oldMetrics := site.Metrics
 
-	if refreshErr != nil {
+	// 刷新成功且会话确实变化时，无论指标是否拉取成功都写回新会话（见 writeBackRefreshedSession）；
+	// 会话未变化时保留缓存中的值，避免覆盖其他流程在同步期间刚轮换出的新会话。
+	if refreshErr == nil && !session.sameCredentials(refreshedSession) {
+		site.Session = &refreshedSession
+	}
+	if syncErr != nil {
 		site.Status = StatusError
-		key := errorKey(refreshErr)
+		key := errorKey(syncErr)
 		site.ErrorKey = &key
 	} else {
 		now := time.Now().UnixMilli()
-		site.Session = &refreshedSession
 		site.Metrics = metrics
 		site.Status = StatusConnected
 		site.ErrorKey = nil
@@ -806,7 +836,7 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 	if saveErr := s.saveSite(ctx, site); saveErr != nil {
 		return response, saveErr
 	}
-	if refreshErr == nil {
+	if syncErr == nil {
 		s.saveSnapshot(ctx, site)
 		if s.AfterSync != nil {
 			go s.AfterSync(context.Background(), site.UserID, site.AdminAccountID, site.ID, site.Name, oldMetrics, metrics)
@@ -978,9 +1008,6 @@ func validateCreate(dto CreateRequest) error {
 	if normalizedAuthMode(dto.AuthMode) == AuthModeUserKey && strings.TrimSpace(dto.AccessToken) == "" {
 		fields = append(fields, "accessToken")
 	}
-	if normalizedAuthMode(dto.AuthMode) == AuthModeUserKey && strings.TrimSpace(dto.UserID) == "" {
-		fields = append(fields, "userId")
-	}
 	if dto.RechargeRate <= 0 {
 		fields = append(fields, "rechargeRate")
 	}
@@ -1018,9 +1045,6 @@ func validateUpdate(dto UpdateRequest) error {
 	}
 	if normalizedAuthMode(dto.AuthMode) == AuthModeUserKey && strings.TrimSpace(dto.AccessToken) == "" {
 		fields = append(fields, "accessToken")
-	}
-	if normalizedAuthMode(dto.AuthMode) == AuthModeUserKey && strings.TrimSpace(dto.UserID) == "" {
-		fields = append(fields, "userId")
 	}
 	if dto.RechargeRate <= 0 {
 		fields = append(fields, "rechargeRate")

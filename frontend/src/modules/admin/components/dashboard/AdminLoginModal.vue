@@ -142,7 +142,8 @@ const canSubmit = computed(() => {
     case 'token':
       return platform.value === 'sub2api' && Boolean(accessToken.value.trim() || refreshToken.value.trim())
     case 'admin_key':
-      return Boolean(adminKey.value.trim() && (platform.value === 'sub2api' || userId.value.trim()))
+      // new-api 用户 ID 可选：新版个人访问令牌（PAT）会自动识别所属用户，旧版系统访问令牌才需要填写。
+      return Boolean(adminKey.value.trim())
     default:
       return false
   }
@@ -275,6 +276,7 @@ const handleSubmit = () => {
               autocomplete="username"
             />
             <Input v-model="password" name="adminPassword" type="password" :placeholder="t('admin.dashboard.adminAuth.modal.fields.passwordPlaceholder')" :aria-label="t('admin.dashboard.adminAuth.modal.fields.passwordPlaceholder')" autocomplete="current-password" />
+            <p v-if="platform === 'newapi'" class="text-xs text-muted-foreground">{{ t('admin.dashboard.adminAuth.modal.fields.newApiPasswordHelp') }}</p>
           </div>
 
           <!-- RT + AT（仅 sub2api token 模式） -->

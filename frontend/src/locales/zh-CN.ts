@@ -615,9 +615,10 @@ export default {
             tokenHelp: 'Access Token 与 Refresh Token 至少填写一个；提供 Refresh Token 时系统会自动刷新临期凭证。',
             sub2apiAdminKeyPlaceholder: 'Sub2API Admin API Key',
             sub2apiAdminKeyHelp: '该 Key 仅通过 x-api-key 发送到 Sub2API 管理接口。',
-            newApiAdminKeyPlaceholder: 'New-API 系统访问令牌',
-            newApiAdminKeyHelp: '填写管理员或 Root 账户在个人设置中生成的系统访问令牌。',
-            userIdPlaceholder: '该令牌所属的用户 ID'
+            newApiAdminKeyPlaceholder: 'New-API 访问令牌（nap_ 开头）或系统访问令牌',
+            newApiAdminKeyHelp: '推荐使用新版 New-API 的个人访问令牌（PAT）：用 Root 账号创建，勾选 profile:read、user:read、log:read、group:read、option:read、option:write、channel:read、channel:write 权限（需要由 TransitHub 自动创建或删除渠道时再加 channel:sensitive_write），并设置较长有效期。旧版系统访问令牌需同时填写用户 ID。',
+            userIdPlaceholder: '用户 ID（可选，旧版系统访问令牌需要）',
+            newApiPasswordHelp: '新版 New-API 的密码登录最长保持 30 天，到期需重新登录；开启两步验证的账号无法自动登录，请改用访问令牌。'
           },
           submit: '登录并校验',
           submitting: '校验中...'
@@ -630,7 +631,9 @@ export default {
           network: '网络或跨域请求失败，请检查站点地址。',
           platformUnsupported: '不支持的平台类型，请选择 Sub2API 或 New-API。',
           unknown: 'admin 登录时发生未知错误。',
-          reloginRequired: '管理员身份校验失败，请重新登录。'
+          reloginRequired: '管理员身份校验失败，请重新登录。',
+          verificationRequired: '该账号开启了两步验证，无法自动登录，请改用访问令牌登录。',
+          tokenRejected: '访问令牌校验失败：旧版 New-API 的系统访问令牌需要同时填写用户 ID；新版请确认令牌有效、未过期且勾选了所需权限。'
         }
       }
     },
@@ -1403,8 +1406,9 @@ export default {
             passwordHelp: '使用站点账号密码登录，并自动保存会话。',
             token: 'Access Token / Refresh Token',
             tokenHelp: '适用于 Cloudflare 或二次验证导致账号密码无法直连的 Sub2API 站点。',
-            userKey: '用户 Key',
-            userKeyHelp: '使用 New-API 个人设置中生成的系统访问令牌。'
+            userKey: '访问令牌',
+            userKeyHelp: '使用 New-API 个人访问令牌（PAT）或旧版系统访问令牌，适合开启了两步验证或需要长期保持登录的账号。',
+            passwordHelpNewApi: '使用站点账号密码登录。新版 New-API 的登录最长保持 30 天，开启两步验证的账号请改用访问令牌。'
           },
           account: '登录账号',
           accountPlaceholder: '输入账号',
@@ -1419,11 +1423,11 @@ export default {
           tokenType: 'Token Type',
           tokenTypePlaceholder: '默认 Bearer',
           tokenHelp: '如果提供 refresh_token，系统会优先调用刷新接口换取新的 access_token 和过期时间。',
-          userId: '用户 ID',
-          userIdPlaceholder: '输入系统访问令牌所属的用户 ID',
-          userKey: '系统访问令牌',
-          userKeyPlaceholder: '粘贴 New-API 系统访问令牌',
-          userKeyHelp: '系统会通过 Authorization Bearer 与 New-Api-User 请求用户余额、分组和使用统计。',
+          userId: '用户 ID（可选）',
+          userIdPlaceholder: '旧版系统访问令牌需要填写所属用户 ID，新版访问令牌可留空',
+          userKey: '访问令牌',
+          userKeyPlaceholder: '粘贴 New-API 访问令牌（nap_ 开头）或系统访问令牌',
+          userKeyHelp: '推荐使用新版个人访问令牌（PAT），勾选 profile:read、usage:read、api_key:read、api_key:reveal 权限（需要由 TransitHub 自动创建上游 Key 时再加 api_key:write），并设置较长有效期。',
           rechargeRate: '充值倍率',
           rechargeRatePlaceholder: '输入 USD 转 CNY 的倍率，如 7',
           rechargeRateHelp: '必填。人民币金额 = USD 金额 × 此倍率。',
@@ -1508,6 +1512,8 @@ export default {
         tokenMissing: '登录成功但未返回访问令牌。',
         detect: '无法自动识别平台，请手动选择平台后重试。',
         sub2APIBulkUpdateUnsupported: '当前 Sub2API 版本不支持安全的账号字段更新，请升级 Sub2API 后重试。',
+        verificationRequired: '该账号开启了两步验证，无法自动登录。请改用访问令牌方式添加站点。',
+        newApiTokenRejected: '访问令牌校验失败：旧版 New-API 的系统访问令牌需要同时填写用户 ID；新版请确认令牌有效、未过期且勾选了所需权限。',
         unknown: '连接上游站点时发生未知错误。'
       }
     },

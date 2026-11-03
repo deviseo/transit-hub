@@ -151,16 +151,19 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 			identity = account
 		case AuthMethodAdminKey:
 			adminKey := strings.TrimSpace(req.AdminKey)
-			userID := strings.TrimSpace(req.UserID)
-			if adminKey == "" || userID == "" {
+			if adminKey == "" {
 				return StatusResponse{}, requestError(ErrorMissingCredentials)
 			}
-			sess, err := s.platform.LoginAdminWithKey(siteURL, upstream.PlatformNewAPI, adminKey, userID)
+			// 用户 ID 可选：新版 new-api 的 PAT 可自动识别所属用户；旧版系统访问令牌仍需填写。
+			sess, err := s.platform.LoginAdminWithKey(siteURL, upstream.PlatformNewAPI, adminKey, strings.TrimSpace(req.UserID))
 			if err != nil {
 				return StatusResponse{}, mapPlatformError(err)
 			}
 			session = sess
-			identity = "User ID " + userID
+			identity = "Access Token"
+			if userID := strings.TrimSpace(sess.UserID); userID != "" {
+				identity = "User ID " + userID
+			}
 		default:
 			return StatusResponse{}, requestError(ErrorMissingCredentials)
 		}
@@ -282,25 +285,43 @@ func (s *Service) RefreshAdminSession(ctx context.Context, userID string) (Statu
 	if err != nil {
 		return StatusResponse{}, requestError(ErrorAdminOnly)
 	}
-	if err := s.platform.VerifyAdmin(refreshedSession); err != nil {
-		return StatusResponse{}, requestError(ErrorAdminOnly)
-	}
-
 	next := *record
 	next.Session = refreshedSession
 	next.LastRefreshedAt = nowMillis()
-	if err := s.store.Save(ctx, userID, adminAccountID, next); err != nil {
-		return StatusResponse{}, err
-	}
 
-	// 同步写入 my_site_states，确保 RealConnect 等功能使用最新的 admin 会话
-	if s.mySiteSync != nil {
-		if err := s.mySiteSync.SyncAdminSession(ctx, userID, adminAccountID, next.Session, next.Identity); err != nil {
+	// refresh token 每次刷新都会轮换：凭证确实变化时先落盘再做 admin 校验。否则校验失败会丢掉新 token，
+	// 下次刷新复用已轮换的旧 token——sub2api 会拒绝，new-api 会直接吊销整个登录会话。
+	rotated := !sessionEqual(refreshedSession, record.Session)
+	if rotated {
+		if err := s.saveAdminSession(ctx, userID, adminAccountID, next); err != nil {
 			return StatusResponse{}, err
 		}
 	}
-
+	if err := s.platform.VerifyAdmin(refreshedSession); err != nil {
+		return StatusResponse{}, requestError(ErrorAdminOnly)
+	}
+	if !rotated {
+		if err := s.saveAdminSession(ctx, userID, adminAccountID, next); err != nil {
+			return StatusResponse{}, err
+		}
+	}
 	return statusFromRecord(next, true), nil
+}
+
+// saveAdminSession 写入 Redis 会话，并同步到 my_site_states，确保 RealConnect 等功能使用最新的 admin 会话。
+// my_site_states 是权威副本：它已持有更新的会话（过期时间更晚，例如其他流程刚轮换过 refresh token）时
+// 不再同步，避免用 Redis 里的旧副本把已轮换的新 token 覆盖回旧值。
+func (s *Service) saveAdminSession(ctx context.Context, userID string, adminAccountID string, next AdminSession) error {
+	if err := s.store.Save(ctx, userID, adminAccountID, next); err != nil {
+		return err
+	}
+	if s.mySiteSync == nil {
+		return nil
+	}
+	if stored, exists, err := s.mySiteSync.StoredSession(ctx, userID, adminAccountID); err == nil && exists && sessionAppearsNewer(stored, next.Session) {
+		return nil
+	}
+	return s.mySiteSync.SyncAdminSession(ctx, userID, adminAccountID, next.Session, next.Identity)
 }
 
 // StartRefresher 启动后台协程，周期性扫描活跃会话并刷新临期令牌，随 ctx 结束而退出。
@@ -458,6 +479,10 @@ func mapPlatformError(err error) requestError {
 		return requestError(ErrorInvalidURL)
 	case upstream.ErrorNetwork:
 		return requestError(ErrorNetwork)
+	case upstream.ErrorVerificationRequired:
+		return requestError(ErrorVerificationRequired)
+	case upstream.ErrorNewAPITokenRejected:
+		return requestError(ErrorTokenRejected)
 	default:
 		// 登录失败或 /api/v1/auth/me 校验未通过，统一归为「非 admin / 鉴权失败」。
 		return requestError(ErrorAdminOnly)

@@ -27,14 +27,16 @@ const refreshSkewMS int64 = 60_000
 
 type PlatformService struct {
 	httpClient *HTTPClient
+	// refresher 保证同一个 refresh token 在进程内只兑换一次（见 sessionRefresher）。
+	refresher *sessionRefresher
 }
 
 func NewPlatformService(httpClient *HTTPClient) *PlatformService {
-	return &PlatformService{httpClient: httpClient}
+	return &PlatformService{httpClient: httpClient, refresher: newSessionRefresher()}
 }
 
-// newAPIAuthOptions supports both legacy cookie sessions and system access tokens.
-// New-Api-User is required by new-api for either authentication mechanism.
+// newAPIAuthOptions 同时兼容 new-api 的旧版 Cookie 会话与 Bearer 访问令牌（新版 JWT / PAT / 旧版系统访问令牌）。
+// 旧版 new-api 要求两种方式都携带 New-Api-User；新版已忽略该请求头，UserID 为空时不会发送。
 func newAPIAuthOptions(session Session) requestOptions {
 	return requestOptions{
 		Cookie:      session.Cookie,
@@ -91,6 +93,10 @@ func (s *PlatformService) Login(baseURL string, platform Platform, account strin
 		if err == nil {
 			return result, nil
 		}
+		// 自动识别平台时，new-api 已明确要求二次验证就说明平台识别成功，不要再用 sub2api 登录掩盖该提示。
+		if errorKey(err) == ErrorVerificationRequired {
+			return LoginResult{}, err
+		}
 		return s.loginSub2API(normalizedURL, account, password)
 	}
 }
@@ -127,8 +133,9 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 	return LoginResult{Platform: PlatformSub2API, Session: session, Metrics: metrics}, nil
 }
 
-// LoginWithUserKey signs in to new-api with the system access token generated in
-// Personal Settings -> Security Settings. new-api also requires the matching user ID.
+// LoginWithUserKey 用 new-api 访问令牌登录上游站点：新版的个人访问令牌（PAT，nap_ 开头）或旧版
+// 「个人设置 -> 系统访问令牌」。用户 ID 可选：留空时通过 /api/user/self 自动识别；旧版系统访问令牌
+// 必须配合 New-Api-User，未填写用户 ID 时会返回 ErrorNewAPITokenRejected 提示补填。
 func (s *PlatformService) LoginWithUserKey(baseURL string, userID string, accessToken string) (LoginResult, error) {
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
@@ -136,7 +143,7 @@ func (s *PlatformService) LoginWithUserKey(baseURL string, userID string, access
 	}
 	userID = strings.TrimSpace(userID)
 	accessToken = strings.TrimSpace(accessToken)
-	if userID == "" || accessToken == "" {
+	if accessToken == "" {
 		return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	session := Session{
@@ -146,6 +153,13 @@ func (s *PlatformService) LoginWithUserKey(baseURL string, userID string, access
 		AccessToken: accessToken,
 		TokenType:   "Bearer",
 	}
+	if session.UserID == "" {
+		discovered, err := s.discoverNewAPIUserID(session)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		session.UserID = discovered
+	}
 	session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
 	metrics, err := s.fetchNewAPIMetrics(session, nil)
 	if err != nil {
@@ -154,13 +168,36 @@ func (s *PlatformService) LoginWithUserKey(baseURL string, userID string, access
 	return LoginResult{Platform: PlatformNewAPI, Session: session, Metrics: metrics}, nil
 }
 
+// RefreshSession 在 access token 临期时用 refresh 凭据换新；没有 refresh 凭据（旧版 new-api Cookie 会话、
+// 访问令牌、Admin Key）或尚未临期时原样返回。refresh token 每次刷新都会轮换，调用方必须持久化返回值。
 func (s *PlatformService) RefreshSession(session Session) (Session, error) {
-	if session.Platform == PlatformNewAPI {
+	if !sessionNeedsRefresh(session, time.Now().UnixMilli()) {
 		return session, nil
 	}
-	now := time.Now().UnixMilli()
-	if session.RefreshToken == "" || (session.ExpiresAt != nil && *session.ExpiresAt-now > refreshSkewMS) {
-		return session, nil
+	if s.refresher == nil {
+		return s.exchangeRefreshToken(session)
+	}
+	return s.refresher.refresh(session, func(candidate Session) bool {
+		return sessionNeedsRefresh(candidate, time.Now().UnixMilli())
+	}, s.exchangeRefreshToken)
+}
+
+// sessionNeedsRefresh 判断会话是否需要用 refresh 凭据换新：没有 refresh 凭据时永不刷新；
+// 否则在 access token 剩余有效期不足提前量、或过期时间未知时刷新。
+func sessionNeedsRefresh(session Session, nowMS int64) bool {
+	if strings.TrimSpace(session.RefreshToken) == "" {
+		return false
+	}
+	skew := refreshSkewMS
+	if session.Platform == PlatformNewAPI {
+		skew = newAPIRefreshSkewMS
+	}
+	return session.ExpiresAt == nil || *session.ExpiresAt-nowMS <= skew
+}
+
+func (s *PlatformService) exchangeRefreshToken(session Session) (Session, error) {
+	if session.Platform == PlatformNewAPI {
+		return s.refreshNewAPISession(session)
 	}
 	return s.refreshSub2APISession(session)
 }
@@ -215,8 +252,10 @@ func (s *PlatformService) LoginAdmin(baseURL string, platform Platform, account 
 }
 
 // LoginAdminWithKey validates a platform management key without converting it
-// into a refreshable login session. Sub2API uses x-api-key; new-api uses its
-// system access token together with New-Api-User.
+// into a refreshable login session. Sub2API uses x-api-key; new-api accepts a
+// personal access token (PAT) or a legacy system access token. The new-api user
+// ID is optional: when omitted it is discovered via /api/user/self, which only
+// works for PATs on current new-api (legacy tokens still require New-Api-User).
 func (s *PlatformService) LoginAdminWithKey(baseURL string, platform Platform, key string, userID string) (Session, error) {
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
@@ -224,7 +263,7 @@ func (s *PlatformService) LoginAdminWithKey(baseURL string, platform Platform, k
 	}
 	key = strings.TrimSpace(key)
 	userID = strings.TrimSpace(userID)
-	if key == "" || (platform == PlatformNewAPI && userID == "") {
+	if key == "" {
 		return Session{}, newRequestError(ErrorAuth, platform)
 	}
 
@@ -236,6 +275,13 @@ func (s *PlatformService) LoginAdminWithKey(baseURL string, platform Platform, k
 		session.AccessToken = key
 		session.TokenType = "Bearer"
 		session.UserID = userID
+		if session.UserID == "" {
+			discovered, err := s.discoverNewAPIUserID(session)
+			if err != nil {
+				return Session{}, err
+			}
+			session.UserID = discovered
+		}
 		session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
 	default:
 		return Session{}, newRequestError(ErrorAuth, platform)
@@ -1144,6 +1190,12 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, _ []GroupInf
 	return stats, nil
 }
 
+// loginNewAPI 用账号密码登录 new-api，兼容两代鉴权：
+//   - 新版：响应 data 里有 access_token（15 分钟 JWT），refresh token 通过 HttpOnly Cookie 下发；
+//     面板接口只认 Authorization: Bearer，Cookie 会话已不再生效。
+//   - 旧版：Gin Session Cookie + New-Api-User（用户 ID 取自 data.id）。
+//
+// 开启二次验证的账号无法无人值守登录，返回 ErrorVerificationRequired，提示改用访问令牌。
 func (s *PlatformService) loginNewAPI(baseURL string, username string, password string) (LoginResult, error) {
 	response, err := s.httpClient.requestJSON(baseURL+"/api/user/login", requestOptions{
 		Method: http.MethodPost,
@@ -1158,16 +1210,26 @@ func (s *PlatformService) loginNewAPI(baseURL string, username string, password 
 		}
 	}
 	loginData := dataRecord(response.Payload)
-	userID := newAPIUserID(loginData)
-	session := Session{Platform: PlatformNewAPI, BaseURL: baseURL, Cookie: cookieHeader(response.Header), UserID: userID}
-	if strings.TrimSpace(session.Cookie) == "" {
-		return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+	if newAPILoginRequiresVerification(loginData) {
+		return LoginResult{}, newRequestError(ErrorVerificationRequired, PlatformNewAPI)
 	}
-	if strings.TrimSpace(session.UserID) == "" {
-		return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+
+	session, userData, isBearer := newAPIBearerSession(baseURL, response)
+	if isBearer {
+		if session.RefreshToken == "" {
+			// 没有 refresh cookie 时 15 分钟后就无法续期（常见于反向代理剥离了 Set-Cookie），直接报错比静默失效更好排查。
+			log.Printf("new-api login returned no refresh cookie base_url=%s", baseURL)
+			return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+		}
+	} else {
+		session = Session{Platform: PlatformNewAPI, BaseURL: baseURL, Cookie: cookieHeader(response.Header), UserID: newAPIUserID(loginData)}
+		userData = loginData
+		if strings.TrimSpace(session.Cookie) == "" || strings.TrimSpace(session.UserID) == "" {
+			return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+		}
 	}
 	session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
-	metrics, err := s.fetchNewAPIMetrics(session, loginData)
+	metrics, err := s.fetchNewAPIMetrics(session, userData)
 	if err != nil {
 		log.Printf("new-api metrics fetch failed base_url=%s err=%v", baseURL, err)
 		metrics = defaultMetrics()
