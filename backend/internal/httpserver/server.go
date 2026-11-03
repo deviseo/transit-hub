@@ -29,7 +29,6 @@ import (
 	"transithub/backend/internal/modules/system"
 	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
-	"transithub/backend/internal/modules/users"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
 )
@@ -70,7 +69,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 
 	auth.RegisterRoutes(server.mux, authService, cfg.AllowPublicRegister)
-	users.RegisterRoutes(server.mux, users.NewService(users.NewRepository(db)))
+	// 注意：曾经存在的 GET /api/users 未经鉴权即返回全部 TransitHub 账号邮箱，且前端从未使用，
+	// 已整体移除。不要以「加登录校验」的方式恢复它——任何已注册用户仍可借此枚举其他租户邮箱。
 	adminAccountsService := admin_accounts.NewService(admin_accounts.NewRepository(db))
 	upstreamRepository := upstream.NewRepository(db)
 	if err := upstreamRepository.EnsureSchema(context.Background()); err != nil {
