@@ -157,12 +157,11 @@ func TestDeleteWorkspaceDoesNotCleanupWhenRepositoryFails(t *testing.T) {
 
 func TestDeleteWorkspaceCleanupCallbackPayloadAndAdditiveResponse(t *testing.T) {
 	repo := &deleteFakeAccountRepository{deleteResult: &DeleteResult{
-		CleanupJobID:           "job-1",
-		DeletedID:              "account-1",
-		AttachmentStoragePaths: []string{"a.png", "b.png"},
-		UpstreamSiteIDs:        []string{"site-1"},
+		CleanupJobID:    "job-1",
+		DeletedID:       "account-1",
+		UpstreamSiteIDs: []string{"site-1"},
 	}}
-	cleanup := &deleteFakeWorkspaceCleanup{err: errors.Join(errors.New("file cleanup failed"), errors.New("redis cleanup failed"))}
+	cleanup := &deleteFakeWorkspaceCleanup{err: errors.Join(errors.New("site cleanup failed"), errors.New("redis cleanup failed"))}
 	service := NewService(repo)
 	service.SetWorkspaceCleanup(cleanup)
 
@@ -174,10 +173,9 @@ func TestDeleteWorkspaceCleanupCallbackPayloadAndAdditiveResponse(t *testing.T) 
 		t.Fatal("expected cleanup callback")
 	}
 	wantPayload := WorkspaceCleanupPayload{
-		UserID:                 "user-1",
-		AdminAccountID:         "account-1",
-		AttachmentStoragePaths: []string{"a.png", "b.png"},
-		UpstreamSiteIDs:        []string{"site-1"},
+		UserID:          "user-1",
+		AdminAccountID:  "account-1",
+		UpstreamSiteIDs: []string{"site-1"},
 	}
 	if !reflect.DeepEqual(cleanup.payload, wantPayload) {
 		t.Fatalf("unexpected cleanup payload: %+v", cleanup.payload)
@@ -208,7 +206,7 @@ func TestDeleteWorkspaceCompletesCleanupJobAfterImmediateSuccess(t *testing.T) {
 }
 
 func TestProcessDueCleanupJobsCompletesRestartedJob(t *testing.T) {
-	repo := &deleteFakeAccountRepository{claimedJobs: []CleanupJob{{ID: "job-1", UserID: "user-1", AdminAccountID: "account-1", AttachmentStoragePaths: []string{"a.png"}, UpstreamSiteIDs: []string{"site-1"}, Attempts: 1}}}
+	repo := &deleteFakeAccountRepository{claimedJobs: []CleanupJob{{ID: "job-1", UserID: "user-1", AdminAccountID: "account-1", UpstreamSiteIDs: []string{"site-1"}, Attempts: 1}}}
 	cleanup := &deleteFakeWorkspaceCleanup{}
 	service := NewService(repo)
 	service.SetWorkspaceCleanup(cleanup)

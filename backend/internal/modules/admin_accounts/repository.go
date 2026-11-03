@@ -31,6 +31,29 @@ const (
 )
 
 var workspaceDeleteStatements = []workspaceDeleteStatement{
+	{Name: "mass_email_batch_items", SQL: `DELETE FROM mass_email_batch_items WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "mass_email_batches", SQL: `DELETE FROM mass_email_batches WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "group_rate_snapshots", SQL: `DELETE FROM group_rate_snapshots WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_daily", SQL: `DELETE FROM user_activity_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_recharge_daily", SQL: `DELETE FROM user_activity_recharge_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_site_daily", SQL: `DELETE FROM user_activity_site_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_profiles", SQL: `DELETE FROM user_activity_profiles WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_sync_states", SQL: `DELETE FROM user_activity_sync_states WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "email_suppressions", SQL: `DELETE FROM email_suppressions WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "strategy_settings", SQL: `DELETE FROM strategy_settings WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "notification_channel_settings", SQL: `DELETE FROM notification_channel_settings WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "smtp_settings", SQL: `DELETE FROM smtp_settings WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "email_templates", SQL: `DELETE FROM email_templates WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "my_site_states", SQL: `DELETE FROM my_site_states WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "dashboard_daily_stats", SQL: `DELETE FROM dashboard_daily_stats WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "dashboard_balance_filter", SQL: `DELETE FROM dashboard_balance_filter WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "dashboard_pricing", SQL: `DELETE FROM dashboard_pricing WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "upstream_sites", SQL: `DELETE FROM upstream_sites WHERE user_id = $1 AND admin_account_id = $2`},
+}
+
+// retiredWorkspaceDeleteStatements 清理已下线功能（抽奖、排行榜、工单、活动调价、分组健康、分组对接）留下的表。
+// 这些表不再由代码创建：新安装可能没有，老安装里仍有历史数据，因此删除工作区时只在表存在时执行。
+var retiredWorkspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "lottery_reward_jobs", SQL: `DELETE FROM lottery_reward_jobs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "lottery_winners", SQL: `DELETE FROM lottery_winners WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "lottery_draws", SQL: `DELETE FROM lottery_draws WHERE user_id = $1 AND admin_account_id = $2`},
@@ -39,8 +62,6 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "lottery_audit_logs", SQL: `DELETE FROM lottery_audit_logs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "lottery_campaigns", SQL: `DELETE FROM lottery_campaigns WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "lottery_embed_configs", SQL: `DELETE FROM lottery_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "mass_email_batch_items", SQL: `DELETE FROM mass_email_batch_items WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "mass_email_batches", SQL: `DELETE FROM mass_email_batches WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "group_rate_campaign_items", SQL: `DELETE FROM group_rate_campaign_items WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "group_rate_campaigns", SQL: `DELETE FROM group_rate_campaigns WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "connection_health_target_action_states", SQL: `DELETE FROM connection_health_target_action_states WHERE user_id = $1 AND admin_account_id = $2`},
@@ -58,34 +79,10 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "tickets", SQL: `DELETE FROM tickets WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "ticket_embed_configs", SQL: `DELETE FROM ticket_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "leaderboard_embed_configs", SQL: `DELETE FROM leaderboard_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "group_rate_snapshots", SQL: `DELETE FROM group_rate_snapshots WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "user_activity_daily", SQL: `DELETE FROM user_activity_daily WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "user_activity_recharge_daily", SQL: `DELETE FROM user_activity_recharge_daily WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "user_activity_site_daily", SQL: `DELETE FROM user_activity_site_daily WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "user_activity_profiles", SQL: `DELETE FROM user_activity_profiles WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "user_activity_sync_states", SQL: `DELETE FROM user_activity_sync_states WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "email_suppressions", SQL: `DELETE FROM email_suppressions WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "strategy_settings", SQL: `DELETE FROM strategy_settings WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "notification_channel_settings", SQL: `DELETE FROM notification_channel_settings WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "smtp_settings", SQL: `DELETE FROM smtp_settings WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "email_templates", SQL: `DELETE FROM email_templates WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "my_site_states", SQL: `DELETE FROM my_site_states WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "real_connections", SQL: `DELETE FROM real_connections WHERE user_id = $1 AND workspace_admin_account_id = $2`},
-	{Name: "dashboard_daily_stats", SQL: `DELETE FROM dashboard_daily_stats WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "dashboard_balance_filter", SQL: `DELETE FROM dashboard_balance_filter WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "dashboard_pricing", SQL: `DELETE FROM dashboard_pricing WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "upstream_sites", SQL: `DELETE FROM upstream_sites WHERE user_id = $1 AND admin_account_id = $2`},
 }
 
 var legacyWorkspaceTables = []workspaceTableDescriptor{
-	{Name: "lottery_embed_configs", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_campaigns", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_prizes", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_entries", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_draws", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_winners", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_reward_jobs", WorkspaceColumn: "admin_account_id"},
-	{Name: "lottery_audit_logs", WorkspaceColumn: "admin_account_id"},
 	{Name: "upstream_sites", WorkspaceColumn: "admin_account_id"},
 	{Name: "group_rate_snapshots", WorkspaceColumn: "admin_account_id"},
 	{Name: "strategy_settings", WorkspaceColumn: "admin_account_id"},
@@ -93,29 +90,11 @@ var legacyWorkspaceTables = []workspaceTableDescriptor{
 	{Name: "smtp_settings", WorkspaceColumn: "admin_account_id"},
 	{Name: "email_templates", WorkspaceColumn: "admin_account_id"},
 	{Name: "my_site_states", WorkspaceColumn: "admin_account_id"},
-	{Name: "real_connections", WorkspaceColumn: "workspace_admin_account_id"},
 	{Name: "dashboard_daily_stats", WorkspaceColumn: "admin_account_id"},
 	{Name: "dashboard_balance_filter", WorkspaceColumn: "admin_account_id"},
 	{Name: "dashboard_pricing", WorkspaceColumn: "admin_account_id"},
 	{Name: "mass_email_batches", WorkspaceColumn: "admin_account_id"},
 	{Name: "mass_email_batch_items", WorkspaceColumn: "admin_account_id"},
-	{Name: "group_rate_campaigns", WorkspaceColumn: "admin_account_id"},
-	{Name: "group_rate_campaign_items", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_target_action_states", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_probe_budget_usage", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_priority_sync_states", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_group_target_exclusions", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_group_policy_assignments", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_policies", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_model_targets", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_states", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_events", WorkspaceColumn: "admin_account_id"},
-	{Name: "connection_health_policy_assignments", WorkspaceColumn: "admin_account_id"},
-	{Name: "ticket_embed_configs", WorkspaceColumn: "admin_account_id"},
-	{Name: "leaderboard_embed_configs", WorkspaceColumn: "admin_account_id"},
-	{Name: "tickets", WorkspaceColumn: "admin_account_id"},
-	{Name: "ticket_messages", WorkspaceColumn: "admin_account_id"},
-	{Name: "ticket_attachments", WorkspaceColumn: "admin_account_id"},
 	{Name: "user_activity_daily", WorkspaceColumn: "admin_account_id"},
 	{Name: "user_activity_recharge_daily", WorkspaceColumn: "admin_account_id"},
 	{Name: "user_activity_site_daily", WorkspaceColumn: "admin_account_id"},
@@ -344,10 +323,6 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 		return nil, nil
 	}
 
-	attachmentPaths, err := collectStrings(ctx, tx, `SELECT storage_path FROM ticket_attachments WHERE user_id = $1 AND admin_account_id = $2 ORDER BY storage_path ASC`, userID, accountID)
-	if err != nil {
-		return nil, err
-	}
 	upstreamSiteIDs, err := collectStrings(ctx, tx, `SELECT id FROM upstream_sites WHERE user_id = $1 AND admin_account_id = $2 ORDER BY id ASC`, userID, accountID)
 	if err != nil {
 		return nil, err
@@ -356,7 +331,7 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 	if err != nil {
 		return nil, err
 	}
-	if err := insertCleanupJob(ctx, tx, cleanupJobID, userID, accountID, attachmentPaths, upstreamSiteIDs); err != nil {
+	if err := insertCleanupJob(ctx, tx, cleanupJobID, userID, accountID, upstreamSiteIDs); err != nil {
 		return nil, err
 	}
 
@@ -377,6 +352,18 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 			return nil, err
 		}
 	}
+	for _, stmt := range retiredWorkspaceDeleteStatements {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, stmt.Name).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.Exec(ctx, stmt.SQL, userID, accountID); err != nil {
+			return nil, err
+		}
+	}
 	result, err := tx.Exec(ctx, `DELETE FROM admin_accounts WHERE user_id = $1 AND id = $2`, userID, accountID)
 	if err != nil {
 		return nil, err
@@ -388,28 +375,24 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 		return nil, err
 	}
 	return &DeleteResult{
-		CleanupJobID:           cleanupJobID,
-		DeletedID:              accountID,
-		WasCurrent:             wasCurrent,
-		CurrentAdminAccountID:  nextCurrentID,
-		AttachmentStoragePaths: attachmentPaths,
-		UpstreamSiteIDs:        upstreamSiteIDs,
+		CleanupJobID:          cleanupJobID,
+		DeletedID:             accountID,
+		WasCurrent:            wasCurrent,
+		CurrentAdminAccountID: nextCurrentID,
+		UpstreamSiteIDs:       upstreamSiteIDs,
 	}, nil
 }
 
-func insertCleanupJob(ctx context.Context, tx pgx.Tx, id string, userID string, adminAccountID string, attachmentPaths []string, upstreamSiteIDs []string) error {
-	attachmentJSON, err := json.Marshal(attachmentPaths)
-	if err != nil {
-		return err
-	}
+// insertCleanupJob 记录工作区删除后的外部清理任务。attachment_paths 列属于已下线的工单附件清理，保持默认值不再写入。
+func insertCleanupJob(ctx context.Context, tx pgx.Tx, id string, userID string, adminAccountID string, upstreamSiteIDs []string) error {
 	upstreamJSON, err := json.Marshal(upstreamSiteIDs)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO workspace_cleanup_jobs (id, user_id, admin_account_id, attachment_paths, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, 0, now(), '', now(), now())
-	`, id, userID, adminAccountID, string(attachmentJSON), string(upstreamJSON))
+		INSERT INTO workspace_cleanup_jobs (id, user_id, admin_account_id, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, 0, now(), '', now(), now())
+	`, id, userID, adminAccountID, string(upstreamJSON))
 	return err
 }
 
@@ -427,7 +410,7 @@ func (r *Repository) ClaimDueCleanupJobs(ctx context.Context, limit int) ([]Clea
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, admin_account_id, attachment_paths, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at
+		RETURNING id, user_id, admin_account_id, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at
 	`, limit)
 	if err != nil {
 		return nil, err
@@ -458,12 +441,11 @@ func (r *Repository) MarkCleanupJobRetry(ctx context.Context, id string, attempt
 
 func scanCleanupJob(row pgx.Row) (CleanupJob, error) {
 	var job CleanupJob
-	var attachmentJSON, upstreamJSON []byte
-	err := row.Scan(&job.ID, &job.UserID, &job.AdminAccountID, &attachmentJSON, &upstreamJSON, &job.Attempts, &job.NextAttemptAt, &job.LastError, &job.CreatedAt, &job.UpdatedAt)
+	var upstreamJSON []byte
+	err := row.Scan(&job.ID, &job.UserID, &job.AdminAccountID, &upstreamJSON, &job.Attempts, &job.NextAttemptAt, &job.LastError, &job.CreatedAt, &job.UpdatedAt)
 	if err != nil {
 		return CleanupJob{}, err
 	}
-	_ = json.Unmarshal(attachmentJSON, &job.AttachmentStoragePaths)
 	_ = json.Unmarshal(upstreamJSON, &job.UpstreamSiteIDs)
 	return job, nil
 }

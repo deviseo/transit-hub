@@ -7,6 +7,31 @@ import (
 
 func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 	want := []string{
+		"mass_email_batch_items",
+		"mass_email_batches",
+		"group_rate_snapshots",
+		"user_activity_daily",
+		"user_activity_recharge_daily",
+		"user_activity_site_daily",
+		"user_activity_profiles",
+		"user_activity_sync_states",
+		"email_suppressions",
+		"strategy_settings",
+		"notification_channel_settings",
+		"smtp_settings",
+		"email_templates",
+		"my_site_states",
+		"dashboard_daily_stats",
+		"dashboard_balance_filter",
+		"dashboard_pricing",
+		"upstream_sites",
+	}
+	assertWorkspaceDeleteStatements(t, workspaceDeleteStatements, want)
+}
+
+// 已下线功能的表：删除工作区时仍清理老安装里的历史数据（表存在时），但不再参与 legacy 工作区归属。
+func TestRetiredWorkspaceDeleteStatementsCoverRemovedFeatureTables(t *testing.T) {
+	want := []string{
 		"lottery_reward_jobs",
 		"lottery_winners",
 		"lottery_draws",
@@ -15,8 +40,6 @@ func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 		"lottery_audit_logs",
 		"lottery_campaigns",
 		"lottery_embed_configs",
-		"mass_email_batch_items",
-		"mass_email_batches",
 		"group_rate_campaign_items",
 		"group_rate_campaigns",
 		"connection_health_target_action_states",
@@ -34,49 +57,49 @@ func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 		"tickets",
 		"ticket_embed_configs",
 		"leaderboard_embed_configs",
-		"group_rate_snapshots",
-		"user_activity_daily",
-		"user_activity_recharge_daily",
-		"user_activity_site_daily",
-		"user_activity_profiles",
-		"user_activity_sync_states",
-		"email_suppressions",
-		"strategy_settings",
-		"notification_channel_settings",
-		"smtp_settings",
-		"email_templates",
-		"my_site_states",
 		"real_connections",
-		"dashboard_daily_stats",
-		"dashboard_balance_filter",
-		"dashboard_pricing",
-		"upstream_sites",
 	}
-	if len(workspaceDeleteStatements) != len(want) {
-		t.Fatalf("delete statement count = %d, want %d", len(workspaceDeleteStatements), len(want))
-	}
+	assertWorkspaceDeleteStatements(t, retiredWorkspaceDeleteStatements, want)
 
-	seen := map[string]string{}
-	for i, stmt := range workspaceDeleteStatements {
+	active := map[string]bool{}
+	for _, stmt := range workspaceDeleteStatements {
+		active[stmt.Name] = true
+	}
+	legacy := map[string]bool{}
+	for _, table := range legacyWorkspaceTables {
+		legacy[table.Name] = true
+	}
+	for _, stmt := range retiredWorkspaceDeleteStatements {
+		if active[stmt.Name] {
+			t.Fatalf("%s is listed as both active and retired", stmt.Name)
+		}
+		if legacy[stmt.Name] {
+			t.Fatalf("retired table %s must not create or assign legacy workspaces", stmt.Name)
+		}
+	}
+}
+
+func assertWorkspaceDeleteStatements(t *testing.T, statements []workspaceDeleteStatement, want []string) {
+	t.Helper()
+	if len(statements) != len(want) {
+		t.Fatalf("delete statement count = %d, want %d", len(statements), len(want))
+	}
+	for i, stmt := range statements {
 		if stmt.Name != want[i] {
 			t.Fatalf("delete statement order[%d] = %s, want %s", i, stmt.Name, want[i])
 		}
-		seen[stmt.Name] = stmt.SQL
-	}
-	for _, table := range want {
-		sql, ok := seen[table]
-		if !ok {
-			t.Fatalf("missing delete statement for %s", table)
+		if !strings.Contains(stmt.SQL, "DELETE FROM "+stmt.Name+" ") {
+			t.Fatalf("%s delete targets another table: %s", stmt.Name, stmt.SQL)
 		}
-		if !strings.Contains(sql, "user_id = $1") {
-			t.Fatalf("%s delete is not scoped by user_id: %s", table, sql)
+		if !strings.Contains(stmt.SQL, "user_id = $1") {
+			t.Fatalf("%s delete is not scoped by user_id: %s", stmt.Name, stmt.SQL)
 		}
 		workspaceColumn := "admin_account_id = $2"
-		if table == "real_connections" {
+		if stmt.Name == "real_connections" {
 			workspaceColumn = "workspace_admin_account_id = $2"
 		}
-		if !strings.Contains(sql, workspaceColumn) {
-			t.Fatalf("%s delete is not scoped by workspace column %q: %s", table, workspaceColumn, sql)
+		if !strings.Contains(stmt.SQL, workspaceColumn) {
+			t.Fatalf("%s delete is not scoped by workspace column %q: %s", stmt.Name, workspaceColumn, stmt.SQL)
 		}
 	}
 }
@@ -91,13 +114,12 @@ func TestLegacyWorkspaceDescriptorsCoverDeleteTables(t *testing.T) {
 		if !ok {
 			t.Fatalf("legacy workspace descriptor missing for delete table %s", stmt.Name)
 		}
-		wantColumn := "admin_account_id"
-		if stmt.Name == "real_connections" {
-			wantColumn = "workspace_admin_account_id"
+		if column != "admin_account_id" {
+			t.Fatalf("legacy descriptor column for %s = %s, want admin_account_id", stmt.Name, column)
 		}
-		if column != wantColumn {
-			t.Fatalf("legacy descriptor column for %s = %s, want %s", stmt.Name, column, wantColumn)
-		}
+	}
+	if len(descriptors) != len(workspaceDeleteStatements) {
+		t.Fatalf("legacy descriptors (%d) must match active delete tables (%d)", len(descriptors), len(workspaceDeleteStatements))
 	}
 }
 
@@ -106,20 +128,24 @@ func TestWorkspaceDeleteStatementsDeleteChildrenBeforeParents(t *testing.T) {
 	for i, stmt := range workspaceDeleteStatements {
 		order[stmt.Name] = i
 	}
-	assertBefore := func(child string, parent string) {
+	retiredOrder := map[string]int{}
+	for i, stmt := range retiredWorkspaceDeleteStatements {
+		retiredOrder[stmt.Name] = i
+	}
+	assertBefore := func(order map[string]int, child string, parent string) {
 		t.Helper()
 		if order[child] >= order[parent] {
 			t.Fatalf("%s must be deleted before %s", child, parent)
 		}
 	}
 
-	assertBefore("ticket_attachments", "ticket_messages")
-	assertBefore("ticket_messages", "tickets")
-	assertBefore("mass_email_batch_items", "mass_email_batches")
-	assertBefore("group_rate_campaign_items", "group_rate_campaigns")
-	assertBefore("connection_health_group_policy_assignments", "connection_health_policies")
-	assertBefore("connection_health_policy_assignments", "connection_health_policies")
-	assertBefore("connection_health_model_targets", "connection_health_policies")
+	assertBefore(order, "mass_email_batch_items", "mass_email_batches")
+	assertBefore(retiredOrder, "ticket_attachments", "ticket_messages")
+	assertBefore(retiredOrder, "ticket_messages", "tickets")
+	assertBefore(retiredOrder, "group_rate_campaign_items", "group_rate_campaigns")
+	assertBefore(retiredOrder, "connection_health_group_policy_assignments", "connection_health_policies")
+	assertBefore(retiredOrder, "connection_health_policy_assignments", "connection_health_policies")
+	assertBefore(retiredOrder, "connection_health_model_targets", "connection_health_policies")
 }
 
 func TestWorkspaceDeleteSQLDocumentsCurrentFallbackAndLocks(t *testing.T) {

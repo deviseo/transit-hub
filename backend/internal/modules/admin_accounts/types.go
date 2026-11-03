@@ -49,32 +49,29 @@ type DeleteResponse struct {
 }
 
 type DeleteResult struct {
-	CleanupJobID           string
-	DeletedID              string
-	WasCurrent             bool
-	CurrentAdminAccountID  string
-	AttachmentStoragePaths []string
-	UpstreamSiteIDs        []string
+	CleanupJobID          string
+	DeletedID             string
+	WasCurrent            bool
+	CurrentAdminAccountID string
+	UpstreamSiteIDs       []string
 }
 
 type CleanupJob struct {
-	ID                     string
-	UserID                 string
-	AdminAccountID         string
-	AttachmentStoragePaths []string
-	UpstreamSiteIDs        []string
-	Attempts               int
-	NextAttemptAt          time.Time
-	LastError              string
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID              string
+	UserID          string
+	AdminAccountID  string
+	UpstreamSiteIDs []string
+	Attempts        int
+	NextAttemptAt   time.Time
+	LastError       string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type WorkspaceCleanupPayload struct {
-	UserID                 string
-	AdminAccountID         string
-	AttachmentStoragePaths []string
-	UpstreamSiteIDs        []string
+	UserID          string
+	AdminAccountID  string
+	UpstreamSiteIDs []string
 }
 
 type requestError string

@@ -260,33 +260,14 @@ type dashboardSessionCleaner interface {
 	Delete(ctx context.Context, userID string, adminAccountID string) error
 }
 
-type ticketEmbedSessionCleaner interface {
-	DeleteWorkspace(ctx context.Context, userID string, adminAccountID string) error
-}
-
-type leaderboardEmbedSessionCleaner interface {
-	DeleteWorkspace(ctx context.Context, userID string, adminAccountID string) error
-}
-
-type lotteryEmbedSessionCleaner interface {
-	DeleteWorkspace(ctx context.Context, userID string, adminAccountID string) error
-}
-
-type attachmentCleaner interface {
-	Delete(storagePath string) error
-}
-
 type upstreamSiteCleaner interface {
 	CleanupDeletedWorkspaceSites(ctx context.Context, userID string, siteIDs []string) error
 }
 
+// workspaceCleanup 在工作区删除提交后清理数据库之外的状态（Redis 会话、上游站点缓存）。
 type workspaceCleanup struct {
-	dashboardSessions   dashboardSessionCleaner
-	ticketSessions      ticketEmbedSessionCleaner
-	leaderboardSessions leaderboardEmbedSessionCleaner
-	lotterySessions     lotteryEmbedSessionCleaner
-	attachments         attachmentCleaner
-	upstreamSites       upstreamSiteCleaner
+	dashboardSessions dashboardSessionCleaner
+	upstreamSites     upstreamSiteCleaner
 }
 
 func (c workspaceCleanup) CleanupDeletedWorkspace(ctx context.Context, payload admin_accounts.WorkspaceCleanupPayload) error {
@@ -296,34 +277,9 @@ func (c workspaceCleanup) CleanupDeletedWorkspace(ctx context.Context, payload a
 			errs = append(errs, fmt.Errorf("dashboard session cleanup: %w", err))
 		}
 	}
-	if c.ticketSessions != nil {
-		if err := c.ticketSessions.DeleteWorkspace(ctx, payload.UserID, payload.AdminAccountID); err != nil {
-			errs = append(errs, fmt.Errorf("ticket embed session cleanup: %w", err))
-		}
-	}
-	if c.leaderboardSessions != nil {
-		if err := c.leaderboardSessions.DeleteWorkspace(ctx, payload.UserID, payload.AdminAccountID); err != nil {
-			errs = append(errs, fmt.Errorf("leaderboard embed session cleanup: %w", err))
-		}
-	}
-	if c.lotterySessions != nil {
-		if err := c.lotterySessions.DeleteWorkspace(ctx, payload.UserID, payload.AdminAccountID); err != nil {
-			errs = append(errs, fmt.Errorf("lottery embed session cleanup: %w", err))
-		}
-	}
 	if c.upstreamSites != nil {
 		if err := c.upstreamSites.CleanupDeletedWorkspaceSites(ctx, payload.UserID, payload.UpstreamSiteIDs); err != nil {
 			errs = append(errs, fmt.Errorf("upstream site cleanup: %w", err))
-		}
-	}
-	if c.attachments != nil {
-		for _, path := range payload.AttachmentStoragePaths {
-			if strings.TrimSpace(path) == "" {
-				continue
-			}
-			if err := c.attachments.Delete(path); err != nil {
-				errs = append(errs, fmt.Errorf("ticket attachment cleanup %q: %w", path, err))
-			}
 		}
 	}
 	return errors.Join(errs...)
