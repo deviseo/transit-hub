@@ -117,10 +117,7 @@ export default {
     menu: {
       dashboard: '仪表盘',
       upstream: '上游管理',
-      groupManagement: '分组管理',
       groupRates: '分组倍率',
-      groupAssociations: '调价映射',
-      connectionHealth: '分组健康',
       settings: '系统设置',
       userActivity: '用户活跃',
       massEmail: '群发邮件',
@@ -214,19 +211,13 @@ export default {
       },
       attention: {
         title: '需要关注',
-        subtitle: '健康状态与上游余额异常',
-        healthTitle: '目标健康状态异常',
-        healthDescription: '{attention} 个需观察，{suspended} 个已暂停或禁用',
-        failuresTitle: '近 24 小时探活失败',
-        failuresDescription: '查看失败分类与最近状态变化',
+        subtitle: '上游余额与连接异常',
         upstreamTitle: '上游余额待处理',
         upstreamDescription: '存在余额未知或连接异常的上游站点',
         allClearTitle: '当前没有明确异常',
-        allClearDescription: '健康目标和上游余额暂未发现需要处理的问题。',
+        allClearDescription: '上游余额与连接暂未发现需要处理的问题。',
         unavailableTitle: '运行状态暂时不可用',
-        unavailableDescription: '核心经营数据不受影响，请稍后重试健康与上游状态。',
-        lastProbe: '最近探活：{time}',
-        neverProbed: '尚无记录',
+        unavailableDescription: '核心经营数据不受影响，请稍后重试上游状态。',
         refresh: '刷新运行状态',
         partialLoadError: '部分运行数据加载失败'
       },
@@ -418,741 +409,6 @@ export default {
         }
       }
     },
-    groupAssociations: {
-      title: '调价映射',
-      detailsLabel: '调价映射详情',
-      subtitle: '共 {count} 组 · {associated} 组已配置数据源 · {unassociated} 组未配置',
-      common: {
-        placeholder: '—',
-        multiplier: '{value}x',
-        unknown: '未知平台'
-      },
-      actions: {
-        refresh: '刷新', retry: '重试', cleanup: '清理失效配置', editTargets: '编辑数据源', manage: '管理调价映射', openProfitCalculator: '打开利润预算计算器', customProfitCalculator: '自定义利润计算器'
-      },
-      filters: {
-        searchLabel: '搜索调价映射', searchPlaceholder: '搜索自有分组或上游数据源...',
-        all: '全部', associated: '已配置', unassociated: '未配置', stale: '失效'
-      },
-      listAria: '我的分组列表',
-      targetCount: '{count} 个数据源',
-      detailSubtitle: '当前使用 {count} 个上游分组作为调价数据源',
-      staleOwnGroup: '管理员站点已不再返回此分组。配置仍被保留，请确认后再清理。',
-      staleTarget: '上游已失效',
-      metrics: {
-        ownMultiplier: '我的分组倍率',
-        targets: '调价数据源',
-        budgetMargin: '倍率预算毛利率',
-        marginRange: '{minimum} - {maximum}',
-        autoPricing: '自动调价',
-        effectiveUpstream: '上游生效倍率',
-        effectiveCost: '换算后成本倍率'
-      },
-      profitCalculator: {
-        titleWithGroup: '{group} · 利润预算',
-        customTitle: '自定义利润计算器',
-        close: '关闭利润预算',
-        modeLabel: '利润计算方式',
-        groupMode: '当前分组',
-        customMode: '自定义计算',
-        revenueLabel: '模拟销售额（CNY）',
-        revenuePlaceholder: '请输入模拟销售额',
-        invalidRevenue: '请输入大于或等于 0 的有效金额。',
-        ownMultiplier: '我的售卖倍率',
-        upstreamCostMultiplier: '上游成本倍率（已换算）',
-        saleMultiplier: '我的售卖倍率',
-        multiplierPlaceholder: '请输入倍率',
-        invalidUpstreamMultiplier: '请输入大于或等于 0 的有效倍率。',
-        invalidSaleMultiplier: '请输入大于 0 的有效倍率。',
-        profitRange: '预计毛利区间',
-        profitMargin: '预计利润率',
-        amountRange: '{minimum} - {maximum}',
-        estimatedCost: '预计进货成本',
-        estimatedProfit: '预计毛利',
-        noTargetsTitle: '暂无可计算的上游',
-        noTargetsDescription: '请先为该分组配置有效的调价数据源。'
-      },
-      sections: {
-        targets: '调价数据源', targetsSummary: '共 {count} 个上游数据源', autoPricing: '自动调价策略'
-      },
-      noTargets: {
-        title: '尚未配置调价数据源', description: '添加上游数据源后，可为该分组配置自动调价。'
-      },
-      targetsDrawer: {
-        titleWithGroup: '{group} · 编辑调价数据源', selectedCount: '已选择 {count} 个上游分组',
-        searchLabel: '搜索上游分组', searchPlaceholder: '搜索站点、平台或分组...',
-        emptyTitle: '没有匹配的上游分组', emptyDescription: '请调整搜索条件或先同步上游站点。',
-        unknownMultiplier: '暂无倍率', autoMultiplier: '自动', multiplier: '{value}x', stale: '已失效',
-        close: '关闭数据源编辑', cancel: '取消', save: '保存数据源', saving: '保存中...'
-      },
-      cleanup: {
-        title: '清理失效配置',
-        description: '将删除“{group}”的调价数据源和自动调价配置。此操作不会删除远端分组。',
-        cancel: '取消', confirm: '确认清理'
-      },
-      errors: {
-        primaryTargetRequired: '当前主上游正在用于自动调价。请先修改或关闭自动调价，再移除此关联。'
-      },
-      close: '关闭',
-      empty: '暂无分组映射数据。',
-      loadError: '加载分组列表失败。',
-      runError: '执行自动调价失败，请重试。',
-      unassociatedLabel: '未配置数据源',
-      unassociatedMultiplier: '暂无倍率',
-      columns: {
-        index: '序号',
-        ownGroup: '我的分组',
-        platform: '平台',
-        groupType: '分组类型',
-        status: '状态',
-        ownMultiplier: '我的倍率',
-        upstreamGroup: '对接分组',
-        upstreamMultiplier: '对接倍率',
-        autoPricing: '自动调价'
-      },
-      exclusiveLabels: {
-        public: '公开',
-        exclusive: '专属'
-      },
-      statusLabels: {
-        active: '启用',
-        inactive: '禁用'
-      },
-      autoPricingTip: '开启后，同步倍率时自动在上游倍率基础上加价，支持固定值或百分比两种策略。',
-      autoPricingStatus: {
-        notConfigured: '未配置',
-        enabled: '已开启',
-        savedDisabled: '已保存，未启用'
-      },
-      autoPricingActions: {
-        configure: '配置',
-        edit: '编辑',
-        runNow: '立即执行',
-        runNowFor: '立即执行 {group} 的自动调价'
-      },
-      lastRun: {
-        never: '从未执行',
-        summary: '上次：{status} · {trigger} · {time}',
-        reason: '原因：{reason}',
-        triggerManual: '手动',
-        triggerAfterSync: '同步后',
-        triggerUnknown: '未知触发',
-        reasonUnknown: '暂无详情',
-        status: {
-          applied: '成功',
-          skipped: '跳过',
-          thresholdExceeded: '超过阈值',
-          failed: '失败',
-          unknown: '无记录'
-        },
-        reasons: {
-          primary_upstream_not_affected: '主上游未受本次同步影响。',
-          missing_reference_multiplier: '缺少参考倍率。',
-          unknown_pricing_source: '无法识别定价来源。',
-          status_persist_failed: '执行状态保存失败。',
-          invalid_old_reference_multiplier: '原参考倍率无效。',
-          threshold_exceeded: '变化超过配置阈值。',
-          own_group_not_found_in_admin: '管理员站点中未找到我的分组。',
-          target_unchanged: '目标倍率未变化。',
-          remote_update_failed: '远端倍率更新失败。'
-        }
-      },
-      autoPricingDrawer: {
-        title: '自动调价配置',
-        titleWithGroup: '{group} · 自动调价配置',
-        enableLabel: '启用自动调价',
-        sourceLabel: '定价来源',
-        sourcePrimaryUpstream: '指定主上游',
-        sourceLowestUpstream: '最低倍率上游',
-        sourceHighestUpstream: '最高倍率上游',
-        sourceAverageUpstream: '平均倍率',
-        primaryUpstreamLabel: '主上游',
-        primaryUpstreamPlaceholder: '请选择主上游',
-        strategyLabel: '加价方式',
-        strategyFixed: '固定加价',
-        strategyPercentage: '百分比加价',
-        fixedIncreaseLabel: '固定加价值',
-        percentageIncreaseLabel: '百分比加价值',
-        thresholdLabel: '跟随阈值',
-        thresholdHelp: '上游变化不超过该百分比时才自动跟随',
-        minMultiplierLabel: '最低倍率',
-        maxMultiplierLabel: '最高倍率',
-        estimatedMultiplier: '预估倍率',
-        save: '保存配置',
-        cancel: '取消',
-        noUpstreams: '当前分组未关联任何上游，无法配置自动调价。',
-        noMultiplierData: '暂无可用上游倍率数据，无法计算预估倍率。',
-        tips: {
-          minMultiplier: '自动计算出的倍率不会低于这个值。用于防止价格过低，保护最低利润。留空表示不限制最低倍率。',
-          maxMultiplier: '自动计算出的倍率不会高于这个值。用于防止价格突然过高，影响用户使用。留空表示不限制最高倍率。',
-          threshold: '上游倍率变化在该百分比以内时才自动跟随。超过阈值时应等待人工确认，避免上游价格异常波动导致你的分组价格被带偏。',
-          minMultiplierAria: '查看最低倍率说明',
-          maxMultiplierAria: '查看最高倍率说明',
-          thresholdAria: '查看跟随阈值说明',
-        },
-        guidance: {
-          title: '建议设置',
-          minMultiplier: '最低倍率：你的成本价 + 最低利润',
-          maxMultiplier: '最高倍率：你觉得用户还能接受的最高价',
-          threshold: '跟随阈值：10%',
-          exampleTitle: '计算示例',
-          exampleOld: '上游原倍率：1.00',
-          exampleNew: '上游新倍率：1.08',
-          exampleThreshold: '跟随阈值：10%',
-          exampleMarkup: '加价方式：上游 + 0.10',
-          exampleMin: '最低倍率：1.00',
-          exampleMax: '最高倍率：1.30',
-          exampleResult: '变化幅度为 8%，未超过 10%，因此允许自动跟随；最终倍率为 1.18，并且处于 1.00 到 1.30 的限制范围内。',
-        },
-        notify: {
-          sectionTitle: '自动调价成功通知',
-          enableLabel: '调价成功后发送通知',
-          enableHelp: '当自动调价实际更新了分组倍率后，通过机器人发送通知。',
-          botSelectLabel: '通知机器人',
-          botSelectPlaceholder: '选择要通知的机器人',
-          noBots: '暂无可用机器人，请先在系统设置的通知与渠道中配置机器人。',
-          templateLabel: '通知模板',
-          templateHelp: '留空使用默认模板。支持以下变量：',
-          templatePlaceholder: '留空则使用默认模板',
-          defaultTemplate: '【自动调价】{ownGroup} 已自动从 {oldOwnMultiplier}x 调整为 {newOwnMultiplier}x。参考来源：{upstreamSiteName} / {upstreamGroupName}，参考倍率 {oldReference}x -> {newReference}x。',
-          variablesTitle: '可用变量',
-          varOwnGroup: '我的分组名',
-          varUpstreamSiteName: '上游站点名',
-          varUpstreamGroupName: '上游分组名/参考来源',
-          varOldReference: '旧参考倍率',
-          varNewReference: '新参考倍率',
-          varOldOwnMultiplier: '调整前倍率',
-          varNewOwnMultiplier: '调整后倍率',
-          varStrategy: '加价策略',
-          varFixedIncrease: '固定加价值',
-          varPercentageIncrease: '百分比加价值',
-          varThreshold: '跟随阈值',
-          copied: '已复制',
-        },
-        errors: {
-          primaryRequired: '指定主上游模式下必须选择主上游。',
-          increaseNonNegative: '加价值不能为负数。',
-          thresholdNonNegative: '阈值不能为负数。',
-          multiplierNonNegative: '倍率不能为负数。',
-          minGreaterThanMax: '最低倍率不能大于最高倍率。',
-          invalidConfig: '自动调价配置无效，请检查后重试。',
-          notifyBotsRequired: '开启通知时必须至少选择一个机器人。',
-        }
-      },
-      save: '保存',
-      saveSuccess: '已保存',
-      saving: '保存中...',
-      saveError: '保存失败，请重试。'
-    },
-    connectionHealth: {
-      title: '分组健康',
-      subtitle: '对当前 admin workspace 下分组内的账号/渠道做独立轻量探活，监控健康状态并支持自动降级/恢复。',
-      adminSubtitle: '展示当前 admin workspace 下的全量分组，点击账号数查看分组下账号/渠道及独立探活状态。',
-      simplifiedSubtitle: '以 admin 上游分组为单位配置探活、自动降级与流量优先级，新增账号或渠道会自动继承分组策略。',
-      summaryLabel: '分组健康汇总',
-      groupListLabel: '上游分组列表',
-      refresh: '刷新',
-      empty: '当前 admin workspace 下暂无可探活的账号/渠道。',
-      adminEmpty: '当前 admin workspace 下暂无分组。',
-      notConnected: '未对接',
-      notProbed: '尚未探活',
-      notConfigured: '未配置探活模型',
-      groupTypes: {
-        public: '公开',
-        exclusive: '专属',
-        subscription: '订阅'
-      },
-      groupStatusLabels: {
-        active: '启用',
-        inactive: '禁用'
-      },
-      adminColumns: {
-        name: '名称',
-        platform: '平台',
-        type: '类型',
-        multiplier: '倍率',
-        accounts: '账号数',
-        accountsUnit: '个',
-        status: '分组状态',
-        probeOverview: '探活概览',
-        detail: '详情'
-      },
-      adminOverview: {
-        probeable: '可探活 {probeable}/{total}',
-        noneProbeable: '无可探活目标',
-        noProbe: '{count} 个待探活'
-      },
-      groupList: {
-        monitored: '已监控 {count}/{total}'
-      },
-      groupDetail: {
-        multiplierPriority: '按倍率排序',
-        subtitle: '已监控 {monitored}/{total} 个账号或渠道',
-        enableMonitoring: '配置分组策略',
-        manageMonitoring: '管理分组策略',
-        unmonitored: '未纳入自动监控',
-        policyCount: '{name} 等 {count} 个',
-        unprobeable: '暂不可探活',
-        upstreamStatus: '上游状态：{status}',
-        unknownUpstreamStatus: '未知',
-        priorityConflict: '检测到 {count} 个上游优先级被人工修改。为避免覆盖人工设置，系统已停止管理这些目标的优先级。重新保存分组策略后可重新接管。',
-        priorityConflictShort: '上游优先级已被人工修改，系统已停止自动覆盖',
-        empty: '该分组当前没有账号或渠道。',
-        metrics: {
-          accounts: '账号/渠道',
-          monitored: '自动监控',
-          probeable: '可手动探活',
-          lastProbe: '最近探活'
-        },
-        statusBreakdown: {
-          title: '当前分组探活状态',
-          hint: '健康状态按模型统计；待首次探活和不可探活按账号/渠道统计，不代表上游原始启停状态。',
-          healthy: '健康模型',
-          degraded: '降级模型',
-          suspended: '探活暂停',
-          observing: '恢复观察',
-          recovering: '逐步恢复',
-          disabled: '手动禁用',
-          notProbed: '待首次探活',
-          unprobeable: '不可探活目标'
-        },
-        assignmentSources: {
-          none: '无策略来源',
-          target: '账号单独策略',
-          group: '继承分组策略',
-          mixed: '分组与账号策略合并'
-        },
-        columns: {
-          expand: '展开模型结果',
-          account: '账号/渠道',
-          health: '健康状态',
-          strategy: '生效策略',
-          priority: '上游优先级',
-          multiplier: '有效倍率',
-          strategyMultiplier: '我的分组倍率',
-          upstreamMultiplier: '上游 API Key 倍率',
-          actions: '操作'
-        },
-        upstreamMultiplierPending: '关联后展示倍率',
-        models: {
-          empty: '该目标还没有模型探活结果。',
-          latency: '延迟 {value} ms',
-          lastProbe: '最近 {value}',
-          weight: '健康权重 {value}%'
-        }
-      },
-      setup: {
-        title: '配置分组自动化',
-        stepsLabel: '分组自动化配置步骤',
-        steps: {
-          '1': '生效范围',
-          '2': '运行策略',
-          '3': '确认启用'
-        },
-		generatedPolicyName: '{group} - 分组自动化策略',
-		retry: '重新加载',
-        scope: {
-          title: '选择策略生效目标',
-          description: '默认选择当前分组的全部账号或渠道。取消勾选的目标不会自动探活、自动降级或调整优先级。',
-          modelsUnknown: '上游未返回模型列表',
-          probeable: '可探活',
-          pending: '凭据待完善',
-          futureHint: '以后加入该上游分组的新目标会自动继承本策略；已取消勾选的目标会继续保持排除。'
-        },
-        strategy: {
-          title: '选择运行策略',
-          description: '可以创建探活策略、仅倍率优先级策略，也可以绑定已有高级策略。',
-          options: {
-            multiplier: {
-              title: '倍率优先',
-              description: '健康目标中，倍率越低，上游优先级越高；故障目标仍会优先降级。'
-            },
-            multiplierOnly: {
-              title: '仅倍率优先级',
-              description: '只按分组倍率调整上游优先级，不发起模型探活，也不执行降级或远端动作。'
-            },
-            stable: {
-              title: '稳定优先',
-              description: '自动探活并按平台能力禁用故障目标、恢复健康目标，不修改日常优先级。'
-            },
-            monitor: {
-              title: '仅监控',
-              description: '记录健康状态和事件，不执行任何上游禁用、恢复或优先级调整。'
-            },
-            existing: {
-              title: '使用已有策略',
-              description: '绑定一个或多个高级探活策略，适合需要自定义阈值和预算的场景。'
-            }
-          },
-          modelsLabel: '探活模型',
-          modelsPlaceholder: '每行一个模型名称，例如 gpt-4o-mini',
-          modelsDetected: '当前将探活 {count} 个模型',
-          modelSuggestions: {
-            common: '已根据当前选择，默认推荐 {count} 个所有目标共同可用的模型；未额外请求上游。',
-            discovered: '未找到完整共同模型，已从现有模型信息中默认推荐 {count} 个；可继续修改。'
-          },
-          providerLabel: '模型 Provider',
-          remoteActionLabel: '执行上游动作',
-          remoteActionHelp: '故障和恢复时按平台能力自动禁用或恢复目标',
-          multiplierOnlyTitle: '仅同步倍率优先级',
-          multiplierOnlyHelp: '后台约每 30 秒读取一次最新分组倍率；倍率越低，优先级越高。此模式不需要模型或上游探活凭据。',
-          multiplierMissingTitle: '当前分组没有有效倍率',
-          multiplierMissingHelp: '请先在上游设置该分组倍率后再启用倍率排序。系统不会用 1x 兜底，也不会修改当前优先级。'
-        },
-        confirm: {
-          title: '确认分组配置',
-          description: '保存后会立即建立分组级策略关系，后台调度器将在下一轮扫描时生效。',
-          scope: '生效范围',
-          scopeValue: '选择 {selected} 个，排除 {excluded} 个',
-          strategy: '运行策略',
-          models: '探活模型数',
-          fromPolicy: '由已有策略决定',
-          notApplicable: '不需要',
-          remoteAction: '上游自动动作',
-          enabled: '已启用',
-          disabled: '未启用',
-          multiplierRule: '倍率排序规则：健康状态优先于价格；同一目标属于多个分组时使用最低倍率；倍率越低，写入上游的优先级越高。若检测到人工修改，系统会停止覆盖并提示冲突。',
-          multiplierOnlyRule: '仅倍率规则：不读取健康状态、不发起模型探活；同一目标属于多个分组时使用最低倍率。停用或解绑策略后会恢复接管前的优先级，人工修改仍受冲突保护。'
-        },
-        back: '上一步',
-        next: '下一步',
-        save: '保存分组策略'
-      },
-      probeUnavailableReasons: {
-        credential_unavailable: '无法安全获取上游凭据，暂不可探活',
-        secure_verification_required: '需要上游 root 安全验证后才能读取 channel key',
-        base_url_unavailable: '缺少可用的 Base URL，暂不可探活',
-        model_unavailable: '没有可用的探活模型（请在探活策略中配置）',
-        export_unavailable: '上游账号导出接口不可用，无法获取凭据',
-        credentials_redacted: '上游凭据已脱敏，无法用于探活'
-      },
-      accountsDialog: {
-        multiplier: '倍率',
-        unknownPlatform: '未知平台',
-        unknownStatus: '未知状态',
-        empty: '该分组下暂无账号/渠道。',
-        noProbeData: '无探活数据',
-        unprobeable: '不可探活',
-        unassignedPolicy: '未分配策略',
-        unassignedPolicyHint: '未分配策略，不会自动探活，仍可手动一次性探活。',
-        assignedPolicyCount: '{name} 等 {count} 个',
-        assignPolicy: '分配策略',
-        columns: {
-          name: '名称',
-          platform: '平台',
-          type: '类型',
-          status: '状态',
-          priority: '优先级',
-          concurrency: '并发',
-          weight: '权重',
-          models: '模型',
-          probeStatus: '探活状态',
-          policyAssignment: '策略分配',
-          actions: '操作'
-        }
-      },
-      summary: {
-        total: '探活目标数',
-        unconfigured: '未配置探活',
-        monitoredGroups: '已监控分组',
-        priorityConflicts: '优先级冲突'
-      },
-      stateLabels: {
-        healthy: '健康',
-        degraded: '降级',
-        suspended: '探活暂停',
-        observing: '观察中',
-        recovering: '恢复中',
-        disabled: '已禁用'
-      },
-      providerLabels: {
-        gemini: 'Gemini',
-        anthropic: 'Anthropic',
-        openai: 'OpenAI',
-        custom: '自定义'
-      },
-      filters: {
-        allGroups: '全部我的分组',
-        allSites: '全部上游站点',
-        allStates: '全部状态',
-        allProviders: '全部模型类型',
-        searchGroup: '搜索分组名称...',
-        allPlatforms: '全部平台',
-        allTypes: '全部类型'
-      },
-      columns: {
-        model: '模型',
-        state: '状态',
-        weight: '权重',
-        lastProbe: '最近探活',
-        lastError: '最近错误'
-      },
-      actions: {
-        probe: '手动探活',
-        disable: '禁用',
-        restore: '恢复',
-        viewEvents: '查看事件'
-      },
-      errorKeys: {
-        ok: '正常',
-        network_fluctuation: '网络波动',
-        rate_limited: '触发限流',
-        server_error: '上游服务异常',
-        auth: '鉴权失败',
-        model_not_found: '模型不存在',
-        invalid_response: '响应无法解析',
-        unsupported: '暂不支持',
-        manual_disable: '人工禁用',
-        manual_restore: '人工恢复',
-        policy_unmanaged_restore: '策略已解绑，恢复上游原始状态',
-        credential_unavailable: '无法安全获取上游凭据，暂不可探活',
-        secure_verification_required: '需要完成上游 Root 安全验证后才能读取渠道密钥',
-        base_url_unavailable: '缺少可用的 Base URL，暂不可探活',
-        model_unavailable: '没有可用的探活模型，请先配置模型',
-        export_unavailable: '上游账号导出接口不可用，无法取得探活所需凭据',
-        credentials_redacted: '上游凭据已脱敏，无法用于探活'
-      },
-      topActions: {
-        runFlow: '运行流程',
-        policies: '自动化策略',
-        events: '探活事件'
-      },
-      events: {
-        title: '最近探活与远端动作',
-        empty: '暂无事件记录。',
-        emptyForConnection: '暂无该目标事件记录。',
-        showAll: '查看全部'
-      },
-      eventsDialog: {
-        subtitle: '查看该探活目标（账号/渠道）各模型的探活健康状态。',
-        globalSubtitle: '最近的探活与远端动作事件。',
-        viewingConnection: '正在查看该目标事件',
-        card: {
-          latencyLabel: '对话延迟',
-          pingLabel: '节点 PING',
-          availabilityLabel: '可用率',
-          recentRecordsLabel: '近 60 次记录',
-          past: 'PAST',
-          now: 'NOW',
-          noData: '-',
-          nextProbeIn: '下次探活：{seconds}s 后',
-          nextProbeDue: '下次探活：已到期，等待调度',
-          nextProbeNoPolicy: '下次探活：未配置策略',
-          nextProbeNeverProbed: '下次探活：尚未探活',
-          nextProbeDisabled: '下次探活：已禁用，不自动探活',
-          remoteActionLine: '远端动作：{label}'
-        }
-      },
-      remoteActions: {
-        unsupported: '不支持（未真正调用上游）',
-        skippedIndependentProbe: '未开启自动远端动作，已跳过',
-        skippedTargetConflict: '检测到上游被人工修改，已停止自动覆盖',
-        skippedTargetInitiallyDisabled: '目标原本已在上游暂停，未执行自动启用',
-        sub2apiInactive: 'Sub2API 账号已切换为 inactive',
-        sub2apiActive: 'Sub2API 账号已切换为 active',
-        sub2apiInactiveFailed: 'Sub2API 账号切换 inactive 失败',
-        sub2apiActiveFailed: 'Sub2API 账号切换 active 失败',
-        newapiDisabled: 'NewAPI channel 已禁用',
-        newapiUpdateFailed: 'NewAPI channel 权重或状态更新失败',
-        newapiWeight: 'NewAPI channel 权重已调整为 {weight}',
-        other: '{action}'
-      },
-      policies: {
-        title: '自动化策略',
-        subtitle: '配置模型探活、自动降级或仅倍率优先级行为。',
-        create: '新建策略',
-        empty: '暂无自动化策略，点击"新建策略"开始配置。',
-        enabled: '已启用',
-        disabled: '已停用',
-        enable: '启用',
-        disable: '停用',
-        edit: '编辑',
-        delete: '删除策略',
-        deleteTitle: '删除自动化策略',
-        deleteDescription: '确定删除“{name}”吗？',
-        deleteWarning: '该策略的模型目标及账号、分组分配关系会同时删除，历史探活记录会保留。此操作无法撤销。',
-        cancelDelete: '取消',
-        confirmDelete: '确认删除',
-        remoteActionOn: '远端动作已开启',
-        allGroupsScope: '全部分组',
-        modelTargetCount: '{count} 个模型目标',
-        strategyModes: {
-          health_probe: '健康探活',
-          multiplier_only: '仅倍率优先级'
-        },
-        multiplierOnlySummary: '不执行探活，按倍率同步优先级'
-      },
-      policyDrawer: {
-        createTitle: '新建自动化策略',
-        editTitle: '编辑自动化策略',
-        nameLabel: '策略名称',
-        namePlaceholder: '输入策略名称',
-        enabledLabel: '启用该策略',
-        strategyModeLabel: '运行模式',
-        strategyModes: {
-          health_probe: {
-            title: '健康探活',
-            description: '探活、状态机与可选远端动作'
-          },
-          multiplier_only: {
-            title: '仅倍率优先级',
-            description: '只按倍率调整，不发起探活'
-          }
-        },
-        ownGroupLabel: '策略范围',
-        ownGroupAllOption: '当前 workspace 全部分组',
-        modelTargetsLabel: '模型探活目标',
-        addModelTarget: '添加模型',
-        modelNamePlaceholder: '模型名称，如 gpt-4o-mini',
-        modelEnabledLabel: '启用',
-        maxProbeTokensLabel: '最大 token',
-        probePromptPlaceholder: '探活 prompt（留空使用默认值）',
-        probeIntervalLabel: '探活间隔（秒）',
-        dailyBudgetLabel: '每日探活预算',
-        failureThresholdLabel: '失败阈值',
-        successThresholdLabel: '恢复成功阈值',
-        cooldownLabel: '冷却时间（秒）',
-        observationLabel: '观察时间（秒）',
-        recoveryStepLabel: '恢复步进百分比',
-        autoDegradeLabel: '自动降级',
-        autoDegradeHelp: '探活失败达到阈值时自动降低本地权重或暂停链路。',
-        autoRemoteActionLabel: '自动远端动作',
-        autoRemoteActionHelp: 'NewAPI 会修改 channel 权重/状态，Sub2API 会切换 admin 账号 active/inactive。关闭后只记录健康结果，不调用上游。',
-        priorityModeLabel: '上游流量优先级',
-        priorityModes: {
-          none: '保持上游设置',
-          multiplier: '按分组倍率排序'
-        },
-        priorityModeHelp: '开启倍率排序后，系统会在健康目标中优先使用更低倍率的上游；故障状态始终优先降级。',
-        multiplierOnlySummaryTitle: '倍率越低，优先级越高',
-        multiplierOnlySummary: '系统约每 30 秒读取最新分组倍率并同步上游优先级，不解析探活凭据、不请求模型、不消耗探活预算，也不执行自动降级或远端动作。检测到人工修改时会停止覆盖。',
-        providerLabel: '模型 Provider',
-        providerPlaceholder: '请选择 Provider',
-        providerMismatchWarning: '检测到该策略已有的模型探活目标使用了不同的 provider。请在上方选择一个 provider，保存后所有模型探活目标都会统一为你选择的这个 provider。',
-        cancel: '取消',
-        save: '保存策略',
-        tooltips: {
-          ownGroup: '用于描述这条策略面向的业务分组范围。当前分组健康的独立探活按显式分配关系启用策略，并使用该策略的启用模型目标组成模型池；如果目标自带模型列表，则取"目标模型 ∩ 策略模型池"，否则使用策略模型池。',
-          modelTargets: '这里配置该策略要探活的模型列表，自动调度和手动探活都会按这些模型逐一执行探活请求。',
-          provider: '一个探活策略只能选择一个 provider（openai / anthropic / gemini / custom），下方新增的所有模型探活目标都会自动使用这个 provider，避免同一策略内混用不同厂商的模型。',
-          probeInterval: '自动调度会按"上次探活时间 + 该间隔"判断是否到期；连续探活失败时后端还会额外叠加 2/5/10 分钟的递增退避。',
-          dailyBudget: '限制当前 workspace 每天最多执行多少次真实探活请求；预算耗尽后会跳过真实探活请求，避免消耗过高，不代表系统异常。',
-          failureThreshold: '连续软失败达到该次数后会暂停/降级对应链路；某些硬失败（如鉴权失败）可能不经过降级直接暂停。',
-          successThreshold: '观察期内连续探活成功达到该次数后，才会判定链路真正恢复并回到健康状态。',
-          cooldown: '链路被暂停后，在这段冷却时间结束前，调度器不会对其发起自动探活。',
-          observation: '人工恢复或自动恢复流程触发后会进入观察期，这段时间的连续探活结果用于确认链路是否真的已经稳定。',
-          recoveryStep: '恢复过程中每次探活成功会按该百分比逐步提高本地权重，不是一次性恢复到 100%。',
-          autoDegrade: '开启后，探活结果会推进链路的健康状态机并调整本地转发权重；关闭后只记录探活结果，不会自动改变状态或权重。',
-          autoRemoteAction: '开启后，状态机触发降级/恢复时会执行受支持的上游动作：Sub2API 切换 admin 账号 active/inactive，NewAPI 调整 channel 权重/状态。关闭后只记录探活和状态结果。',
-          priorityMode: '按分组倍率排序会把较低倍率映射为较高的上游优先级。健康等级先于价格排序；同一目标属于多个分组时取最低倍率；检测到人工修改时会停止自动覆盖。'
-        },
-        runFlow: {
-          buttonLabel: '运行流程',
-          title: '探活运行流程说明',
-          subtitle: '面向后台管理员的完整机制说明，帮助理解策略、调度、状态机和手动探活之间的关系。',
-          close: '关闭运行流程说明',
-          steps: {
-            policyScope: {
-              title: '1. 策略如何生效',
-              description: '分组健康使用独立探活：探活目标是当前 admin workspace 下 admin 分组内的账号(Sub2API)/渠道(NewAPI)本身，不依赖 real_connections 对接链路。账号/渠道只有在被显式分配策略后才会自动探活；探活模型来自已分配策略的启用模型目标。如果该目标自带模型列表（如 NewAPI channel 的 models），则取"目标模型 ∩ 策略模型池"的交集，否则直接使用策略模型池。'
-            },
-            modelProvider: {
-              title: '2. 模型目标如何生效',
-              description: '每个探活策略只对应一个 provider（openai / anthropic / gemini / custom），策略下新增的所有模型探活目标都属于这一个 provider，不会出现同一策略内混用多个 provider 的模型。自动调度和手动探活都会按上一步得出的候选模型逐一发起探活请求。'
-            },
-            schedulerCadence: {
-              title: '3. 自动调度规则',
-              description: '后端有一个独立的调度器，大约每 30 秒扫描一次当前 workspace 下所有可探活目标的探活任务。调度的最小粒度是"一个探活目标（账号/渠道）+ 一个模型"，同一个目标下的多个候选模型会被拆成多个独立任务分别判断是否需要探活。'
-            },
-            dueCheck: {
-              title: '4. 到期判断',
-              description: '从未探活过的（目标，模型）组合会被尽快安排一次探活；已经探活过的组合，则按"上次探活时间 + 策略配置的探活间隔"计算下一次到期时间，到期后才会被重新排入探活队列。连续探活失败时，调度器还会引入 2 分钟 / 5 分钟 / 10 分钟的递增退避，避免对持续异常的目标频繁重试。'
-            },
-            budget: {
-              title: '5. 预算规则',
-              description: '每条策略都配置了"每日探活预算"，用于限制当前 workspace 每天最多执行多少次真实探活请求。预算耗尽后，调度器会跳过真实探活请求，也不会写入新的探活事件——即使某个模型已经到期，也可能持续显示"已到期，等待调度"而没有新事件产生，这是预算限制导致的正常现象，不代表系统故障。'
-            },
-            stateTransition: {
-              title: '6. 状态变化',
-              description: '探活成功会清零该模型的连续失败计数；连续软失败（例如网络波动、限流等可恢复错误）在达到失败阈值前会先进入降级状态、按恢复步进百分比逐步降低本地权重，达到失败阈值后会暂停该模型；部分硬失败（例如鉴权失败、模型不存在）可能会跳过降级直接暂停。'
-            },
-            cooldownObservation: {
-              title: '7. 冷却和观察',
-              description: '目标/模型被暂停后会进入策略配置的冷却时间，冷却结束前调度器不会对其发起自动探活。冷却结束、或管理员手动点击"恢复"之后会进入观察阶段：这段时间内的连续探活结果用于判断目标是否真的恢复稳定，只有连续成功次数达到"恢复成功阈值"才会真正回到健康状态。'
-            },
-            autoDegradeVsRemoteAction: {
-              title: '8. 自动降级和自动远端动作的区别',
-              description: '自动降级只影响系统内部的状态机和本地展示权重，不会调用任何上游平台接口，属于低风险开关。自动远端动作只有策略显式开启（自动远端动作=开）且状态机判定需要远端动作时才会真实调用上游：NewAPI 对接链路路径会修改 channel 权重/状态；当前分组健康独立探活路径下，Sub2API target 会切换 admin 账号 active/inactive（不调整 priority），NewAPI target 维度暂未实现远端动作，会记录为 unsupported，不会真正调用上游。策略未开启自动远端动作时，两条路径都只记录 skipped，绝不调用任何上游接口。'
-            },
-            manualProbe: {
-              title: '9. 手动探活',
-              description: '手动探活是一次性即时测试，与策略自动探活完全隔离：打开弹窗后，后端会用该 targetId 重新解析出的凭据临时请求上游 /v1/models 现查可用模型列表，前端不接触 base_url/key。用户选择模型后点击"开始测试"，结果只显示在弹窗内，不写入策略探活状态/事件，不消耗策略预算，不触发自动降级/恢复。自动策略探活只针对已经显式分配了策略的账号/channel；未分配策略的账号/渠道仍可以随时手动一次性探活，只是不会被后台调度器自动探活。'
-            },
-            nextProbeCopy: {
-              title: '10. "下次探活"文案说明',
-              description: '"下次探活：已到期，等待调度"表示按时间计算已经到了应该探活的时间点，但实际执行还需要等待后台调度器的下一轮扫描（约 30 秒一次）、当前并发探活的名额、当日探活预算是否充足，以及该目标是否仍处于失败退避或冷却期内——这几个条件同时满足后才会真正发起一次探活请求。'
-            }
-          }
-        },
-        errors: {
-          nameRequired: '请输入策略名称。',
-          modelTargetRequired: '至少需要一个已填写模型名称的探活目标。',
-          providerRequired: '请选择该策略的 provider。'
-        }
-      },
-      probeDialog: {
-        title: '选择探活模型',
-        cancel: '取消',
-        confirm: '开始探活',
-        emptyTitle: '当前目标没有可探活的模型。',
-        emptyHint: '请先在探活策略中添加并启用模型目标。',
-        fromPolicy: '来自策略「{name}」',
-        maxTokens: '探活上限 {count} token',
-        remoteActionOn: '远端动作已开启',
-        noResults: '探活已执行，但未获取到任何结果，请稍后重试或检查上游站点连通性。'
-      },
-      manualProbeDialog: {
-        title: '手动一次性探活',
-        loadingModels: '正在从上游获取可用模型列表...',
-        retryLoad: '重新加载',
-        empty: '未获取到任何可用模型。',
-        selectHint: '默认选择列表中的第一个模型；需要时可继续多选。',
-        startTest: '开始测试',
-        testing: '测试中...',
-        resultTitle: '测试结果',
-        resultEmpty: '尚未开始测试，选择模型后点击"开始测试"。',
-        latency: '{ms}ms',
-        selectedCount: '已选 {count} 个模型',
-        close: '关闭'
-      },
-      policyAssignment: {
-        title: '分配探活策略',
-        subtitle: '分配后台策略探活关系',
-        save: '保存',
-        cancel: '取消',
-        empty: '当前 workspace 暂无探活策略，请先创建策略。'
-      },
-      errors: {
-        request: '操作失败，请稍后重试。',
-        unknown: '暂时无法读取分组健康数据，请稍后重试。',
-        network: '网络异常，请检查连接后重试。',
-        notFound: '探活目标不存在或无权访问。',
-        noMatchingModels: '所选模型未匹配当前探活策略。',
-        accountsFetch: '该分组账号列表加载失败。',
-        targetNotFound: '探活目标不存在或不属于当前工作区。',
-        credentialUnavailable: '无法安全获取上游凭据，暂不可探活。',
-        secureVerificationRequired: '需要上游 root 安全验证后才能读取 channel key。',
-        baseUrlUnavailable: '缺少可用的 Base URL，暂不可探活。',
-        modelUnavailable: '没有可用的探活模型，请先在探活策略中配置。',
-        exportUnavailable: '上游账号导出接口不可用，无法获取凭据。',
-        credentialsRedacted: '上游凭据已脱敏，无法用于探活。',
-        modelListUnavailable: '无法获取上游模型列表，请稍后重试。',
-        modelListInvalid: '上游模型列表响应格式无法识别。',
-        multiplierRequired: '当前分组没有有效倍率，请先在上游设置倍率后再启用倍率排序。',
-        manualModelsRequired: '请至少选择一个模型再开始测试。',
-        policyNotFound: '所选策略不存在或不属于当前工作区。'
-      }
-    },
       upstream: {
         searchPlaceholder: '搜索站点名称...',
         addSite: '新增站点',
@@ -1235,9 +491,6 @@ export default {
         dedicatedMultiplierBadge: '专属倍率',
         dedicatedMultiplierTooltip: '该用户命中了 sub2api 专属倍率，业务计算使用右侧倍率。',
         unknownPlatform: '未知类型',
-        isConnected: '是否对接',
-        connected: '已对接',
-        disconnected: '未对接',
         lastUpdated: '更新时间',
         notSynced: '暂未同步'
       },
@@ -1292,7 +545,6 @@ export default {
         invalidResponse: '上游返回内容无法解析。',
         tokenMissing: '登录成功但未返回访问令牌。',
         detect: '无法自动识别平台，请手动选择平台后重试。',
-        sub2APIBulkUpdateUnsupported: '当前 Sub2API 版本不支持安全的账号字段更新，请升级 Sub2API 后重试。',
         verificationRequired: '该账号开启了两步验证，无法自动登录。请改用访问令牌方式添加站点。',
         newApiTokenRejected: '访问令牌校验失败：旧版 New-API 的系统访问令牌需要同时填写用户 ID；新版请确认令牌有效、未过期且勾选了所需权限。',
         unknown: '连接上游站点时发生未知错误。'
@@ -1329,22 +581,13 @@ export default {
         effectiveMultiplier: '换算后成本倍率',
         multiplierFormula: '上游 {upstream} × 充值系数 {recharge}',
         delta: '涨跌幅',
-        updatedAt: '更新时间',
-        actions: '操作'
+        updatedAt: '更新时间'
       },
       actions: {
         refresh: '刷新数据',
-        createCampaign: '创建活动',
         viewHistory: '查看历史',
         viewHistoryForRate: '查看 {site} · {group} 的涨跌幅历史，当前涨跌幅 {delta}',
-        closeHistory: '关闭历史',
-        editType: '修改',
-        closeEdit: '关闭修改分组类型',
-        connect: '配置对接',
-        closeConnect: '关闭对接窗口',
-        saveConnect: '确认对接',
-        cancel: '取消',
-        saveType: '保存类型'
+        closeHistory: '关闭历史'
       },
       filters: {
         searchLabel: '搜索',
@@ -1361,8 +604,6 @@ export default {
       },
       tabs: {
         all: '全部',
-        mapped: '已对接',
-        unmapped: '未对接',
         deleted: '已删除'
       },
       pagination: {
@@ -1374,9 +615,6 @@ export default {
       },
       status: {
         loading: '正在加载分组倍率...',
-        mapped: '已对接',
-        pricingMapped: '已用于调价',
-        unmapped: '未对接',
         deleted: '已删除'
       },
       empty: {
@@ -1396,72 +634,6 @@ export default {
         delta: '涨跌幅',
         createdAt: '记录时间'
       },
-      edit: {
-        title: '修改分组类型',
-        titleWithGroup: '修改 {site} · {group} 的分组类型',
-        description: '保存后会更新该站点分组的倍率类型，并刷新列表。',
-        typeLabel: '分组类型',
-        typePlaceholder: '请选择分组类型'
-      },
-      connect: {
-        titleWithGroup: '配置 {site} · {group}',
-        description: '选择由系统创建资源，或关联两端已经存在的资源。',
-        ownGroupLabel: '我的站点分组',
-        ownGroupPlaceholder: '请选择我的站点分组',
-        upstreamGroupLabel: '对接分组',
-        upstreamGroupPlaceholder: '请选择对接分组',
-        upstreamSiteLabel: '上游站点',
-        upstreamGroupNameLabel: '上游分组',
-        upstreamMultiplierLabel: '上游倍率',
-        upstreamPlatformLabel: '平台',
-        modeData: '数据统计',
-        modeReal: '自动创建资源',
-        realDescription: '创建上游 Key/Token，并在当前管理端创建账号或渠道。',
-        groupTypeLabel: '分组类型',
-        groupTypePlaceholder: '请选择分组类型',
-        groupTypeOpenai: 'OpenAI',
-        groupTypeAnthropic: 'Anthropic',
-        groupTypeGemini: 'Gemini',
-        groupTypeAntigravity: 'Antigravity',
-        channelTypeLabel: '渠道类型',
-        channelTypePlaceholder: '请选择渠道类型',
-        realNotSupported: '当前平台不支持真实对接',
-        realConnecting: '正在创建对接...',
-        realSuccess: '真实对接创建成功',
-        realFailed: '真实对接创建失败',
-        modeBind: '使用已有资源',
-        bindDescription: '关联已有上游 Key/Token 和管理端账号/渠道，不创建或接管远端资源。',
-        bindSelectKey: '上游 Key / Token',
-        bindKeysLoading: '正在加载当前分组的凭据...',
-        bindKeysEmpty: '当前上游分组没有可用凭据',
-        bindSelectAdminGroup: '管理端分组',
-        bindAdminGroupPlaceholder: '选择已有账号或渠道所在分组',
-        bindSelectAdminResource: '已有账号 / 渠道',
-        adminResourcesLoading: '正在读取管理端资源...',
-        adminResourcesEmpty: '该分组下没有可关联的账号或渠道',
-        adminResourcesFailed: '读取管理端已有资源失败，请刷新后重试。',
-        resourceActive: '启用',
-        resourceInactive: '停用',
-        addToPricingMapping: '同时作为调价数据源',
-        addToPricingMappingHint: '默认开启；取消后只建立流量连接，不加入自动调价映射。',
-        submitManaged: '创建并对接',
-        submitExisting: '保存已有资源关联',
-        bindFailed: '已有资源关联失败'
-      },
-      disconnect: {
-        action: '取消对接',
-        title: '取消对接',
-        description: '确认取消 {site} · {group} 的真实对接？',
-        unlinkOnly: '仅取消关联',
-        unlinkOnlyHint: '仅删除本地绑定记录，保留上游 Key 和 Admin 账号',
-        deleteAll: '删除账号和 Key',
-        deleteAllHint: '同时删除上游 Key 和 Admin 站点的转发账号',
-        removePricingMapping: '同时移除调价数据源',
-        removePricingMappingHint: '取消勾选可保留当前上游分组的调价映射。',
-        confirm: '确定',
-        disconnecting: '正在取消对接...',
-        failed: '取消对接失败'
-      },
       format: {
         multiplier: '{value}x',
         deltaMultiplier: '{value}x'
@@ -1469,15 +641,7 @@ export default {
       errors: {
         network: '网络或 CORS 请求失败，请检查接口地址与跨域配置。',
         request: '分组倍率接口请求失败，请稍后重试。',
-        unknown: '加载分组倍率时发生未知错误。',
-        refreshFailed: '变更已保存，但列表刷新失败。请重新刷新以更新视图。'
-      }
-    },
-    mySites: {
-      errors: {
-        invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。',
-        connectionExists: '该上游分组已经存在真实连接。',
-        managedDeleteOnly: '已有资源关联只能取消本地关联，不能删除远端资源。'
+        unknown: '加载分组倍率时发生未知错误。'
       }
     },
     massEmail: {
@@ -1978,7 +1142,6 @@ export default {
       varOldRate: '原倍率',
       varNewRate: '新倍率',
       varChangeDirection: '变更方向',
-      pricingAmount: '调价幅度',
       botNameLabel: '机器人名称标识',
       botNameDingtalkPlaceholder: '例如：钉钉主群',
       botNameWecomPlaceholder: '例如：企业微信主群',
@@ -2004,7 +1167,7 @@ export default {
       },
       proxy: {
         title: '网络代理',
-        subtitle: 'TransitHub 访问上游站点（包括你自己的 sub2api / new-api 站点）、校验工单身份和探活时使用的代理。修改后立即生效，无需重启。通知机器人不受影响，Telegram 有单独的代理设置。',
+        subtitle: 'TransitHub 访问上游站点（包括你自己的 sub2api / new-api 站点）时使用的代理。修改后立即生效，无需重启。通知机器人不受影响，Telegram 有单独的代理设置。',
         loading: '正在读取代理设置…',
         mode: {
           environment: '当前生效：沿用启动时的环境变量代理 {proxy}',
@@ -2069,18 +1232,7 @@ export default {
           balanceWarning: '余额预警',
           balanceWarningHelp: '当某个上游站点的余额（按充值倍率折合人民币）低于设定金额时，通过机器人发送预警通知。',
           multiplierChangeWarning: '倍率变更预警',
-          multiplierChangeWarningHelp: '当监控的对接分组倍率发生任何变动时，通过机器人发送通知。'
-        },
-        pricing: {
-          title: '分组倍率调价',
-          description: '配置对接后的某个分组在倍率上涨时的自动处理策略。',
-          enableAutoPricing: '自动调价',
-          enableAutoPricingHelp: '当对接的上游分组倍率上涨时，自动调整"我的分组"的倍率。',
-          strategy: '调价策略',
-          strategyFixed: '固定涨幅 (+)',
-          strategyPercentage: '百分比涨幅 (%)',
-          fixedValuePlaceholder: '例如 0.1',
-          percentageValuePlaceholder: '例如 10'
+          multiplierChangeWarningHelp: '上游站点任一分组的倍率发生变动时，通过机器人发送通知。'
         },
         channels: {
           title: '通知渠道配置',
@@ -2213,5 +1365,5 @@ export default {
         request: '系统请求失败，请稍后重试。'
       }
     }
-  },
+  }
 }

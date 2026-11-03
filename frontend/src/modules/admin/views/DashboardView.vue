@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { EChartsCoreOption } from 'echarts/core'
 import {
-  Activity,
   AlertTriangle,
   ArrowRight,
   CircleCheckBig,
@@ -39,7 +38,6 @@ import {
   type GroupUsageTodayResponse,
   type UpstreamBalanceBreakdownResponse,
 } from '../api/dashboardAdmin'
-import { getConnectionHealthStoredSummary } from '../api/connectionHealth'
 import { useDashboardAdmin } from '../composables/useDashboardAdmin'
 import { useDashboardChartTheme } from '../composables/useDashboardChartTheme'
 import {
@@ -50,7 +48,6 @@ import {
 } from '../composables/useDashboardDataCache'
 import { useDashboardMetrics } from '../composables/useDashboardMetrics'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
-import type { ConnectionHealthStoredSummary } from '../types/connectionHealth'
 import type { DashboardColorToken, DashboardMetricData, DashboardMetricKey, DashboardPeriod } from '../types/dashboard'
 import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
 import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
@@ -102,7 +99,6 @@ const openUpstreamKeyUsageToday = () => { upstreamKeyUsageTodayOpen.value = true
 const closeUpstreamKeyUsageToday = () => { upstreamKeyUsageTodayOpen.value = false }
 const openUpstreamBalanceBreakdown = () => { upstreamBalanceBreakdownOpen.value = true }
 const closeUpstreamBalanceBreakdown = () => { upstreamBalanceBreakdownOpen.value = false }
-const openGroupList = () => { void router.push({ name: 'AdminGroupAssociations' }) }
 
 const handleMetricCardClick = (key: string) => {
   switch (key) {
@@ -140,12 +136,10 @@ const applyCostMeta = (live: DashboardMetricsResponse) => {
 }
 const groupUsage = ref<GroupUsageTodayResponse | null>(null)
 const balanceBreakdown = ref<UpstreamBalanceBreakdownResponse | null>(null)
-const healthSummary = ref<ConnectionHealthStoredSummary | null>(null)
 const operationalLoading = ref(false)
 const operationalLoadError = ref(false)
 const groupUsageLoadError = ref(false)
 const balanceLoadError = ref(false)
-const healthLoadError = ref(false)
 const initialLoading = ref(true)
 const isRefreshingData = ref(false)
 const refreshDataFailed = ref(false)
@@ -158,7 +152,6 @@ const hydrateSnapshot = (snapshot: DashboardDataSnapshot | null): boolean => {
   applyCostMeta(snapshot.live)
   groupUsage.value = snapshot.groupUsage ?? null
   balanceBreakdown.value = snapshot.balanceBreakdown ?? null
-  healthSummary.value = snapshot.healthSummary ?? null
   applyRawData(snapshot.live, snapshot.trends)
   lastUpdatedAt.value = snapshot.updatedAt
   initialLoading.value = false
@@ -168,22 +161,19 @@ const hydrateSnapshot = (snapshot: DashboardDataSnapshot | null): boolean => {
 const initialSnapshot = getDashboardDataSnapshot(workspaceID.value)
 hydrateSnapshot(initialSnapshot)
 
-// 次要面板失败不阻断五项核心指标。三个请求都只读，其中健康摘要和余额明细只读本地缓存。
+// 次要面板失败不阻断五项核心指标。两个请求都只读，其中余额明细只读本地缓存。
 const loadOperationalData = async () => {
   operationalLoading.value = true
   operationalLoadError.value = false
-  const [groupResult, balanceResult, healthResult] = await Promise.allSettled([
+  const [groupResult, balanceResult] = await Promise.allSettled([
     getGroupUsageToday(),
     getUpstreamBalanceBreakdown(),
-    getConnectionHealthStoredSummary(),
   ])
   groupUsageLoadError.value = groupResult.status === 'rejected'
   balanceLoadError.value = balanceResult.status === 'rejected'
-  healthLoadError.value = healthResult.status === 'rejected'
   if (groupResult.status === 'fulfilled') groupUsage.value = groupResult.value
   if (balanceResult.status === 'fulfilled') balanceBreakdown.value = balanceResult.value
-  if (healthResult.status === 'fulfilled') healthSummary.value = healthResult.value
-  operationalLoadError.value = groupUsageLoadError.value || balanceLoadError.value || healthLoadError.value
+  operationalLoadError.value = groupUsageLoadError.value || balanceLoadError.value
   operationalLoading.value = false
 
   const key = workspaceID.value
@@ -191,7 +181,6 @@ const loadOperationalData = async () => {
     updateDashboardOperationalSnapshot(key, {
       ...(groupResult.status === 'fulfilled' ? { groupUsage: groupResult.value } : {}),
       ...(balanceResult.status === 'fulfilled' ? { balanceBreakdown: balanceResult.value } : {}),
-      ...(healthResult.status === 'fulfilled' ? { healthSummary: healthResult.value } : {}),
     })
   }
 }
@@ -230,7 +219,6 @@ const loadAllData = async (options: { skipStatusCheck?: boolean } = {}) => {
         updatedAt,
         groupUsage: previous?.groupUsage,
         balanceBreakdown: previous?.balanceBreakdown,
-        healthSummary: previous?.healthSummary,
       })
     }
     void loadOperationalData()
@@ -269,7 +257,6 @@ watch(workspaceID, (next, previous) => {
   if (!next || next === previous || isRefreshingData.value) return
   groupUsage.value = null
   balanceBreakdown.value = null
-  healthSummary.value = null
   metrics.value = []
   const restored = hydrateSnapshot(getDashboardDataSnapshot(next))
   if (!restored) initialLoading.value = true
@@ -533,8 +520,7 @@ const coverageTone = computed(() => {
 const upstreamIssueCount = computed(() => (balanceBreakdown.value?.sites ?? []).filter(
   site => site.balance == null || site.status === 'error',
 ).length)
-const healthRiskCount = computed(() => (healthSummary.value?.attentionTargets ?? 0) + (healthSummary.value?.suspendedTargets ?? 0))
-const attentionDataUnavailable = computed(() => healthLoadError.value || balanceLoadError.value)
+const attentionDataUnavailable = computed(() => balanceLoadError.value)
 
 const attentionItems = computed(() => {
   const items: Array<{
@@ -546,31 +532,6 @@ const attentionItems = computed(() => {
     tone: string
     routeName: string
   }> = []
-  if (healthRiskCount.value > 0) {
-    items.push({
-      key: 'health',
-      icon: Activity,
-      title: t('admin.dashboard.attention.healthTitle'),
-      description: t('admin.dashboard.attention.healthDescription', {
-        attention: healthSummary.value?.attentionTargets ?? 0,
-        suspended: healthSummary.value?.suspendedTargets ?? 0,
-      }),
-      count: healthRiskCount.value,
-      tone: 'text-warning bg-warning/10',
-      routeName: 'AdminConnectionHealth',
-    })
-  }
-  if ((healthSummary.value?.recentFailureEvents ?? 0) > 0) {
-    items.push({
-      key: 'events',
-      icon: AlertTriangle,
-      title: t('admin.dashboard.attention.failuresTitle'),
-      description: t('admin.dashboard.attention.failuresDescription'),
-      count: healthSummary.value?.recentFailureEvents ?? 0,
-      tone: 'text-destructive bg-destructive/10',
-      routeName: 'AdminConnectionHealth',
-    })
-  }
   if (upstreamIssueCount.value > 0) {
     items.push({
       key: 'upstream',
@@ -585,11 +546,6 @@ const attentionItems = computed(() => {
   return items
 })
 
-const lastProbeLabel = computed(() => {
-  const value = healthSummary.value?.lastProbeAt
-  if (!value) return t('admin.dashboard.attention.neverProbed')
-  return formatDateTime(Date.parse(value), locale.value) ?? t('admin.dashboard.attention.neverProbed')
-})
 </script>
 
 <template>
@@ -845,7 +801,7 @@ const lastProbeLabel = computed(() => {
               <button
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
-                @click="openGroupList"
+                @click="openGroupUsageToday"
               >
                 <Layers3 class="h-4 w-4" />
                 {{ t('admin.dashboard.groups.total', { count: groupCount ?? 0 }) }}
@@ -893,7 +849,7 @@ const lastProbeLabel = computed(() => {
               </button>
             </div>
 
-            <div v-if="operationalLoading && !healthSummary && !balanceBreakdown" class="flex h-[260px] items-center justify-center text-muted-foreground">
+            <div v-if="operationalLoading && !balanceBreakdown" class="flex h-[260px] items-center justify-center text-muted-foreground">
               <Loader2 class="h-5 w-5 animate-spin" />
             </div>
             <div v-else-if="attentionItems.length > 0" class="mt-5 divide-y divide-border/60 border-y border-border/60">
@@ -935,9 +891,8 @@ const lastProbeLabel = computed(() => {
               <p class="mt-1 max-w-xs text-sm leading-6 text-muted-foreground">{{ t('admin.dashboard.attention.allClearDescription') }}</p>
             </div>
 
-            <div class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-4 text-xs text-muted-foreground">
-              <span>{{ t('admin.dashboard.attention.lastProbe', { time: lastProbeLabel }) }}</span>
-              <span v-if="operationalLoadError" class="text-destructive">{{ t('admin.dashboard.attention.partialLoadError') }}</span>
+            <div v-if="operationalLoadError" class="mt-4 border-t border-border/60 pt-4 text-xs text-destructive">
+              {{ t('admin.dashboard.attention.partialLoadError') }}
             </div>
           </aside>
         </section>

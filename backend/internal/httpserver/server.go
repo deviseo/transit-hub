@@ -16,7 +16,6 @@ import (
 	"transithub/backend/internal/config"
 	"transithub/backend/internal/modules/admin_accounts"
 	"transithub/backend/internal/modules/auth"
-	"transithub/backend/internal/modules/connection_health"
 	"transithub/backend/internal/modules/dashboard"
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
@@ -76,9 +75,9 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	group_rates.RegisterRoutes(server.mux, groupRatesService, adminAccountsService)
 
-	// 出站代理：访问上游站点（含自己的 sub2api/new-api 站点）、工单身份校验和探活请求共用同一套代理配置。
+	// 出站代理：访问上游站点和自己的 sub2api/new-api 站点共用同一套代理配置。
 	// 配置保存在「系统设置 - 网络代理」中，修改后立即生效；从未保存过时沿用启动环境变量（HTTPS_PROXY/NO_PROXY），
-	// 保持旧部署行为不变。排行榜与抽奖的防 SSRF 传输层不走代理，保持原状。
+	// 保持旧部署行为不变。
 	outboundProxy := outbound.NewController()
 	systemService := system.NewService(cfg)
 	systemService.SetOutboundProxy(system.NewRepository(db), outboundProxy, systemAdminChecker{auth: authService, adminEmail: cfg.AdminEmail})
@@ -92,12 +91,11 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)
 	upstreamService.SetAdminAccountResolver(adminAccountsService)
 	upstream.RegisterRoutes(server.mux, upstreamService, adminAccountsService)
-	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService, upstreamService)
+	// 「我的站点」管理员会话：仪表盘登录后写入，仪表盘指标、用户活跃和群发邮件读取（必要时刷新令牌）。
+	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService)
 	if err := mySitesService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
-	my_sites.RegisterRoutes(server.mux, mySitesService)
-	mySitesService.SetAdminAccountResolver(adminAccountsService)
 
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
@@ -125,9 +123,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	admin_accounts.RegisterRoutes(server.mux, adminAccountsService)
 
-	// 注入机器人通知能力，供自动调价成功后发送通知。
-	mySitesService.SetBotNotifier(settingsService)
-
 	// 批量邮件模块只复用已保存的模板/SMTP 配置和当前 workspace 的 Sub2API admin 会话；
 	// 创建批次时只解析收件人，真正 SMTP 发送由 Postgres-backed worker 异步执行。
 	massEmailService := mass_email.NewService(
@@ -150,25 +145,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	user_activity.RegisterRoutes(server.mux, userActivityService)
 	massEmailService.SetSegmentResolver(activitySegmentResolver{service: userActivityService})
 
-	// 分组健康探活模块：数据源为 real_connections（通过 mySitesService 只读接口），
-	// upstreamService 提供站点 base_url/平台类型查询，platformService 提供 new-api 远端降级/恢复能力。
-	// 不新增手动配置的探活目标，也不改变 my_sites/upstream 现有数据语义。
-	connHealthService := connection_health.NewService(
-		connection_health.NewRepository(db),
-		mySitesService,
-		upstreamService,
-		platformService,
-	)
-	if err := connHealthService.EnsureSchema(context.Background()); err != nil {
-		panic(err)
-	}
-	connHealthService.SetAdminAccountResolver(adminAccountsService)
-	connHealthService.SetHTTPTransport(outboundProxy.NewTransport())
-	// 注入平台中性的分组/账号读取能力：admin 分组健康主列表用它拉取 admin 全量分组及
-	// 分组下账号/渠道，叠加 real_connections 探活状态。platformService 已实现所需方法。
-	connHealthService.SetPlatformGroupReader(platformService)
-	connection_health.RegisterRoutes(server.mux, connHealthService)
-
 	// 所有 workspace 表 schema 完成后再补 legacy 归属；随后才启动 restore、worker 和 scheduler，
 	// 避免后台任务在旧行尚未补齐 workspace 时读取或写回数据。
 	if err := adminAccountsService.AssignLegacyRows(context.Background()); err != nil {
@@ -179,7 +155,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	massEmailWorker.Start(context.Background())
 	userActivityService.StartScheduler(context.Background())
-	connHealthService.StartScheduler(context.Background())
 
 	// 策略设置变更时通知上游服务更新定时同步配置。
 	applyRefreshConfig := func(s settings.StrategySettings) {
@@ -196,15 +171,13 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 
 	// 站点同步成功后检查余额预警和倍率变更，按配置发送通知。
-	upstreamService.AfterSync = func(ctx context.Context, userID, adminAccountID, siteID, siteName string, oldMetrics, newMetrics upstream.Metrics) {
+	upstreamService.AfterSync = func(ctx context.Context, userID, _ /* adminAccountID */, siteID, siteName string, oldMetrics, newMetrics upstream.Metrics) {
 		strategy, err := settingsService.GetFirstStrategy(ctx)
 		if err != nil {
 			return
 		}
 		checkBalanceWarning(ctx, settingsService, upstreamService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
 		checkMultiplierChanges(ctx, settingsService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
-		// 自动调价：分组级 enableAutoPricing 是唯一开关，Service 内部逐 mapping 判断。
-		mySitesService.ApplyAutoPricingAfterSync(ctx, userID, adminAccountID, siteID, siteName, oldMetrics, newMetrics)
 	}
 
 	settings.RegisterRoutes(server.mux, settingsService)
@@ -402,8 +375,6 @@ var protectedPathPrefixes = []string{
 	"/api/admin-accounts",
 	"/api/upstream-sites",
 	"/api/group-rates",
-	"/api/my-sites",
-	"/api/connection-health",
 	"/api/settings",
 	"/api/dashboard",
 	"/api/system",

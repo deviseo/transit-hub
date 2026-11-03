@@ -4,7 +4,6 @@ import type {
   GroupUsageTodayResponse,
   UpstreamBalanceBreakdownResponse,
 } from '../api/dashboardAdmin'
-import type { ConnectionHealthStoredSummary } from '../types/connectionHealth'
 import type { DashboardAdminStatus } from '../types/dashboardAdmin'
 
 export interface DashboardDataSnapshot {
@@ -14,7 +13,6 @@ export interface DashboardDataSnapshot {
   updatedAt: number
   groupUsage?: GroupUsageTodayResponse
   balanceBreakdown?: UpstreamBalanceBreakdownResponse
-  healthSummary?: ConnectionHealthStoredSummary
 }
 
 // 仪表盘数据包含营收和余额，只保存在当前 JavaScript 进程内，不写入浏览器持久化存储。
@@ -33,7 +31,7 @@ export const saveDashboardDataSnapshot = (workspaceID: string, snapshot: Dashboa
 
 export const updateDashboardOperationalSnapshot = (
   workspaceID: string,
-  update: Partial<Pick<DashboardDataSnapshot, 'groupUsage' | 'balanceBreakdown' | 'healthSummary'>>,
+  update: Partial<Pick<DashboardDataSnapshot, 'groupUsage' | 'balanceBreakdown'>>,
 ) => {
   const current = getDashboardDataSnapshot(workspaceID)
   if (!current) return

@@ -10,189 +10,145 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	adminaccounts "transithub/backend/internal/modules/admin_accounts"
-	mysites "transithub/backend/internal/modules/my_sites"
 )
+
+// PostgreSQL 仓储测试：需要 TEST_DATABASE_URL，在独立的临时 schema 中只写入合成数据，结束后整体删除。
 
 const postgresTestTimeout = 15 * time.Second
 
-func TestRepositoryListMappedWithPostgres(t *testing.T) {
-	tests := []struct {
-		name              string
-		snapshotGroupID   string
-		wantMapped        bool
-		wantPricingMapped bool
-		arrange           func(t *testing.T, pool *pgxpool.Pool)
-	}{
-		{
-			name:            "stable ID survives renamed connection",
-			snapshotGroupID: "54",
-			wantMapped:      true,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRealConnection(t, pool, "workspace-a", "54", "old-name")
-			},
-		},
-		{
-			name:            "different non-empty IDs do not match by name",
-			snapshotGroupID: "54",
-			wantMapped:      false,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRealConnection(t, pool, "workspace-a", "55", "current-name")
-			},
-		},
-		{
-			name:            "legacy connection without ID falls back to name",
-			snapshotGroupID: "54",
-			wantMapped:      true,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRealConnection(t, pool, "workspace-a", "", "current-name")
-			},
-		},
-		{
-			name:            "legacy snapshot without ID falls back to name",
-			snapshotGroupID: "",
-			wantMapped:      true,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRealConnection(t, pool, "workspace-a", "54", "current-name")
-			},
-		},
-		{
-			name:            "other workspace is isolated",
-			snapshotGroupID: "54",
-			wantMapped:      false,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRealConnection(t, pool, "workspace-b", "54", "old-name")
-				insertJSONMapping(t, pool, "workspace-b")
-			},
-		},
-		{
-			name:              "existing JSON mapping remains supported",
-			snapshotGroupID:   "54",
-			wantMapped:        false,
-			wantPricingMapped: true,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertJSONMapping(t, pool, "workspace-a")
-			},
-		},
-		{
-			name:            "null upstream targets are ignored",
-			snapshotGroupID: "54",
-			wantMapped:      false,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRawJSONMapping(t, pool, "workspace-a", `[{"ownGroup":"own-a","upstreamTargets":null}]`)
-			},
-		},
-		{
-			name:            "scalar mapping payload is ignored",
-			snapshotGroupID: "54",
-			wantMapped:      false,
-			arrange: func(t *testing.T, pool *pgxpool.Pool) {
-				insertRawJSONMapping(t, pool, "workspace-a", `"legacy-invalid-value"`)
-			},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			pool := openPostgresTestPool(t)
-			repository := prepareGroupRatesRepository(t, pool)
-			insertSnapshot(t, pool, "workspace-a", test.snapshotGroupID)
-			test.arrange(t, pool)
-
-			ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-			defer cancel()
-			result, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10})
-			if err != nil {
-				t.Fatalf("List returned error: %v", err)
-			}
-			if len(result.Items) != 1 {
-				t.Fatalf("List returned %d items, want 1", len(result.Items))
-			}
-			if result.Items[0].Mapped != test.wantMapped {
-				t.Fatalf("Mapped = %v, want %v", result.Items[0].Mapped, test.wantMapped)
-			}
-			if result.Items[0].PricingMapped != test.wantPricingMapped {
-				t.Fatalf("PricingMapped = %v, want %v", result.Items[0].PricingMapped, test.wantPricingMapped)
-			}
-		})
-	}
-}
-
-func TestRealConnectionIndexesExistInPostgres(t *testing.T) {
+// 分组倍率列表只读 group_rate_snapshots + upstream_sites：新安装里没有旧的对接 / 映射表也能正常查询。
+func TestRepositoryListFiltersSortsAndCountsWithPostgres(t *testing.T) {
 	pool := openPostgresTestPool(t)
-	prepareGroupRatesRepository(t, pool)
-
+	repository := prepareGroupRatesRepository(t, pool)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()
-	rows, err := pool.Query(ctx, `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'real_connections'`)
-	if err != nil {
-		t.Fatalf("query indexes: %v", err)
-	}
-	defer rows.Close()
 
-	indexes := map[string]string{}
-	for rows.Next() {
-		var name, definition string
-		if err := rows.Scan(&name, &definition); err != nil {
-			t.Fatalf("scan index: %v", err)
+	for _, table := range []string{"real_connections", "my_site_states"} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil || exists {
+			t.Fatalf("test schema must not contain %s (exists=%v err=%v)", table, exists, err)
 		}
-		indexes[name] = definition
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate indexes: %v", err)
+	if _, err := pool.Exec(ctx, `INSERT INTO upstream_sites (id, user_id, admin_account_id, base_url, recharge_rate) VALUES
+		('site-a', 'user-a', 'workspace-a', 'https://a.example.test', 2),
+		('site-b', 'user-a', 'workspace-a', 'https://b.example.test', 1)`); err != nil {
+		t.Fatalf("insert sites: %v", err)
 	}
-	assertIndexColumns(t, indexes, "idx_real_connections_workspace_group_id", "(user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id)")
-	assertIndexColumns(t, indexes, "idx_real_connections_workspace_group_name", "(user_id, workspace_admin_account_id, upstream_site_id, upstream_group_name)")
+	now := time.Now()
+	insertSnapshot(t, pool, snapshotRow{id: "a1-old", workspace: "workspace-a", site: "site-a", siteName: "Site A", groupID: "1", group: "claude-pro", platform: "sub2api", groupType: "anthropic", multiplier: 0.5, createdAt: now.Add(-2 * time.Hour)})
+	insertSnapshot(t, pool, snapshotRow{id: "a1-new", workspace: "workspace-a", site: "site-a", siteName: "Site A", groupID: "1", group: "claude-pro", platform: "sub2api", groupType: "anthropic", multiplier: 0.6, createdAt: now.Add(-time.Hour)})
+	insertSnapshot(t, pool, snapshotRow{id: "a2", workspace: "workspace-a", site: "site-a", siteName: "Site A", groupID: "2", group: "gpt-basic", platform: "sub2api", groupType: "openai", multiplier: 0.2, createdAt: now.Add(-time.Hour)})
+	insertSnapshot(t, pool, snapshotRow{id: "b1", workspace: "workspace-a", site: "site-b", siteName: "Site B", groupID: "7", group: "default", platform: "newapi", multiplier: 1.5, createdAt: now.Add(-time.Hour)})
+	insertSnapshot(t, pool, snapshotRow{id: "b2", workspace: "workspace-a", site: "site-b", siteName: "Site B", groupID: "8", group: "retired", platform: "newapi", multiplier: 0.1, createdAt: now.Add(-time.Hour), deleted: true})
+	insertSnapshot(t, pool, snapshotRow{id: "other", workspace: "workspace-b", site: "site-a", siteName: "Site A", groupID: "1", group: "claude-pro", platform: "sub2api", groupType: "anthropic", multiplier: 9, createdAt: now})
+
+	active, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "all", Sort: "default"})
+	if err != nil {
+		t.Fatalf("list active: %v", err)
+	}
+	// 默认按实际倍率（上游倍率 × 充值倍率）升序：gpt-basic 0.4、claude-pro 1.2、default 1.5。
+	if got := groupNames(active.Items); got != "gpt-basic,claude-pro,default" {
+		t.Fatalf("unexpected default order: %s", got)
+	}
+	if active.Total != 3 || active.StatusCounts != (StatusCounts{All: 3, Deleted: 1}) {
+		t.Fatalf("unexpected totals: total=%d counts=%+v", active.Total, active.StatusCounts)
+	}
+	if strings.Join(active.Types, ",") != "anthropic,openai" || strings.Join(active.Platforms, ",") != "newapi,sub2api" {
+		t.Fatalf("unexpected facets: types=%v platforms=%v", active.Types, active.Platforms)
+	}
+	claude := active.Items[1]
+	if claude.PreviousMultiplier == nil || *claude.PreviousMultiplier != 0.5 || claude.Multiplier != 0.6 || claude.RechargeRate != 2 {
+		t.Fatalf("latest row must carry the previous multiplier and site recharge rate: %+v", claude)
+	}
+
+	deleted, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "deleted", Sort: "default"})
+	if err != nil || groupNames(deleted.Items) != "retired" || deleted.Total != 1 {
+		t.Fatalf("unexpected deleted list: %+v %v", deleted.Items, err)
+	}
+	legacy, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "legacy", Sort: "default"})
+	if err != nil || legacy.Total != 4 {
+		t.Fatalf("legacy status returns active and deleted rows together: total=%d err=%v", legacy.Total, err)
+	}
+
+	filtered, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "all", Sort: "multiplierDesc", Platform: "sub2api"})
+	if err != nil || groupNames(filtered.Items) != "claude-pro,gpt-basic" || filtered.StatusCounts != (StatusCounts{All: 2, Deleted: 0}) {
+		t.Fatalf("unexpected platform filter: %+v %+v %v", filtered.Items, filtered.StatusCounts, err)
+	}
+	searched, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "all", Sort: "default", Search: "SITE b"})
+	if err != nil || groupNames(searched.Items) != "default" {
+		t.Fatalf("unexpected search result: %+v %v", searched.Items, err)
+	}
+	typed, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 10, Status: "all", Sort: "default", Type: "anthropic"})
+	if err != nil || groupNames(typed.Items) != "claude-pro" {
+		t.Fatalf("unexpected type filter: %+v %v", typed.Items, err)
+	}
+	paged, err := repository.List(ctx, "user-a", "workspace-a", ListQuery{Page: 2, PageSize: 2, Status: "all", Sort: "siteNameAsc"})
+	if err != nil || len(paged.Items) != 1 || paged.Total != 3 {
+		t.Fatalf("unexpected second page: %+v total=%d %v", paged.Items, paged.Total, err)
+	}
+
+	history, err := repository.History(ctx, "user-a", "workspace-a", "site-a", "1", "sub2api")
+	if err != nil || len(history) != 2 || history[0].Multiplier != 0.6 || history[1].Multiplier != 0.5 {
+		t.Fatalf("unexpected history: %+v %v", history, err)
+	}
+	if other, err := repository.List(ctx, "user-a", "workspace-b", ListQuery{Page: 1, PageSize: 10, Status: "all"}); err != nil || other.Total != 1 || other.Items[0].Multiplier != 9 {
+		t.Fatalf("workspaces must stay isolated: %+v %v", other.Items, err)
+	}
 }
 
-func TestLegacyRealConnectionWorkspaceIsAssignedInPostgres(t *testing.T) {
+func TestServiceListMapsRowsWithPostgres(t *testing.T) {
 	pool := openPostgresTestPool(t)
+	repository := prepareGroupRatesRepository(t, pool)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()
+	if _, err := pool.Exec(ctx, `INSERT INTO upstream_sites (id, user_id, admin_account_id, base_url, recharge_rate) VALUES ('site-a', 'user-a', 'workspace-a', 'https://a.example.test', 2)`); err != nil {
+		t.Fatalf("insert site: %v", err)
+	}
+	now := time.Now()
+	insertSnapshot(t, pool, snapshotRow{id: "old", workspace: "workspace-a", site: "site-a", siteName: "Site A", groupID: "1", group: "vip", platform: "sub2api", multiplier: 0.5, createdAt: now.Add(-time.Hour)})
+	insertSnapshot(t, pool, snapshotRow{id: "new", workspace: "workspace-a", site: "site-a", siteName: "Site A", groupID: "1", group: "vip", platform: "sub2api", multiplier: 0.75, createdAt: now})
 
-	if _, err := pool.Exec(ctx, `CREATE TABLE users (id text PRIMARY KEY)`); err != nil {
-		t.Fatalf("create users: %v", err)
+	result, err := NewService(repository).List(ctx, "user-a", "workspace-a", ListQuery{Page: 1, PageSize: 30, Status: "all"})
+	if err != nil || len(result.Items) != 1 {
+		t.Fatalf("list: %+v %v", result, err)
 	}
-	createMinimalUpstreamSites(t, pool)
-	if err := mysites.NewRepository(pool).EnsureSchema(ctx); err != nil {
-		t.Fatalf("ensure my_sites schema: %v", err)
+	row := result.Items[0]
+	if row.UpstreamMultiplier != 0.75 || row.CurrentMultiplier != 1.5 || row.Delta == nil || *row.Delta != 0.25 || row.DeltaPercent == nil || *row.DeltaPercent != 50 {
+		t.Fatalf("unexpected row: %+v", row)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO users (id) VALUES ('user-a')`); err != nil {
-		t.Fatalf("insert user: %v", err)
+	if result.TotalPages != 1 || result.StatusCounts.All != 1 {
+		t.Fatalf("unexpected paging: %+v", result)
 	}
-	insertRealConnection(t, pool, "", "54", "current-name")
+}
 
-	if err := adminaccounts.NewRepository(pool).EnsureSchema(ctx); err != nil {
-		t.Fatalf("ensure admin_accounts schema: %v", err)
-	}
+type snapshotRow struct {
+	id, workspace, site, siteName, groupID, group, platform, groupType string
+	multiplier                                                         float64
+	createdAt                                                          time.Time
+	deleted                                                            bool
+}
 
-	var workspaceID, legacyID, currentID string
-	if err := pool.QueryRow(ctx, `SELECT workspace_admin_account_id FROM real_connections WHERE id = 'connection-a'`).Scan(&workspaceID); err != nil {
-		t.Fatalf("read migrated connection: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `SELECT id FROM admin_accounts WHERE user_id = 'user-a' AND platform = 'legacy'`).Scan(&legacyID); err != nil {
-		t.Fatalf("read legacy workspace: %v", err)
-	}
-	if err := pool.QueryRow(ctx, `SELECT current_admin_account_id FROM users WHERE id = 'user-a'`).Scan(&currentID); err != nil {
-		t.Fatalf("read current workspace: %v", err)
-	}
-	if workspaceID == "" || workspaceID != legacyID || currentID != legacyID {
-		t.Fatalf("legacy assignment connection=%q current=%q legacy=%q", workspaceID, currentID, legacyID)
-	}
-
-	repository := NewRepository(pool)
-	if err := repository.EnsureSchema(ctx); err != nil {
-		t.Fatalf("ensure group_rates schema: %v", err)
-	}
-	insertSnapshot(t, pool, legacyID, "54")
-	result, err := repository.List(ctx, "user-a", legacyID, ListQuery{Page: 1, PageSize: 10})
+func insertSnapshot(t *testing.T, pool *pgxpool.Pool, row snapshotRow) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
+	defer cancel()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO group_rate_snapshots (
+			id, user_id, admin_account_id, site_id, site_name, group_id, group_name,
+			platform, type, multiplier, created_at, last_seen_at, deleted
+		) VALUES ($1, 'user-a', $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11)
+	`, row.id, row.workspace, row.site, row.siteName, row.groupID, row.group, row.platform, row.groupType, row.multiplier, row.createdAt, row.deleted)
 	if err != nil {
-		t.Fatalf("list migrated connection: %v", err)
+		t.Fatalf("insert snapshot: %v", err)
 	}
-	if len(result.Items) != 1 || !result.Items[0].Mapped {
-		t.Fatalf("migrated connection was not recognized: %#v", result.Items)
+}
+
+func groupNames(rows []snapshotRecord) string {
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.GroupName)
 	}
+	return strings.Join(names, ",")
 }
 
 func openPostgresTestPool(t *testing.T) *pgxpool.Pool {
@@ -253,21 +209,6 @@ func prepareGroupRatesRepository(t *testing.T, pool *pgxpool.Pool) *Repository {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()
-	createMinimalUpstreamSites(t, pool)
-	if err := mysites.NewRepository(pool).EnsureSchema(ctx); err != nil {
-		t.Fatalf("ensure my_sites schema: %v", err)
-	}
-	repository := NewRepository(pool)
-	if err := repository.EnsureSchema(ctx); err != nil {
-		t.Fatalf("ensure group_rates schema: %v", err)
-	}
-	return repository
-}
-
-func createMinimalUpstreamSites(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-	defer cancel()
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE upstream_sites (
 			id text PRIMARY KEY,
@@ -279,79 +220,9 @@ func createMinimalUpstreamSites(t *testing.T, pool *pgxpool.Pool) {
 	`); err != nil {
 		t.Fatalf("create upstream_sites: %v", err)
 	}
-}
-
-func insertSnapshot(t *testing.T, pool *pgxpool.Pool, workspaceID, groupID string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-	defer cancel()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO group_rate_snapshots (
-			id, user_id, admin_account_id, site_id, site_name, group_id, group_name,
-			platform, type, multiplier, created_at, deleted
-		) VALUES ('snapshot-a', 'user-a', $1, 'site-a', 'Site A', $2, 'current-name', 'openai', 'chat', 0.015, now(), false)
-	`, workspaceID, groupID)
-	if err != nil {
-		t.Fatalf("insert snapshot: %v", err)
+	repository := NewRepository(pool)
+	if err := repository.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure group_rates schema: %v", err)
 	}
-}
-
-func insertRealConnection(t *testing.T, pool *pgxpool.Pool, workspaceID, groupID, groupName string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-	defer cancel()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO real_connections (
-			id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id,
-			upstream_group_name, upstream_key_id, upstream_key, admin_account_id,
-			admin_account_name, own_group_ids, group_type
-		) VALUES ('connection-a', 'user-a', $1, 'site-a', $2, $3, 'key-a', 'secret-a', 'remote-a', 'Remote A', '[]'::jsonb, 'openai')
-	`, workspaceID, groupID, groupName)
-	if err != nil {
-		t.Fatalf("insert real connection: %v", err)
-	}
-}
-
-func insertJSONMapping(t *testing.T, pool *pgxpool.Pool, workspaceID string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-	defer cancel()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO my_site_states (user_id, admin_account_id, base_url, email, session, mappings, own_groups)
-		VALUES (
-			'user-a', $1, 'https://admin.example', 'admin@example.com', '{}'::jsonb,
-			'[{
-				"ownGroup": "own-a",
-				"upstreamTargets": [{"siteId": "site-a", "groupName": "current-name"}]
-			}]'::jsonb,
-			'[]'::jsonb
-		)
-	`, workspaceID)
-	if err != nil {
-		t.Fatalf("insert JSON mapping: %v", err)
-	}
-}
-
-func insertRawJSONMapping(t *testing.T, pool *pgxpool.Pool, workspaceID string, mappings string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
-	defer cancel()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO my_site_states (user_id, admin_account_id, base_url, email, session, mappings, own_groups)
-		VALUES ('user-a', $1, 'https://admin.example', 'admin@example.com', '{}'::jsonb, $2::jsonb, '[]'::jsonb)
-	`, workspaceID, mappings)
-	if err != nil {
-		t.Fatalf("insert raw JSON mapping: %v", err)
-	}
-}
-
-func assertIndexColumns(t *testing.T, indexes map[string]string, name, columns string) {
-	t.Helper()
-	definition, ok := indexes[name]
-	if !ok {
-		t.Fatalf("missing index %s", name)
-	}
-	if !strings.Contains(definition, columns) {
-		t.Fatalf("index %s = %q, want columns %s", name, definition, columns)
-	}
+	return repository
 }

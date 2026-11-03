@@ -11,7 +11,7 @@ import (
 	"transithub/backend/internal/modules/upstream"
 )
 
-// BusinessTimezone 是统计自然日使用的时区（与仪表盘、排行榜一致）。
+// BusinessTimezone 是统计自然日使用的时区（与仪表盘一致）。
 const BusinessTimezone = "Asia/Shanghai"
 
 const (

@@ -20,11 +20,11 @@ type AdminAccountResolver interface {
 	RequireCurrentID(ctx context.Context, userID string) (string, error)
 }
 
+// RegisterRoutes 注册分组倍率的只读接口：列表与单个分组的倍率历史。
 func RegisterRoutes(mux *http.ServeMux, service *Service, accounts AdminAccountResolver) {
 	handler := &Handler{service: service, accounts: accounts}
 	mux.HandleFunc("GET /api/group-rates", handler.list)
 	mux.HandleFunc("GET /api/group-rates/history", handler.history)
-	mux.HandleFunc("PATCH /api/group-rates/type", handler.updateType)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -54,30 +54,6 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, rows)
-}
-
-func (h *Handler) updateType(w http.ResponseWriter, r *http.Request) {
-	userID, ok := authctx.UserID(r.Context())
-	if !ok {
-		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
-		return
-	}
-	var dto UpdateTypeRequest
-	if err := httpjson.Decode(r, &dto); err != nil {
-		httpjson.WriteError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-	adminAccountID, err := h.currentAdminAccountID(r.Context(), userID)
-	if err != nil {
-		writeWorkspaceError(w, err)
-		return
-	}
-	if err := h.service.UpdateType(r.Context(), userID, adminAccountID, GroupRef{SiteID: dto.SiteID, GroupName: dto.GroupName}, dto.Type); err != nil {
-		log.Printf("update group rate type: %v", err)
-		httpjson.WriteError(w, http.StatusInternalServerError, "Failed to update group rate type")
-		return
-	}
-	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 func intQuery(value string, fallback int) int {

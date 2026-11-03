@@ -328,15 +328,7 @@ func (s *Service) TestNotification(ctx context.Context, dto TestNotificationRequ
 	}
 }
 
-// SendToBots 保留历史纯文本入口，活动通知、自动调价等现有调用方无需感知新增格式字段。
-func (s *Service) SendToBots(ctx context.Context, userID string, botIDs []string, message string) {
-	s.sendNotificationToBots(ctx, userID, botIDs, notificationMessage{
-		Content: message,
-		Format:  NotificationTemplateFormatText,
-	})
-}
-
-// SendFormattedToBots 仅供显式选择了模板格式的通知使用。格式会按各平台的原生能力
+// SendFormattedToBots 按模板格式向机器人发送通知（余额预警、倍率变更等）。格式会按各平台的原生能力
 // 转换：HTML 在不支持原生 HTML 的渠道转成 Markdown，旧纯文本发送路径保持不变。
 func (s *Service) SendFormattedToBots(ctx context.Context, userID string, botIDs []string, message string, format NotificationTemplateFormat) {
 	s.sendNotificationToBots(ctx, userID, botIDs, notificationMessage{

@@ -52,7 +52,7 @@ type PlatformClient interface {
 }
 
 // MySiteStateSync 用于在 dashboard 登录成功后将 admin session 同步到 my_site_states 表，
-// 使 RealConnect 等依赖 my_site_states 的功能可以使用 admin 会话。
+// 使仪表盘指标、用户活跃和群发邮件等依赖 my_site_states 的功能可以使用 admin 会话。
 type MySiteStateSync interface {
 	SyncAdminSession(ctx context.Context, userID string, adminAccountID string, session upstream.Session, identity string) error
 	StoredSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, bool, error)
@@ -245,7 +245,7 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 		return StatusResponse{}, err
 	}
 
-	// 同步写入 my_site_states，确保 RealConnect 等功能可使用 admin 会话
+	// 同步写入 my_site_states，确保用户活跃、群发邮件等功能可使用 admin 会话
 	if s.mySiteSync != nil {
 		if err := s.mySiteSync.SyncAdminSession(ctx, userID, adminAccount.ID, session, identity); err != nil {
 			return StatusResponse{}, err
@@ -308,7 +308,7 @@ func (s *Service) RefreshAdminSession(ctx context.Context, userID string) (Statu
 	return statusFromRecord(next, true), nil
 }
 
-// saveAdminSession 写入 Redis 会话，并同步到 my_site_states，确保 RealConnect 等功能使用最新的 admin 会话。
+// saveAdminSession 写入 Redis 会话，并同步到 my_site_states，确保依赖它的功能使用最新的 admin 会话。
 // my_site_states 是权威副本：它已持有更新的会话（过期时间更晚，例如其他流程刚轮换过 refresh token）时
 // 不再同步，避免用 Redis 里的旧副本把已轮换的新 token 覆盖回旧值。
 func (s *Service) saveAdminSession(ctx context.Context, userID string, adminAccountID string, next AdminSession) error {

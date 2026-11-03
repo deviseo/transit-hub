@@ -21,9 +21,6 @@ type RateRow struct {
 	GroupName          string    `json:"groupName"`
 	Platform           string    `json:"platform"`
 	Type               string    `json:"type"`
-	Mapped             bool      `json:"mapped"`
-	Connected          bool      `json:"connected"`
-	PricingMapped      bool      `json:"pricingMapped"`
 	Deleted            bool      `json:"deleted"`
 	UpstreamMultiplier float64   `json:"upstreamMultiplier"`
 	RechargeRate       float64   `json:"rechargeRate"`
@@ -49,10 +46,8 @@ type ListQuery struct {
 // StatusCounts provides tab totals after search/type/platform filters but before
 // the active status filter. Deleted rows are kept separate from active totals.
 type StatusCounts struct {
-	All      int `json:"all"`
-	Mapped   int `json:"mapped"`
-	Unmapped int `json:"unmapped"`
-	Deleted  int `json:"deleted"`
+	All     int `json:"all"`
+	Deleted int `json:"deleted"`
 }
 
 type ListResult struct {
@@ -64,17 +59,6 @@ type ListResult struct {
 	Types        []string     `json:"types"`
 	Platforms    []string     `json:"platforms"`
 	StatusCounts StatusCounts `json:"statusCounts"`
-}
-
-type UpdateTypeRequest struct {
-	SiteID    string `json:"siteId"`
-	GroupName string `json:"groupName"`
-	Type      string `json:"type"`
-}
-
-type GroupRef struct {
-	SiteID    string
-	GroupName string
 }
 
 // HistoryRow is a multiplier record for one site/group/platform tuple. It includes the same
@@ -106,8 +90,6 @@ type snapshotRecord struct {
 	GroupName          string
 	Platform           string
 	Type               string
-	Mapped             bool
-	PricingMapped      bool
 	Deleted            bool
 	Multiplier         float64
 	RechargeRate       float64

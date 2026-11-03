@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { listGroupRateHistory, listGroupRates, updateGroupRateType } from '../api/groupRates'
+import { listGroupRateHistory, listGroupRates } from '../api/groupRates'
 import type { GroupRate, GroupRateHistoryQuery, GroupRateHistoryRow, GroupRateSort, GroupRateStatusCounts, GroupRateStatusFilter } from '../types/groupRates'
 
 export const useGroupRates = () => {
@@ -16,11 +16,9 @@ export const useGroupRates = () => {
   const platformFilter = ref('')
   const statusFilter = ref<GroupRateStatusFilter>('all')
   const sortMode = ref<GroupRateSort>('multiplierAsc')
-  const statusCounts = ref<GroupRateStatusCounts>({ all: 0, mapped: 0, unmapped: 0, deleted: 0 })
-  const serverSupportsStatusFilters = ref(false)
+  const statusCounts = ref<GroupRateStatusCounts>({ all: 0, deleted: 0 })
   const isLoading = ref(false)
   const isHistoryLoading = ref(false)
-  const isActionLoading = ref(false)
   const errorKey = ref<string | null>(null)
   const historyErrorKey = ref<string | null>(null)
   let ratesRequestId = 0
@@ -48,13 +46,7 @@ export const useGroupRates = () => {
       totalPages.value = response.totalPages
       types.value = response.types
       platforms.value = response.platforms
-      serverSupportsStatusFilters.value = response.statusCounts != null
-      statusCounts.value = response.statusCounts ?? {
-        all: response.items.filter(item => !item.deleted).length,
-        mapped: response.items.filter(item => item.mapped && !item.deleted).length,
-        unmapped: response.items.filter(item => !item.mapped && !item.deleted).length,
-        deleted: response.items.filter(item => item.deleted).length,
-      }
+      statusCounts.value = response.statusCounts
     } catch (error) {
       if (requestId !== ratesRequestId) return
       errorKey.value = error instanceof Error ? error.message : 'admin.groupRates.errors.unknown'
@@ -115,20 +107,6 @@ export const useGroupRates = () => {
     }
   }
 
-  const saveType = async (rate: GroupRate, groupType: string) => {
-    isActionLoading.value = true
-    errorKey.value = null
-    try {
-      await updateGroupRateType({ siteId: rate.siteId, groupName: rate.groupName, type: groupType })
-      await loadRates()
-    } catch (error) {
-      errorKey.value = error instanceof Error ? error.message : 'admin.groupRates.errors.unknown'
-      throw error
-    } finally {
-      isActionLoading.value = false
-    }
-  }
-
   return {
     rates,
     history,
@@ -144,15 +122,12 @@ export const useGroupRates = () => {
     statusFilter,
     sortMode,
     statusCounts,
-    serverSupportsStatusFilters,
     isLoading,
     isHistoryLoading,
-    isActionLoading,
     errorKey,
     historyErrorKey,
     loadRates,
     loadHistory,
-    saveType,
     setSearch,
     setTypeFilter,
     setPlatformFilter,

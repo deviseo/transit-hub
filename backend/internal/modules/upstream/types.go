@@ -31,9 +31,6 @@ const (
 	ErrorRequest         = "admin.upstream.errors.request"
 	ErrorInvalidResponse = "admin.upstream.errors.invalidResponse"
 	ErrorUnknown         = "admin.upstream.errors.unknown"
-	// ErrorSub2APIBulkUpdateUnsupported 表示当前 Sub2API 站点没有字段级批量更新能力。
-	// 调度优先级/状态更新遇到该能力缺失时必须要求升级，绝不回退到整对象回写。
-	ErrorSub2APIBulkUpdateUnsupported = "admin.upstream.errors.sub2APIBulkUpdateUnsupported"
 	// ErrorVerificationRequired 表示账号密码登录要求二次验证（2FA / Passkey 等），无法无人值守地完成，
 	// 需要改用访问令牌接入。
 	ErrorVerificationRequired = "admin.upstream.errors.verificationRequired"
@@ -243,17 +240,6 @@ func (s Session) sameCredentials(other Session) bool {
 	return s.ExpiresAt == nil || *s.ExpiresAt == *other.ExpiresAt
 }
 
-// Sub2APIKeyItem 表示从上游 Sub2API 站点获取的单个 API Key 信息。
-// 用于手动绑定时展示 key 列表供用户选择。
-type Sub2APIKeyItem struct {
-	ID        string `json:"id"`
-	Key       string `json:"key"`
-	Name      string `json:"name"`
-	GroupID   string `json:"groupId"`
-	GroupName string `json:"groupName"`
-	Status    string `json:"status"`
-}
-
 type LoginResult struct {
 	Platform Platform
 	Session  Session
@@ -276,9 +262,8 @@ type BalanceFilter struct {
 	ExcludeBalances []float64 // 需要排除的精确余额值（如 0、0.1、1 等）
 }
 
-// Sub2APIAdminUser 是 GET /api/v1/admin/users/:id 返回的用户详情中，工单模块"Sub2API 用户
-// 资料"弹窗需要展示的只读字段。字段在远端响应中不存在或类型不匹配时保持零值/nil，
-// 由调用方（tickets.Service）按需降级展示，不在这里伪造数据。
+// Sub2APIAdminUser 是 Sub2API admin 用户接口（详情 / 列表）返回的只读字段。
+// 字段在远端响应中不存在或类型不匹配时保持零值/nil，由调用方按需降级，不在这里伪造数据。
 type Sub2APIAdminUser struct {
 	ID            string
 	Email         string
@@ -319,53 +304,6 @@ type Sub2APIAdminUsersPage struct {
 	// unknown-length user stream.
 	TotalKnown bool
 	PagesKnown bool
-}
-
-// Sub2APIUserBreakdownQuery is the explicit contract for the Sub2API admin
-// leaderboard source endpoint. The upstream end_date is exclusive.
-type Sub2APIUserBreakdownQuery struct {
-	StartDate string
-	EndDate   string
-	SortBy    string
-	Limit     int
-	Timezone  string
-}
-
-// Sub2APIUserBreakdownItem is one user row from
-// /api/v1/admin/dashboard/user-breakdown. Optional token/cost fields stay at
-// zero when older Sub2API deployments omit them.
-type Sub2APIUserBreakdownItem struct {
-	UserID       string
-	Email        string
-	Requests     int
-	InputTokens  int64
-	OutputTokens int64
-	CacheTokens  int64
-	TotalTokens  int64
-	Cost         float64
-	ActualCost   float64
-}
-
-type Sub2APIUserBreakdown struct {
-	Users     []Sub2APIUserBreakdownItem
-	StartDate string
-	EndDate   string
-}
-
-// Sub2APIBalanceHistoryItem 是 Sub2API 用户余额/充值历史中的单条记录。
-type Sub2APIBalanceHistoryItem struct {
-	ID        string
-	Type      string
-	Amount    *float64
-	Note      string
-	CreatedAt *time.Time
-}
-
-// Sub2APIUserBalanceHistory 是 GET /api/v1/admin/users/:id/balance-history 的解析结果。
-type Sub2APIUserBalanceHistory struct {
-	Items          []Sub2APIBalanceHistoryItem
-	Total          int
-	TotalRecharged *float64
 }
 
 // KeyUsageTodayStat 是平台层返回的单个 key 今日消费统计（上游平台原始金额，未乘以站点 rechargeRate）。

@@ -149,9 +149,6 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 			GroupName:          record.GroupName,
 			Platform:           record.Platform,
 			Type:               record.Type,
-			Mapped:             record.Mapped,
-			Connected:          record.Mapped,
-			PricingMapped:      record.PricingMapped,
 			Deleted:            record.Deleted,
 			UpstreamMultiplier: record.Multiplier,
 			RechargeRate:       record.RechargeRate,
@@ -171,21 +168,6 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 		Platforms:    records.Platforms,
 		StatusCounts: records.StatusCounts,
 	}, nil
-}
-
-func (s *Service) UpdateType(ctx context.Context, userID string, adminAccountID string, ref GroupRef, groupType string) error {
-	return s.repository.UpdateType(ctx, strings.TrimSpace(userID), strings.TrimSpace(adminAccountID), normalizeGroupRef(ref), strings.TrimSpace(groupType))
-}
-
-// ListGroupNames 按 type/search/platform 从最新分组快照中筛出匹配的分组名集合，
-// 供 group_rate_campaigns 模块（group_rate_campaigns.GroupTypeLookup）解析
-// "按分组类型"/"当前筛选结果" 两种选择模式使用。
-func (s *Service) ListGroupNames(ctx context.Context, userID string, adminAccountID string, search string, groupType string, platform string) ([]string, error) {
-	return s.repository.ListDistinctGroupNames(ctx, strings.TrimSpace(userID), strings.TrimSpace(adminAccountID), search, groupType, platform)
-}
-
-func normalizeGroupRef(ref GroupRef) GroupRef {
-	return GroupRef{SiteID: strings.TrimSpace(ref.SiteID), GroupName: strings.TrimSpace(ref.GroupName)}
 }
 
 func (s *Service) History(ctx context.Context, userID string, adminAccountID string, siteID string, groupName string, platform string) ([]HistoryRow, error) {
@@ -224,13 +206,10 @@ func normalizeListQuery(query ListQuery) ListQuery {
 	query.Status = strings.TrimSpace(query.Status)
 	query.Sort = strings.TrimSpace(query.Sort)
 	switch query.Status {
-	case "":
-		// Empty is the legacy contract: return active and deleted rows together.
-		// New clients always send an explicit status and receive accurate totals.
-		query.Status = "legacy"
-	case "mapped", "unmapped", "deleted":
-	case "all":
+	case "all", "deleted":
 	default:
+		// Empty (or a retired value such as mapped/unmapped) keeps the legacy contract:
+		// return active and deleted rows together. The admin page always sends all/deleted.
 		query.Status = "legacy"
 	}
 	switch query.Sort {

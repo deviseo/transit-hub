@@ -1,4 +1,4 @@
-import type { GroupRateHistoryQuery, GroupRateHistoryRow, GroupRatesQuery, PaginatedGroupRatesResponse, UpdateGroupRateTypeRequest } from '../types/groupRates'
+import type { GroupRateHistoryQuery, GroupRateHistoryRow, GroupRatesQuery, PaginatedGroupRatesResponse } from '../types/groupRates'
 import {
   authUnauthorizedErrorKey,
   getAccessToken,
@@ -73,11 +73,4 @@ export const listGroupRateHistory = async (query: GroupRateHistoryQuery): Promis
   if (query.platform) params.set('platform', query.platform)
 
   return requestJson<GroupRateHistoryRow[]>(`/group-rates/history?${params.toString()}`)
-}
-
-export const updateGroupRateType = async (request: UpdateGroupRateTypeRequest): Promise<void> => {
-  await requestJson<{ success: boolean }>('/group-rates/type', {
-    method: 'PATCH',
-    body: JSON.stringify(request),
-  })
 }

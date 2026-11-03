@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, Github, Mail, Menu, X, UsersRound } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -118,7 +118,6 @@ interface MenuChild {
 }
 
 // 菜单项分两种形态：叶子（单一路由入口）和分组（固定顺序的二级菜单集合）。
-// “分组管理”下的三个二级菜单顺序固定：分组倍率 -> 分组关联 -> 分组健康，不随业务改动调整。
 type MenuEntry =
   | { type: 'leaf'; name: string; path: string; icon: Component }
   | { type: 'group'; id: string; name: string; icon: Component; children: MenuChild[] }
@@ -126,17 +125,7 @@ type MenuEntry =
 const menuItems = computed<MenuEntry[]>(() => [
   { type: 'leaf', name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
   { type: 'leaf', name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
-  {
-    type: 'group',
-    id: 'group-management',
-    name: t('admin.menu.groupManagement'),
-    icon: FolderTree,
-    children: [
-      { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
-      { name: t('admin.menu.groupAssociations'), path: '/admin/group-associations', icon: Link2 },
-      { name: t('admin.menu.connectionHealth'), path: '/admin/connection-health', icon: Activity },
-    ],
-  },
+  { type: 'leaf', name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
   { type: 'leaf', name: t('admin.menu.userActivity'), path: '/admin/user-activity', icon: UsersRound },
   { type: 'leaf', name: t('admin.menu.massEmail'), path: '/admin/mass-email', icon: Mail },
   { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
