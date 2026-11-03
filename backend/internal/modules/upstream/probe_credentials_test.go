@@ -235,6 +235,33 @@ func TestResolveProbeCredential_Sub2APIRedactedIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestResolveProbeCredential_Sub2APIFallsBackToListedBaseURL 验证导出凭据缺少 base_url 时，
+// 回退使用账号列表阶段已解析的 credentials.base_url；两处都没有时仍标记 base_url_unavailable。
+func TestResolveProbeCredential_Sub2APIFallsBackToListedBaseURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"data": []map[string]any{
+			{"name": "acc", "credentials": map[string]any{"api_key": "sk-sub2-secret"}},
+		}})
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "tok"}
+
+	cred, err := service.ResolveProbeCredential(session, AdminGroupAccountInfo{ID: "55", BaseURL: "https://listed-up"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cred.Key != "sk-sub2-secret" || cred.BaseURL != "https://listed-up" {
+		t.Fatalf("unexpected credential: %+v", cred)
+	}
+
+	_, err = service.ResolveProbeCredential(session, AdminGroupAccountInfo{ID: "55"})
+	if ProbeCredentialReason(err) != ReasonBaseURLUnavailable {
+		t.Fatalf("expected base_url_unavailable without any base_url source, got %v", err)
+	}
+}
+
 // TestResolveProbeCredential_Sub2APIExportUnavailable 验证导出接口不可达（404，模拟旧版本
 // 路由被 /:id 抢占）时不可探活，reason=export_unavailable。
 func TestResolveProbeCredential_Sub2APIExportUnavailable(t *testing.T) {

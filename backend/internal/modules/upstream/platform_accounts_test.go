@@ -106,6 +106,36 @@ func TestListAdminGroupAccounts_Sub2APIGroupQueryPagingAndFields(t *testing.T) {
 	}
 }
 
+// TestParseSub2APIAccount_ReadsCredentialBaseURLOnly 验证 sub2api 账号列表里 credentials.base_url
+// 会被解析出来（自动对接需要用它识别上游站点），而同一 credentials 里的密钥字段不会被读取。
+func TestParseSub2APIAccount_ReadsCredentialBaseURLOnly(t *testing.T) {
+	account := parseSub2APIAccount(map[string]any{
+		"id": 9, "name": "relay-a", "type": "apikey", "status": "active",
+		"credentials": map[string]any{
+			"base_url": " https://relay.example.com/v1 ",
+			"api_key":  "sk-listed-secret",
+		},
+	})
+	if account.BaseURL != "https://relay.example.com/v1" {
+		t.Fatalf("BaseURL = %q, want trimmed credentials.base_url", account.BaseURL)
+	}
+	encoded, _ := json.Marshal(account)
+	if strings.Contains(string(encoded), "sk-listed-secret") {
+		t.Fatalf("api_key leaked into parsed account: %s", encoded)
+	}
+
+	// OAuth 账号或 scoped Admin Key 下的脱敏列表没有 base_url，保持为空而不是编造。
+	withoutBaseURL := parseSub2APIAccount(map[string]any{
+		"id": 10, "type": "oauth", "credentials": map[string]any{"model_mapping": map[string]any{}},
+	})
+	if withoutBaseURL.BaseURL != "" {
+		t.Fatalf("BaseURL = %q, want empty when credentials has no base_url", withoutBaseURL.BaseURL)
+	}
+	if noCredentials := parseSub2APIAccount(map[string]any{"id": 11}); noCredentials.BaseURL != "" {
+		t.Fatalf("BaseURL = %q, want empty when credentials is missing", noCredentials.BaseURL)
+	}
+}
+
 // TestListAdminGroupAccounts_NewAPIUsesSearchPath 验证 new-api 优先走 /api/channel/search?group=<分组名>，
 // 并正确解析 channel 字段（含 weight），key 不外泄。
 func TestListAdminGroupAccounts_NewAPIUsesSearchPath(t *testing.T) {

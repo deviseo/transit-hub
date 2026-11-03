@@ -186,6 +186,10 @@ func (s *PlatformService) resolveSub2APIAccountCredential(session Session, accou
 		}
 	}
 	if baseURL == "" {
+		// 导出凭据里没有 base_url 时，回退到账号列表阶段已解析的 credentials.base_url。
+		baseURL = strings.TrimSpace(account.BaseURL)
+	}
+	if baseURL == "" {
 		return ProbeCredential{}, newProbeCredentialError(ReasonBaseURLUnavailable)
 	}
 
