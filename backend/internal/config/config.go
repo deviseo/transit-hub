@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"os"
 	"strings"
-	"time"
 )
 
 const (
@@ -29,23 +28,9 @@ type Config struct {
 	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
 	AllowPublicRegister bool
 
-	// 抽奖模块本地调试开关。默认禁止访问回环和私网 Sub2API，避免公开嵌入接口被用于 SSRF；
-	// 仅在受控的本地开发环境中临时开启。
-	LotteryAllowPrivateSub2APITargets bool
-
 	// 版本展示：开源版仅用于系统信息 API 和前端纯展示，不依赖任何远程授权/更新服务。
 	// 发布版本号由代码内置，不能由部署环境变量覆盖，避免部署用户随意修改后台展示版本。
 	AppVersion string
-
-	// 活动调价（group_rate_campaigns）默认值，仅作为创建活动时未填字段的兜底，不强制覆盖用户在页面上的选择。
-	GroupRateCampaignNotifyEnabled     bool
-	GroupRateCampaignDefaultNotifyBots []string
-	GroupRateCampaignStartTemplate     string
-	GroupRateCampaignEndTemplate       string
-	GroupRateCampaignSchedulerInterval time.Duration
-
-	// 工单图片附件本地存储目录：只存文件本身，metadata 落库；目录不存在时自动创建。
-	TicketUploadDir string
 
 	// SMTP 密码加密密钥：base64 编码的 32 字节 AES-256-GCM key，由 settings 模块解析和校验。
 	// 应用启动时是可选项，缺失不影响启动；这里只原样读取环境变量原值，不做任何解析或校验。
@@ -72,17 +57,7 @@ func Load() Config {
 
 		AllowPublicRegister: envOrDefault("ALLOW_PUBLIC_REGISTER", "true") == "true",
 
-		LotteryAllowPrivateSub2APITargets: envOrDefault("LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS", "false") == "true",
-
 		AppVersion: defaultAppVersion,
-
-		GroupRateCampaignNotifyEnabled:     envOrDefault("GROUP_RATE_CAMPAIGN_NOTIFY_ENABLED", "false") == "true",
-		GroupRateCampaignDefaultNotifyBots: splitOrigins(os.Getenv("GROUP_RATE_CAMPAIGN_DEFAULT_NOTIFY_BOT_IDS")),
-		GroupRateCampaignStartTemplate:     os.Getenv("GROUP_RATE_CAMPAIGN_START_NOTIFY_TEMPLATE"),
-		GroupRateCampaignEndTemplate:       os.Getenv("GROUP_RATE_CAMPAIGN_END_NOTIFY_TEMPLATE"),
-		GroupRateCampaignSchedulerInterval: envDuration("GROUP_RATE_CAMPAIGN_SCHEDULER_INTERVAL", 60*time.Second),
-
-		TicketUploadDir: envOrDefault("TICKET_UPLOAD_DIR", "data/ticket-uploads"),
 
 		SMTPEncryptionKey: os.Getenv("SMTP_ENCRYPTION_KEY"),
 	}
@@ -137,19 +112,6 @@ func envOrDefault(key string, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-// envDuration 解析形如 "60s"、"5m" 的环境变量；缺失或不合法时回退到 fallback，不中断启动。
-func envDuration(key string, fallback time.Duration) time.Duration {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }
 
 func splitOrigins(value string) []string {

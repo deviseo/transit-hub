@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"context"
 	"net/http/httptest"
 	"testing"
 )
@@ -22,50 +21,37 @@ func TestProtectedPathDoesNotOvermatchMassEmailLookalikes(t *testing.T) {
 	}
 }
 
-func TestProtectedPathIncludesLeaderboardAdminPrefix(t *testing.T) {
+func TestProtectedPathCoversKeptAdminAPIs(t *testing.T) {
 	server := &Server{}
-	for _, path := range []string{"/api/leaderboard/data", "/api/leaderboard/embed-config", "/api/leaderboard/embed-config/rotate-token"} {
+	for _, path := range []string{
+		"/api/admin-accounts", "/api/upstream-sites/site-1", "/api/group-rates", "/api/group-rates/history",
+		"/api/settings/strategy", "/api/dashboard/metrics", "/api/system/proxy", "/api/user-activity/summary",
+	} {
 		if !server.protectedPath(path) {
 			t.Fatalf("expected %s to be protected", path)
 		}
 	}
-	if server.protectedPath("/api/embed/leaderboard") {
-		t.Fatalf("embed leaderboard API must remain public at global middleware")
-	}
-}
-
-func TestSecurityHeadersForLeaderboardEmbedStaticRoute(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest("GET", "/embed/leaderboard?embed_token=embed-token&src_host=https://evil.example.com", nil)
-	server := &Server{leaderboardFrameAncestorOrigin: func(ctx context.Context, embedToken string) (string, bool) {
-		if embedToken != "embed-token" {
-			return "", false
+	// 公开接口：健康检查、登录和邮件退订页不经过 TransitHub 登录校验。
+	for _, path := range []string{"/api/health", "/api/auth/login", "/api/email-unsubscribe"} {
+		if server.protectedPath(path) {
+			t.Fatalf("expected %s to stay public", path)
 		}
-		return "https://src.example.com", true
-	}}
-	server.setSecurityHeaders(recorder, request)
-	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Fatalf("expected nosniff header, got %q", got)
-	}
-	if got := recorder.Header().Get("Referrer-Policy"); got != "no-referrer" {
-		t.Fatalf("expected no-referrer policy, got %q", got)
-	}
-	if got := recorder.Header().Get("Content-Security-Policy"); got != "frame-ancestors https://src.example.com" {
-		t.Fatalf("expected route-specific frame policy, got %q", got)
 	}
 }
 
-func TestSecurityHeadersForLeaderboardEmbedInvalidTokenDenyFrames(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest("GET", "/embed/leaderboard?embed_token=missing", nil)
-	server := &Server{leaderboardFrameAncestorOrigin: func(ctx context.Context, embedToken string) (string, bool) {
-		return "", false
-	}}
-	server.setSecurityHeaders(recorder, request)
-	if got := recorder.Header().Get("Referrer-Policy"); got != "no-referrer" {
-		t.Fatalf("expected no-referrer policy, got %q", got)
-	}
-	if got := recorder.Header().Get("Content-Security-Policy"); got != "frame-ancestors 'none'" {
-		t.Fatalf("expected frame denial for invalid token, got %q", got)
+func TestSecurityHeadersAreSetForEveryRequest(t *testing.T) {
+	for _, path := range []string{"/", "/admin", "/embed/leaderboard"} {
+		recorder := httptest.NewRecorder()
+		server := &Server{}
+		server.setSecurityHeaders(recorder, httptest.NewRequest("GET", path, nil))
+		if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Fatalf("%s: expected nosniff header, got %q", path, got)
+		}
+		if got := recorder.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
+			t.Fatalf("%s: unexpected referrer policy %q", path, got)
+		}
+		if got := recorder.Header().Get("Content-Security-Policy"); got != "" {
+			t.Fatalf("%s: removed embed pages must not get a frame policy, got %q", path, got)
+		}
 	}
 }

@@ -18,16 +18,12 @@ import (
 	"transithub/backend/internal/modules/auth"
 	"transithub/backend/internal/modules/connection_health"
 	"transithub/backend/internal/modules/dashboard"
-	"transithub/backend/internal/modules/group_rate_campaigns"
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
-	"transithub/backend/internal/modules/leaderboard"
-	"transithub/backend/internal/modules/lottery"
 	"transithub/backend/internal/modules/mass_email"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/settings"
 	"transithub/backend/internal/modules/system"
-	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/modules/user_activity"
 	"transithub/backend/internal/shared/authctx"
@@ -41,14 +37,10 @@ const (
 )
 
 type Server struct {
-	cfg                            config.Config
-	mux                            *http.ServeMux
-	allowed                        map[string]struct{}
-	authService                    *auth.Service
-	leaderboardFrameAncestorOrigin func(ctx context.Context, embedToken string) (string, bool)
-	lotteryFrameAncestorOrigin     func(ctx context.Context, embedToken string) (string, bool)
-	lotteryCancel                  context.CancelFunc
-	lotteryWorker                  *lottery.Worker
+	cfg         config.Config
+	mux         *http.ServeMux
+	allowed     map[string]struct{}
+	authService *auth.Service
 }
 
 func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server {
@@ -107,56 +99,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	my_sites.RegisterRoutes(server.mux, mySitesService)
 	mySitesService.SetAdminAccountResolver(adminAccountsService)
 
-	// 工单模块：iframe 嵌入配置 + 工单/回复。公开 iframe 接口鉴权完全依赖 embedToken/Sub2API
-	// token 换取的 embed session，与 TransitHub 登录态无关，因此不加入 protectedPath（见下方）。
-	ticketsRepository := tickets.NewRepository(db)
-	if err := ticketsRepository.EnsureSchema(context.Background()); err != nil {
-		panic(err)
-	}
-	ticketsSub2APIClient := tickets.NewSub2APIClient(outboundProxy.NewClient(upstreamRequestTimeout))
-	ticketsSessions := tickets.NewEmbedSessionStore(redisClient)
-	ticketsStorage, err := tickets.NewAttachmentStorage(cfg.TicketUploadDir)
-	if err != nil {
-		panic(err)
-	}
-	ticketsService := tickets.NewService(ticketsRepository, ticketsSessions, ticketsSub2APIClient, ticketsStorage)
-	ticketsService.SetAdminAccountResolver(adminAccountsService)
-	// Sub2API 用户资料弹窗按当前 workspace 的 admin 会话（mySitesService）实时查询用户详情/余额
-	// 历史（platformService），复用已有的会话存储和刷新逻辑，不新增第二套 admin token 存储。
-	ticketsService.SetAdminSessionProvider(mySitesService)
-	ticketsService.SetSub2APIAdminClient(platformService)
-	tickets.RegisterRoutes(server.mux, ticketsService)
-
-	// 排行榜模块：后台接口复用当前 workspace 的 dashboard admin session；公开 embed 接口
-	// 不进入 TransitHub 登录态，由独立 embed token + Sub2API viewer token 换取短期 Redis session。
-	leaderboardRepository := leaderboard.NewRepository(db)
-	leaderboardSessions := leaderboard.NewEmbedSessionStore(redisClient)
-	leaderboardSub2APIClient := leaderboard.NewSub2APIClient(&http.Client{Timeout: upstreamRequestTimeout})
-	leaderboardService := leaderboard.NewService(leaderboardRepository, leaderboardSessions, leaderboardSub2APIClient, platformService, mySitesService)
-	leaderboardService.SetAdminAccountResolver(adminAccountsService)
-	if err := leaderboardService.EnsureSchema(context.Background()); err != nil {
-		panic(err)
-	}
-	server.leaderboardFrameAncestorOrigin = leaderboardService.FrameAncestorOrigin
-	leaderboard.RegisterRoutes(server.mux, leaderboardService)
-
-	lotteryRepository := lottery.NewRepository(db)
-	lotterySessions := lottery.NewEmbedSessionStore(redisClient)
-	if cfg.LotteryAllowPrivateSub2APITargets {
-		log.Printf("[lottery] WARNING: private Sub2API targets are enabled for local debugging; do not enable this in production")
-	}
-	lotteryViewerClient := lottery.NewSub2APIViewerClientWithPrivateTargets(&http.Client{Timeout: upstreamRequestTimeout}, cfg.LotteryAllowPrivateSub2APITargets)
-	lotteryRewardClient := lottery.NewRewardClientWithPrivateTargets(&http.Client{Timeout: upstreamRequestTimeout}, cfg.LotteryAllowPrivateSub2APITargets)
-	lotteryService := lottery.NewService(lotteryRepository, lotterySessions, lotteryViewerClient, lotteryRewardClient, mySitesService)
-	lotteryService.SetAdminAccountResolver(adminAccountsService)
-	lotteryService.SetSubscriptionGroupProvider(platformService)
-	lotteryService.SetAllowPrivateTargets(cfg.LotteryAllowPrivateSub2APITargets)
-	if err := lotteryService.EnsureSchema(context.Background()); err != nil {
-		panic(err)
-	}
-	server.lotteryFrameAncestorOrigin = lotteryService.FrameAncestorOrigin
-	lottery.RegisterRoutes(server.mux, lotteryService)
-
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
 	if err := settingsService.EnsureSchema(context.Background()); err != nil {
@@ -208,28 +150,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	user_activity.RegisterRoutes(server.mux, userActivityService)
 	massEmailService.SetSegmentResolver(activitySegmentResolver{service: userActivityService})
 
-	// 活动调价中心：批量修改 admin 自有分组倍率的独立模块，不复用/不污染 my_sites 的自动调价逻辑。
-	// mySitesService 提供 admin 会话与分组倍率读写能力，groupRatesService 提供分组类型标签查询，
-	// settingsService 提供机器人通知发送能力。
-	campaignsService := group_rate_campaigns.NewService(
-		group_rate_campaigns.NewRepository(db),
-		mySitesService,
-		settingsService,
-		groupRatesService,
-		group_rate_campaigns.Config{
-			NotifyEnabledDefault: cfg.GroupRateCampaignNotifyEnabled,
-			DefaultNotifyBotIDs:  cfg.GroupRateCampaignDefaultNotifyBots,
-			StartTemplateDefault: cfg.GroupRateCampaignStartTemplate,
-			EndTemplateDefault:   cfg.GroupRateCampaignEndTemplate,
-			SchedulerInterval:    cfg.GroupRateCampaignSchedulerInterval,
-		},
-	)
-	if err := campaignsService.EnsureSchema(context.Background()); err != nil {
-		panic(err)
-	}
-	campaignsService.SetAdminAccountResolver(adminAccountsService)
-	group_rate_campaigns.RegisterRoutes(server.mux, campaignsService, adminAccountsService)
-
 	// 分组健康探活模块：数据源为 real_connections（通过 mySitesService 只读接口），
 	// upstreamService 提供站点 base_url/平台类型查询，platformService 提供 new-api 远端降级/恢复能力。
 	// 不新增手动配置的探活目标，也不改变 my_sites/upstream 现有数据语义。
@@ -259,13 +179,6 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	massEmailWorker.Start(context.Background())
 	userActivityService.StartScheduler(context.Background())
-	campaignsService.StartScheduler(context.Background())
-	lotteryCtx, lotteryCancel := context.WithCancel(context.Background())
-	lotteryWorker := lottery.NewWorker(lotteryService)
-	lotteryWorker.Start(lotteryCtx)
-	lotteryService.StartScheduler(lotteryCtx)
-	server.lotteryCancel = lotteryCancel
-	server.lotteryWorker = lotteryWorker
 	connHealthService.StartScheduler(context.Background())
 
 	// 策略设置变更时通知上游服务更新定时同步配置。
@@ -303,12 +216,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	dashboardService.SetAdminAccountService(adminAccountsService)
 	dashboardService.SetMySiteSync(mySitesService)
 	adminAccountsService.SetWorkspaceCleanup(workspaceCleanup{
-		dashboardSessions:   dashboardSessionStore,
-		ticketSessions:      ticketsSessions,
-		leaderboardSessions: leaderboardSessions,
-		lotterySessions:     lotterySessions,
-		attachments:         ticketsStorage,
-		upstreamSites:       upstreamService,
+		dashboardSessions: dashboardSessionStore,
+		upstreamSites:     upstreamService,
 	})
 	adminAccountsService.StartCleanupWorker(context.Background(), time.Minute)
 	dashboardService.StartRefresher(context.Background())
@@ -482,58 +391,38 @@ func (s *Server) Handler() http.Handler {
 	})))
 }
 
+// Shutdown 预留给需要优雅停止的后台任务；目前的后台任务都随进程退出，无需等待。
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.lotteryCancel != nil {
-		s.lotteryCancel()
-	}
-	if s.lotteryWorker == nil {
-		return nil
-	}
-	s.lotteryWorker.Stop()
-	done := make(chan struct{})
-	go func() {
-		s.lotteryWorker.Wait()
-		close(done)
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-done:
-		return nil
-	}
+	return nil
+}
+
+// protectedPathPrefixes 列出需要 TransitHub 登录的接口前缀；未列出的 /api 路径（健康检查、登录、
+// 邮件退订页）由各自的 handler 负责鉴权。
+var protectedPathPrefixes = []string{
+	"/api/admin-accounts",
+	"/api/upstream-sites",
+	"/api/group-rates",
+	"/api/my-sites",
+	"/api/connection-health",
+	"/api/settings",
+	"/api/dashboard",
+	"/api/system",
+	"/api/mass-email",
+	"/api/user-activity",
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email") || strings.HasPrefix(path, "/api/user-activity")
+	for _, prefix := range protectedPathPrefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	if r.Method == http.MethodGet && r.URL.Path == "/embed/leaderboard" {
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		origin := ""
-		if s.leaderboardFrameAncestorOrigin != nil {
-			origin, _ = s.leaderboardFrameAncestorOrigin(r.Context(), r.URL.Query().Get("embed_token"))
-		}
-		if origin == "" {
-			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
-			return
-		}
-		w.Header().Set("Content-Security-Policy", "frame-ancestors "+origin)
-	}
-	if r.Method == http.MethodGet && r.URL.Path == "/embed/lottery" {
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		origin := ""
-		if s.lotteryFrameAncestorOrigin != nil {
-			origin, _ = s.lotteryFrameAncestorOrigin(r.Context(), r.URL.Query().Get("embed_token"))
-		}
-		if origin == "" {
-			w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
-			return
-		}
-		w.Header().Set("Content-Security-Policy", "frame-ancestors "+origin)
-	}
 }
 
 func bearerToken(header string) string {

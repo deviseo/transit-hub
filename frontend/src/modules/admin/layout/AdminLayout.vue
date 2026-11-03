@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, MessageSquare, Github, Mail, Menu, X, Trophy, Gift, Boxes, UsersRound } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, FolderTree, Link2, Activity, Github, Mail, Menu, X, UsersRound } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -139,18 +139,6 @@ const menuItems = computed<MenuEntry[]>(() => [
   },
   { type: 'leaf', name: t('admin.menu.userActivity'), path: '/admin/user-activity', icon: UsersRound },
   { type: 'leaf', name: t('admin.menu.massEmail'), path: '/admin/mass-email', icon: Mail },
-  {
-    type: 'group',
-    id: 'embedded-features',
-    name: t('admin.menu.sub2apiFeatures'),
-    icon: Boxes,
-    children: [
-      { name: t('admin.menu.leaderboard'), path: '/admin/leaderboard', icon: Trophy },
-      { name: t('admin.menu.lottery'), path: '/admin/lottery', icon: Gift },
-      { name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
-      { name: t('admin.menu.tickets'), path: '/admin/tickets', icon: MessageSquare },
-    ],
-  },
   { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
 
