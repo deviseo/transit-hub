@@ -74,7 +74,7 @@ Please read the following carefully before using this project:
 
 ## Overview
 
-TransitHub is a self-hosted admin and operations hub for managing multiple upstream sites and admin workspaces. It focuses on practical operator workflows: connecting upstream platforms, tracking balances and group multipliers, monitoring dashboard metrics, configuring notifications, and running scheduled group-rate campaigns that can automatically restore original multipliers after an activity ends.
+TransitHub is a self-hosted admin and operations hub for managing multiple upstream sites and admin workspaces. It focuses on business analysis for relay operators: upstream and downstream cost and revenue, user activity and retention, and sales, together with balance and multiplier monitoring and notifications.
 
 The project is built as a Go backend with a Vue 3 admin frontend, backed by PostgreSQL and Redis.
 
@@ -83,10 +83,10 @@ The project is built as a Go backend with a Vue 3 admin frontend, backed by Post
 - **Admin workspace management** - Switch between admin accounts/workspaces and isolate workspace-scoped data.
 - **Upstream site management** - Add, sync, inspect, and manage upstream sites with cached metrics.
 - **Dashboard metrics** - View live and historical operation data, including balances, costs, trends, group usage, and upstream drilldowns.
-- **Group multiplier tracking** - Track group multiplier snapshots, changes, history, platform tags, and custom group types.
-- **Group-rate campaigns** - Create immediate or scheduled pricing activities, update selected admin groups, retain activity records, and restore original multipliers at the configured end time.
-- **Auto pricing support** - Configure mapped group auto-pricing rules based on upstream multiplier changes.
-- **Notification channels** - Configure DingTalk, Feishu, and Telegram bots for balance warnings, multiplier changes, auto-pricing, and campaign notifications.
+- **Group multiplier tracking** - A read-only list of upstream group multipliers with search, filters, changes, and history.
+- **User activity analytics** - Sync your own sub2api/new-api users and daily usage to find inactive or declining users, compare periods, and track top-ups, spend, and user balances.
+- **Mass email** - Email selected users or an activity segment, with an unsubscribe link and a per-workspace suppression list.
+- **Notification channels** - Configure DingTalk, Feishu, and Telegram bots for balance warnings and multiplier changes.
 - **System settings** - Manage refresh intervals, notification strategy, and runtime display settings.
 
 ## Tech Stack
@@ -135,10 +135,7 @@ Persistent data is stored under the repository root `data/` directory by default
 ```text
 data/postgres
 data/redis
-data/ticket-uploads
 ```
-
-`data/ticket-uploads` holds uploaded ticket images (mounted into the `app` container at `TICKET_UPLOAD_DIR`, default `/app/data/ticket-uploads`). It is not served as a public static directory; make sure this volume is present before recreating the `app` container, otherwise uploaded images will be lost even though their metadata remains in the database.
 
 `SMTP_ENCRYPTION_KEY` is an optional environment variable, only required if you want to save an SMTP password or send test emails from **System Settings > Email Settings**. Its absence does not prevent the application from starting and does not affect any non-SMTP feature. Generate a value with:
 
@@ -185,8 +182,6 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=transithub
 ALLOW_PUBLIC_REGISTER=true
-# Local lottery debugging only; keep false or unset in production
-LOTTERY_ALLOW_PRIVATE_SUB2API_TARGETS=false
 ```
 
 ### Frontend
@@ -234,12 +229,13 @@ transit-hub/
 │       ├── admin_accounts/
 │       ├── auth/
 │       ├── dashboard/
-│       ├── group_rate_campaigns/
 │       ├── group_rates/
+│       ├── mass_email/
 │       ├── my_sites/
 │       ├── settings/
 │       ├── system/
-│       └── upstream/
+│       ├── upstream/
+│       └── user_activity/
 ├── frontend/                 # Vue 3 admin frontend
 │   └── src/modules/          # Feature modules
 ├── deploy/                   # Dockerfile and compose files
@@ -250,9 +246,9 @@ transit-hub/
 ## Core Workflows
 
 - Workspace-isolated operations keep each admin workspace scoped while connecting multiple sub2api/new-api upstreams for synchronization and account management.
-- Group multiplier workflows track current upstream rates, support search and filtering, map own groups to upstream groups, and organize campaign-based adjustments.
-- Mapped-group automatic pricing can run manually or after sync with configurable strategies, execution status, and notifications.
-- Operational panels cover dashboard metrics, connection health, tickets, and email/template administration for day-to-day support.
+- The dashboard combines revenue from your own site with upstream cost to show daily profit, balances, and trends.
+- The group multiplier list tracks current upstream rates with search, filters, and change history.
+- User activity analysis finds inactive and declining users and feeds targeted mass email campaigns.
 
 ## Star History
 

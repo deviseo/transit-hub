@@ -29,10 +29,6 @@ ENV PUBLIC_DIR=/app/public
 # 业务时区：仪表盘「今日」营收/成本的日期边界按北京时间切分，与午夜快照调度（固定 Asia/Shanghai）一致。
 # 镜像已安装 tzdata，Go 运行时会读取 TZ；不设置时容器默认 UTC，北京时间 0–8 点的「今日」会变成前一天。
 ENV TZ=Asia/Shanghai
-# 工单图片附件本地存储目录：/app/data 下的子目录，不在 PUBLIC_DIR（/app/public）之下，
-# 不会被当作公开静态资源暴露；docker-compose.prod.yml 需要把这个路径挂载成持久化 volume，
-# 否则容器重建后数据库里的附件 metadata 还在但图片文件会丢失。
-ENV TICKET_UPLOAD_DIR=/app/data/ticket-uploads
 EXPOSE 10621
 
 ENTRYPOINT ["/app/transithub-api"]
