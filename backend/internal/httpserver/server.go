@@ -29,6 +29,7 @@ import (
 	"transithub/backend/internal/modules/system"
 	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/modules/user_activity"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
 	"transithub/backend/internal/shared/outbound"
@@ -197,7 +198,15 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	mass_email.RegisterRoutes(server.mux, massEmailService, adminAccountsService)
+	// 退订页面供邮件收件人访问，不需要 TransitHub 登录（/api/email-unsubscribe 不在 protectedPath 中）。
+	mass_email.RegisterPublicRoutes(server.mux, massEmailService)
 	massEmailWorker := mass_email.NewWorker(massEmailService)
+
+	// 用户活跃分析：把当前工作区「我的站点」（sub2api / new-api）的用户与每日用量同步到本地后分析；
+	// 只通过 my_sites 的管理员会话读取自己站点的数据。群发邮件的 segment 方式按这里的筛选条件解析收件人。
+	userActivityService := user_activity.NewService(user_activity.NewRepository(db), mySitesService, platformService, adminAccountsService)
+	user_activity.RegisterRoutes(server.mux, userActivityService)
+	massEmailService.SetSegmentResolver(activitySegmentResolver{service: userActivityService})
 
 	// 活动调价中心：批量修改 admin 自有分组倍率的独立模块，不复用/不污染 my_sites 的自动调价逻辑。
 	// mySitesService 提供 admin 会话与分组倍率读写能力，groupRatesService 提供分组类型标签查询，
@@ -249,6 +258,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	massEmailWorker.Start(context.Background())
+	userActivityService.StartScheduler(context.Background())
 	campaignsService.StartScheduler(context.Background())
 	lotteryCtx, lotteryCancel := context.WithCancel(context.Background())
 	lotteryWorker := lottery.NewWorker(lotteryService)
@@ -315,6 +325,39 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	system.RegisterRoutes(server.mux, systemService)
 
 	return server
+}
+
+// activitySegmentResolver 把用户活跃分析的筛选条件适配为群发邮件 segment 方式的收件人解析。
+type activitySegmentResolver struct {
+	service *user_activity.Service
+}
+
+func (r activitySegmentResolver) ResolveSegmentRecipients(ctx context.Context, userID string, adminAccountID string, filters mass_email.BatchFilters, max int) ([]mass_email.SegmentRecipient, error) {
+	recipients, err := r.service.Recipients(ctx, user_activity.Workspace{UserID: userID, AdminAccountID: adminAccountID}, user_activity.UserFilter{
+		Segment:      filters.Segment,
+		InactiveDays: filters.InactiveDays,
+		Search:       filters.Search,
+		Status:       filters.Status,
+		Role:         filters.Role,
+	}, max)
+	if err != nil {
+		if user_activity.IsRequestError(err) {
+			switch err.Error() {
+			case user_activity.ErrorTooManyRecipient:
+				return nil, mass_email.ErrRecipientLimitReached
+			case user_activity.ErrorNotSynced:
+				return nil, mass_email.ErrSegmentNotSynced
+			case user_activity.ErrorInvalidFilter:
+				return nil, mass_email.ErrInvalidSelection
+			}
+		}
+		return nil, err
+	}
+	result := make([]mass_email.SegmentRecipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		result = append(result, mass_email.SegmentRecipient{UpstreamUserID: recipient.SiteUserID, Email: recipient.Email, Username: recipient.Username})
+	}
+	return result, nil
 }
 
 // systemAdminChecker 把 auth.Service 与 ADMIN_EMAIL 适配为 system.SystemAdminChecker。
@@ -461,7 +504,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system") || strings.HasPrefix(path, "/api/connection-health") || strings.HasPrefix(path, "/api/tickets") || strings.HasPrefix(path, "/api/leaderboard") || strings.HasPrefix(path, "/api/lottery") || strings.HasPrefix(path, "/api/mass-email") || strings.HasPrefix(path, "/api/user-activity")
 }
 
 func (s *Server) setSecurityHeaders(w http.ResponseWriter, r *http.Request) {

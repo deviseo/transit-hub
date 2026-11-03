@@ -1,9 +1,11 @@
 import type {
+  AddMassEmailSuppressionsResult,
   CreateMassEmailBatchRequest,
   MassEmailBatch,
   MassEmailUsersQuery,
   PaginatedMassEmailBatchItemsResponse,
   PaginatedMassEmailBatchesResponse,
+  PaginatedMassEmailSuppressionsResponse,
   PaginatedMassEmailUsersResponse,
 } from '../types/massEmail'
 import {
@@ -140,3 +142,24 @@ export const cancelMassEmailBatch = async (id: string): Promise<MassEmailBatch> 
     method: 'POST',
   })
 )
+
+export const listMassEmailSuppressions = async (page = 1, pageSize = 20, search = ''): Promise<PaginatedMassEmailSuppressionsResponse> => {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  })
+  if (search) params.set('search', search)
+  const payload = await requestJson<PaginatedWire<PaginatedMassEmailSuppressionsResponse['items'][number]>>(`/mass-email/suppressions?${params.toString()}`)
+  return normalizePaginated(payload)
+}
+
+export const addMassEmailSuppressions = async (emails: string[]): Promise<AddMassEmailSuppressionsResult> => (
+  requestJson<AddMassEmailSuppressionsResult>('/mass-email/suppressions', {
+    method: 'POST',
+    body: JSON.stringify({ emails }),
+  })
+)
+
+export const removeMassEmailSuppression = async (email: string): Promise<void> => {
+  await requestJson<Record<string, never>>(`/mass-email/suppressions?email=${encodeURIComponent(email)}`, { method: 'DELETE' })
+}

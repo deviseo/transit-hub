@@ -291,6 +291,8 @@ type Sub2APIAdminUser struct {
 	RPMLimit      *int
 	CreatedAt     *time.Time
 	LastUsedAt    *time.Time
+	// TotalRecharged 是用户累计充值金额（sub2api total_recharged），旧版本没有该字段时为 nil。
+	TotalRecharged *float64
 }
 
 // Sub2APIAdminUsersQuery 是 Sub2API admin 用户分页列表的安全查询对象。

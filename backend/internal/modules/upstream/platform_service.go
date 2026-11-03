@@ -2704,6 +2704,7 @@ func parseSub2APIAdminUser(value any) Sub2APIAdminUser {
 	}
 	user.CreatedAt = parseFlexibleTime(firstAny(value, sub2APIUserCreatedAtKeys))
 	user.LastUsedAt = parseFlexibleTime(firstAny(value, sub2APIUserLastUsedAtKeys))
+	user.TotalRecharged = firstNumber(value, []string{"total_recharged", "totalRecharged"})
 	return user
 }
 

@@ -127,6 +127,7 @@ export default {
       sub2apiFeatures: '嵌入功能',
       settings: '系统设置',
       tickets: '工单',
+      userActivity: '用户活跃',
       massEmail: '群发邮件',
       signOut: '退出登录'
     },
@@ -2131,7 +2132,311 @@ export default {
         sendFailed: '邮件发送失败。',
         activeBatchExists: '当前工作区已有一个进行中的群发批次，请取消或等待完成后再创建。',
         recipientLimitReached: '本次选择超过 10,000 个收件人上限，请缩小筛选范围后重试。',
-        itemGeneric: '该收件人发送失败，请稍后查看批次获取最新详情。'
+        itemGeneric: '该收件人发送失败，请稍后查看批次获取最新详情。',
+        segmentUnavailable: '按活跃分群群发不可用。',
+        segmentNotSynced: '还没有同步过用户活跃数据，请先在「用户活跃」页面同步。',
+        invalidPublicUrl: '退订链接地址无效，请填写 http(s) 开头的完整地址。',
+        invalidSuppression: '请输入有效的邮箱地址（单次最多 1000 个）。',
+        suppressed: '收件人已退订，未发送。'
+      }
+    },
+    userActivity: {
+      subtitle: '同步当前工作区站点（sub2api / new-api）的用户与每日用量到本地，分析活跃度、未活跃时长以及日 / 周 / 月环比和同比，并可按筛选结果群发邮件。',
+      common: {
+        placeholder: '—'
+      },
+      platforms: {
+        sub2api: 'sub2api',
+        newapi: 'new-api'
+      },
+      sync: {
+        title: '数据同步',
+        never: '尚未同步',
+        lastSynced: '{time}同步',
+        coverage: '用量覆盖 {range}',
+        users: '{count} 个用户',
+        running: '正在同步用户与用量…',
+        runningBackfill: '正在回补更早的历史用量…',
+        failed: '最近一次同步失败：{reason}'
+      },
+      time: {
+        justNow: '刚刚',
+        minutesAgo: '{count} 分钟前',
+        hoursAgo: '{count} 小时前',
+        daysAgo: '{count} 天前'
+      },
+      actions: {
+        refresh: '刷新',
+        syncNow: '立即同步',
+        startSync: '开始同步',
+        goDashboard: '前往仪表盘登录',
+        sendEmail: '按筛选群发邮件',
+        suppressions: '退订名单（{count}）',
+        search: '搜索',
+        clearSearch: '清除搜索',
+        close: '关闭',
+        cancel: '取消'
+      },
+      status: {
+        loading: '加载中…'
+      },
+      empty: {
+        title: '还没有用户活跃数据',
+        description: '开始同步后，系统会用当前工作区的管理员会话读取站点用户列表和每日用量（首次拉取最近 62 天，之后每小时自动增量同步，并逐步回补更早的历史），数据只保存在本地用于分析。',
+        runningTitle: '正在首次同步',
+        runningDescription: '正在读取站点用户和最近 62 天的用量，通常需要 1～3 分钟；完成后页面会自动刷新。'
+      },
+      money: {
+        title: '资金概览',
+        methodRecords: '按站点充值记录统计：在线充值、兑换码、管理员调整、邀请返利',
+        methodSnapshot: '按两次同步之间用户「余额 + 累计消费」的变化统计（自 {time} 起），包含在线充值、兑换码、管理员调整、签到 / 邀请奖励等，无法区分渠道',
+        todayRecharge: '今日入账',
+        deduction: '扣减 {value}',
+        yesterdayFull: '昨日全天 {value}',
+        events: '{count} 笔',
+        noRechargeToday: '今天还没有入账',
+        noRechargeData: '还没有入账数据，同步后显示',
+        notUpToDate: '最近一次同步没能读取入账记录，数据可能不是最新的',
+        todayCost: '今日消耗',
+        totalBalance: '全站用户余额',
+        balanceChange: '较昨日末 {value}',
+        usersWithBalance: '有余额 {count} 人',
+        lifetimeRecharged: '累计充值 {value}（站点字段，不含管理员调整）',
+        rechargeUsers: '今日入账人数',
+        lowBalance: '活跃但余额不足 1 美元',
+        channels: {
+          payment: '在线充值',
+          redeem: '兑换码',
+          admin_add: '管理员加款',
+          admin_deduct: '管理员扣款',
+          affiliate: '邀请返利转入',
+          credit: '余额增加',
+          debit: '余额减少'
+        }
+      },
+      warnings: {
+        rechargeFetch: '同步时没能读取站点的入账记录（可能是管理员密钥没有兑换码记录的查看权限或网络问题），活跃与用量数据不受影响，下次同步会重试。',
+        rechargeUnsupported: '站点版本较旧，不支持按使用时间读取兑换码记录，暂时无法统计入账。升级 sub2api 后即可使用。',
+        rechargeTruncated: '需要读取的入账记录过多，本次没有写入入账数据，下次同步会继续尝试。'
+      },
+      kpi: {
+        totalUsers: '用户总数',
+        totalUsersHint: '有邮箱 {withEmail} · 已禁用 {disabled}',
+        activeToday: '今日活跃用户',
+        todayHint: '请求 {requests} · 消费 {cost}',
+        active7d: '近 7 天活跃用户',
+        vsPrevious7d: '对比前 7 天',
+        active30d: '近 30 天活跃用户',
+        vsPrevious30d: '对比前 30 天',
+        noUsage: '从未使用',
+        noUsageHint: '注册后没有任何用量，点击查看'
+      },
+      inactive: {
+        title: '未活跃分布',
+        hint: '不含已禁用用户（共 {count} 人），点击查看名单',
+        bucket: '超过 {days} 天未使用'
+      },
+      periods: {
+        day: {
+          title: '日环比',
+          description: '昨天 vs 前天'
+        },
+        week: {
+          title: '周环比',
+          description: '近 7 天 vs 前 7 天'
+        },
+        month: {
+          title: '月环比',
+          description: '近 30 天 vs 前 30 天'
+        },
+        metric: '指标',
+        current: '本期',
+        sequential: '环比',
+        yearOverYear: '同比',
+        previousMissing: '本地数据还没有覆盖上一周期，同步回补后显示',
+        lastYearMissing: '本地还没有去年同期的数据（sub2api 只保留 90 天用量，需要本地持续同步满一年）'
+      },
+      metrics: {
+        activeUsers: '活跃用户',
+        requests: '请求数',
+        tokens: 'Token',
+        cost: '消费（美元）',
+        newUsers: '新注册',
+        recharge: '入账（美元）'
+      },
+      retention: {
+        retained: '持续活跃 {count}',
+        churned: '流失 {count}',
+        gained: '新增活跃 {count}'
+      },
+      delta: {
+        fromZero: '新增'
+      },
+      trend: {
+        range: '趋势时间范围',
+        lastDays: '近 {days} 天',
+        completeDays: '截至昨天（完整自然日）',
+        showTable: '表格',
+        showChart: '图表',
+        day: '日期',
+        activeUsersTitle: '每日活跃用户',
+        costTitle: '每日消费（美元）',
+        latest: '{day}：{value}',
+        usersValue: '{count} 人',
+        activeUsersAria: '近 {days} 天每日活跃用户趋势',
+        costAria: '近 {days} 天每日消费趋势',
+        rechargeTitle: '每日入账（美元）',
+        rechargeAria: '近 {days} 天每日入账趋势',
+        noData: '无数据（尚未覆盖）'
+      },
+      users: {
+        title: '用户列表',
+        subtitle: '「近 N 天」均截至昨天；点击用户查看每日用量与环比。',
+        matched: '匹配 {count} 人',
+        empty: '没有符合条件的用户'
+      },
+      filters: {
+        segment: '用户分群',
+        inactiveDays: '未使用天数',
+        status: '状态',
+        role: '角色',
+        search: '搜索',
+        searchPlaceholder: '邮箱、用户名或用户 ID',
+        allStatuses: '全部状态',
+        allRoles: '全部角色',
+        searchSummary: '搜索「{search}」'
+      },
+      segmentGroups: {
+        basic: '全部',
+        active: '活跃',
+        inactive: '未活跃',
+        change: '用量变化',
+        money: '资金'
+      },
+      segments: {
+        all: '全部用户',
+        active_1d: '24 小时内使用过',
+        active_7d: '7 天内使用过',
+        active_30d: '30 天内使用过',
+        inactive_2d: '超过 2 天未使用',
+        inactive_7d: '超过 7 天未使用',
+        inactive_14d: '超过 14 天未使用',
+        inactive_30d: '超过 30 天未使用',
+        inactive_60d: '超过 60 天未使用',
+        inactive_90d: '超过 90 天未使用',
+        inactive: '自定义未使用天数',
+        inactiveCustom: '超过 {days} 天未使用',
+        no_usage: '从未使用',
+        churned_7d: '近 7 天流失（前 7 天用过）',
+        declining: '用量下降（周消费减半）',
+        growing: '用量增长（周消费 ≥1.5 倍）',
+        recharged_today: '今日有入账',
+        low_balance: '活跃但余额不足 1 美元'
+      },
+      userStatus: {
+        active: '正常',
+        disabled: '已禁用'
+      },
+      roles: {
+        user: '普通用户',
+        admin: '管理员',
+        root: '超级管理员'
+      },
+      fields: {
+        user: '用户',
+        status: '状态',
+        lastUsed: '最近使用',
+        costToday: '今日消费',
+        cost7d: '近 7 天消费',
+        change7d: '周环比',
+        cost30d: '近 30 天消费',
+        activeDays30d: '30 天活跃天数',
+        balance: '余额',
+        totalRecharged: '累计充值',
+        totalUsed: '累计消费',
+        createdAt: '注册时间',
+        today: '今日消费',
+        requestsCount: '{count} 次请求',
+        daysValue: '{count} 天',
+        previousValue: '前 7 天 {value}',
+        rechargeToday: '今日入账',
+        recharge30d: '近 30 天入账'
+      },
+      lastUsed: {
+        today: '今天',
+        daysAgo: '{count} 天前',
+        longAgo: '很久未使用',
+        never: '从未使用'
+      },
+      detail: {
+        identity: '用户 ID {id} · 用户名 {username}',
+        trendTitle: '近 90 天每日用量',
+        requestsChartAria: '该用户近 90 天每日请求数趋势',
+        costChartAria: '该用户近 90 天每日消费趋势',
+        rechargeChartAria: '该用户近 90 天每日入账趋势'
+      },
+      email: {
+        title: '按筛选条件群发邮件',
+        loading: '正在统计收件人…',
+        matched: '匹配用户',
+        withEmail: '有邮箱',
+        suppressed: '已退订',
+        sendable: '预计发送',
+        previewHint: '收件人来自本地同步的用户快照；无效或重复的邮箱会在创建批次时跳过，发送进度可在「群发邮件」页面查看。',
+        template: '邮件模板',
+        templatePlaceholder: '请选择模板',
+        noTemplates: '还没有邮件模板，请先在「系统设置 - 邮件模板」中创建。',
+        subject: '主题：',
+        unsubscribe: '附带退订链接',
+        unsubscribeHint: '每封邮件末尾会自动附上该收件人的退订链接；也可以在模板中写入 {placeholder} 指定位置。',
+        unsubscribePlaceholderFound: '模板中的 {placeholder} 会替换为每个收件人自己的退订链接。',
+        publicBaseUrl: 'TransitHub 接口公网地址',
+        publicBaseUrlHint: '收件人点击退订链接时访问该地址下的 /email-unsubscribe，请确认外网可以访问。',
+        privateUrlWarning: '这看起来是本机或内网地址，收件人在外网可能打不开退订链接。',
+        submit: '创建群发批次（{count} 人）',
+        created: '已创建群发批次：{count} 个收件人，跳过 {skipped} 个（无效、重复或已退订）。',
+        viewProgress: '查看发送进度'
+      },
+      suppressions: {
+        title: '退订名单',
+        description: '名单中的邮箱不会再收到群发邮件（对所有群发方式生效）。收件人点击邮件中的退订链接后会自动加入。',
+        addLabel: '手动添加邮箱',
+        addPlaceholder: '每行一个，或用逗号分隔',
+        add: '加入退订名单',
+        searchPlaceholder: '搜索邮箱',
+        email: '邮箱',
+        reason: '来源',
+        createdAt: '加入时间',
+        empty: '退订名单为空',
+        remove: '移出名单',
+        removeAria: '将 {email} 移出退订名单',
+        removeConfirm: '确定将 {email} 移出退订名单？移出后该邮箱会重新收到群发邮件。',
+        added: '已加入 {added} 个邮箱，忽略无效地址 {invalid} 个。',
+        removed: '已将 {email} 移出退订名单。',
+        reasons: {
+          unsubscribe: '收件人退订',
+          manual: '手动添加'
+        }
+      },
+      pagination: {
+        total: '共 {total} 条',
+        previous: '上一页',
+        next: '下一页'
+      },
+      errors: {
+        network: '网络请求失败，请检查 TransitHub 服务是否可用。',
+        request: '用户活跃数据请求失败，请稍后重试。',
+        authRequired: '需要当前工作区站点的管理员会话：请先在仪表盘登录 sub2api / new-api 管理员账号。',
+        platformUnsupported: '当前工作区的站点类型不支持用户活跃分析（仅支持 sub2api 和 new-api）。',
+        syncInProgress: '同步正在进行中，请稍后再试。',
+        usersFetch: '读取站点用户列表失败，请确认管理员会话有效。',
+        usageFetch: '读取站点用量数据失败。sub2api 需要管理员会话；new-api 需要管理员权限（访问令牌需包含 log:read），且站点开启了数据看板统计。',
+        interrupted: '同步被中断（服务重启或超时），请重新同步。',
+        invalidFilter: '筛选条件无效。',
+        notFound: '用户不存在或已从站点删除。',
+        tooManyUsers: '站点用户超过 50,000 人，暂不支持同步。',
+        tooManyRecipients: '筛选结果超过 10,000 个收件人，请缩小筛选范围。',
+        notSynced: '还没有同步过用户数据，请先同步。'
       }
     },
     settings: {

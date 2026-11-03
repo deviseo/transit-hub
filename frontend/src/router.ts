@@ -104,6 +104,12 @@ const routes = [
         component: () => import('./modules/lottery/LotteryAdminPage.vue')
       },
       {
+        path: 'user-activity',
+        name: 'AdminUserActivity',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/UserActivityView.vue')
+      },
+      {
         path: 'mass-email',
         name: 'AdminMassEmail',
         meta: { requiresWorkspace: true },

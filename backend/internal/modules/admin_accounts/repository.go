@@ -59,6 +59,12 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "ticket_embed_configs", SQL: `DELETE FROM ticket_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "leaderboard_embed_configs", SQL: `DELETE FROM leaderboard_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "group_rate_snapshots", SQL: `DELETE FROM group_rate_snapshots WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_daily", SQL: `DELETE FROM user_activity_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_recharge_daily", SQL: `DELETE FROM user_activity_recharge_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_site_daily", SQL: `DELETE FROM user_activity_site_daily WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_profiles", SQL: `DELETE FROM user_activity_profiles WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "user_activity_sync_states", SQL: `DELETE FROM user_activity_sync_states WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "email_suppressions", SQL: `DELETE FROM email_suppressions WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "strategy_settings", SQL: `DELETE FROM strategy_settings WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "notification_channel_settings", SQL: `DELETE FROM notification_channel_settings WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "smtp_settings", SQL: `DELETE FROM smtp_settings WHERE user_id = $1 AND admin_account_id = $2`},
@@ -108,6 +114,12 @@ var legacyWorkspaceTables = []workspaceTableDescriptor{
 	{Name: "tickets", WorkspaceColumn: "admin_account_id"},
 	{Name: "ticket_messages", WorkspaceColumn: "admin_account_id"},
 	{Name: "ticket_attachments", WorkspaceColumn: "admin_account_id"},
+	{Name: "user_activity_daily", WorkspaceColumn: "admin_account_id"},
+	{Name: "user_activity_recharge_daily", WorkspaceColumn: "admin_account_id"},
+	{Name: "user_activity_site_daily", WorkspaceColumn: "admin_account_id"},
+	{Name: "user_activity_profiles", WorkspaceColumn: "admin_account_id"},
+	{Name: "user_activity_sync_states", WorkspaceColumn: "admin_account_id"},
+	{Name: "email_suppressions", WorkspaceColumn: "admin_account_id"},
 }
 
 type Repository struct {

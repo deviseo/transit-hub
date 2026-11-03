@@ -127,6 +127,7 @@ export default {
       sub2apiFeatures: 'Embedded Features',
       settings: 'Settings',
       tickets: 'Tickets',
+      userActivity: 'User Activity',
       massEmail: 'Mass Email',
       signOut: 'Sign Out'
     },
@@ -2131,7 +2132,311 @@ export default {
         sendFailed: 'Email sending failed.',
         activeBatchExists: 'Another mass-email batch is already active in this workspace. Cancel or wait for it to finish before creating a new one.',
         recipientLimitReached: 'This selection exceeds the 10,000-recipient limit. Narrow the filters and try again.',
-        itemGeneric: 'Recipient delivery failed. Check the batch later for updated details.'
+        itemGeneric: 'Recipient delivery failed. Check the batch later for updated details.',
+        segmentUnavailable: 'Sending by activity segment is unavailable.',
+        segmentNotSynced: 'User activity has not been synced yet. Sync it on the User Activity page first.',
+        invalidPublicUrl: 'Invalid unsubscribe link address. Enter a full http(s) URL.',
+        invalidSuppression: 'Enter valid email addresses (up to 1,000 at a time).',
+        suppressed: 'The recipient unsubscribed; nothing was sent.'
+      }
+    },
+    userActivity: {
+      subtitle: 'Syncs users and daily usage from this workspace\'s site (sub2api / new-api) into TransitHub to analyze activity, inactivity, day/week/month-over-month and year-over-year changes, and email filtered users.',
+      common: {
+        placeholder: '—'
+      },
+      platforms: {
+        sub2api: 'sub2api',
+        newapi: 'new-api'
+      },
+      sync: {
+        title: 'Data sync',
+        never: 'Not synced yet',
+        lastSynced: 'Synced {time}',
+        coverage: 'Usage covers {range}',
+        users: '{count} users',
+        running: 'Syncing users and usage…',
+        runningBackfill: 'Backfilling older usage history…',
+        failed: 'Last sync failed: {reason}'
+      },
+      time: {
+        justNow: 'just now',
+        minutesAgo: '{count} min ago',
+        hoursAgo: '{count} h ago',
+        daysAgo: '{count} d ago'
+      },
+      actions: {
+        refresh: 'Refresh',
+        syncNow: 'Sync now',
+        startSync: 'Start sync',
+        goDashboard: 'Sign in on the dashboard',
+        sendEmail: 'Email filtered users',
+        suppressions: 'Unsubscribed ({count})',
+        search: 'Search',
+        clearSearch: 'Clear search',
+        close: 'Close',
+        cancel: 'Cancel'
+      },
+      status: {
+        loading: 'Loading…'
+      },
+      empty: {
+        title: 'No user activity data yet',
+        description: 'Once you start syncing, TransitHub reads the site\'s user list and daily usage with this workspace\'s admin session (the last 62 days first, then hourly incremental syncs that gradually backfill older history). The data stays in TransitHub for analysis.',
+        runningTitle: 'Running the first sync',
+        runningDescription: 'Reading site users and the last 62 days of usage. This usually takes 1–3 minutes; the page refreshes automatically when it finishes.'
+      },
+      money: {
+        title: 'Money',
+        methodRecords: 'From the site\'s top-up records: online payments, redeem codes, admin adjustments and affiliate rebates',
+        methodSnapshot: 'From changes in each user\'s "balance + total spent" between syncs (since {time}); includes online top-ups, redeem codes, admin adjustments and check-in / invite rewards, without a per-channel split',
+        todayRecharge: 'Credited today',
+        deduction: 'deducted {value}',
+        yesterdayFull: 'yesterday {value}',
+        events: '{count} record | {count} records',
+        noRechargeToday: 'Nothing credited yet today',
+        noRechargeData: 'No credit data yet; it appears after a sync',
+        notUpToDate: 'The latest sync could not read top-up records, so these numbers may be out of date',
+        todayCost: 'Spent today',
+        totalBalance: 'Total user balance',
+        balanceChange: '{value} vs. yesterday\'s close',
+        usersWithBalance: '{count} users with balance',
+        lifetimeRecharged: 'Lifetime top-ups {value} (site field, excludes admin adjustments)',
+        rechargeUsers: 'Users credited today',
+        lowBalance: 'Active with balance under $1',
+        channels: {
+          payment: 'Online payments',
+          redeem: 'Redeem codes',
+          admin_add: 'Admin top-ups',
+          admin_deduct: 'Admin deductions',
+          affiliate: 'Affiliate rebates',
+          credit: 'Balance increases',
+          debit: 'Balance decreases'
+        }
+      },
+      warnings: {
+        rechargeFetch: 'The sync could not read the site\'s top-up records (the admin key may lack permission to view redeem codes, or the network failed). Activity and usage data are unaffected; the next sync retries.',
+        rechargeUnsupported: 'This site version cannot list redeem records by usage time, so credits cannot be counted yet. Upgrade sub2api to enable it.',
+        rechargeTruncated: 'Too many top-up records to read, so no credit data was written this time; the next sync tries again.'
+      },
+      kpi: {
+        totalUsers: 'Total users',
+        totalUsersHint: '{withEmail} with email · {disabled} disabled',
+        activeToday: 'Active today',
+        todayHint: '{requests} requests · {cost} spent',
+        active7d: 'Active in the last 7 days',
+        vsPrevious7d: 'vs. the previous 7 days',
+        active30d: 'Active in the last 30 days',
+        vsPrevious30d: 'vs. the previous 30 days',
+        noUsage: 'Never used',
+        noUsageHint: 'Signed up without any usage; click to view'
+      },
+      inactive: {
+        title: 'Inactivity',
+        hint: 'Excludes disabled users ({count} users); click a bucket to view the list',
+        bucket: 'Inactive > {days} days'
+      },
+      periods: {
+        day: {
+          title: 'Day over day',
+          description: 'Yesterday vs. the day before'
+        },
+        week: {
+          title: 'Week over week',
+          description: 'Last 7 days vs. the previous 7'
+        },
+        month: {
+          title: 'Month over month',
+          description: 'Last 30 days vs. the previous 30'
+        },
+        metric: 'Metric',
+        current: 'Current',
+        sequential: 'vs. prev.',
+        yearOverYear: 'YoY',
+        previousMissing: 'Local data does not cover the previous period yet; it appears after backfilling',
+        lastYearMissing: 'No local data for the same period last year yet (sub2api keeps 90 days of usage, so TransitHub needs a full year of syncing)'
+      },
+      metrics: {
+        activeUsers: 'Active users',
+        requests: 'Requests',
+        tokens: 'Tokens',
+        cost: 'Spend (USD)',
+        newUsers: 'Sign-ups',
+        recharge: 'Credits (USD)'
+      },
+      retention: {
+        retained: 'Retained {count}',
+        churned: 'Churned {count}',
+        gained: 'Newly active {count}'
+      },
+      delta: {
+        fromZero: 'New'
+      },
+      trend: {
+        range: 'Trend range',
+        lastDays: 'Last {days} days',
+        completeDays: 'Through yesterday (complete days)',
+        showTable: 'Table',
+        showChart: 'Chart',
+        day: 'Date',
+        activeUsersTitle: 'Daily active users',
+        costTitle: 'Daily spend (USD)',
+        latest: '{day}: {value}',
+        usersValue: '{count} users',
+        activeUsersAria: 'Daily active users over the last {days} days',
+        costAria: 'Daily spend over the last {days} days',
+        rechargeTitle: 'Daily credits (USD)',
+        rechargeAria: 'Daily credits over the last {days} days',
+        noData: 'No data (not covered yet)'
+      },
+      users: {
+        title: 'Users',
+        subtitle: '"Last N days" always ends yesterday. Click a user for daily usage and comparisons.',
+        matched: '{count} matching users',
+        empty: 'No users match these filters'
+      },
+      filters: {
+        segment: 'Segment',
+        inactiveDays: 'Inactive days',
+        status: 'Status',
+        role: 'Role',
+        search: 'Search',
+        searchPlaceholder: 'Email, username or user ID',
+        allStatuses: 'All statuses',
+        allRoles: 'All roles',
+        searchSummary: 'search "{search}"'
+      },
+      segmentGroups: {
+        basic: 'All',
+        active: 'Active',
+        inactive: 'Inactive',
+        change: 'Usage change',
+        money: 'Money'
+      },
+      segments: {
+        all: 'All users',
+        active_1d: 'Used in the last 24 hours',
+        active_7d: 'Used in the last 7 days',
+        active_30d: 'Used in the last 30 days',
+        inactive_2d: 'Inactive > 2 days',
+        inactive_7d: 'Inactive > 7 days',
+        inactive_14d: 'Inactive > 14 days',
+        inactive_30d: 'Inactive > 30 days',
+        inactive_60d: 'Inactive > 60 days',
+        inactive_90d: 'Inactive > 90 days',
+        inactive: 'Custom inactive days',
+        inactiveCustom: 'Inactive > {days} days',
+        no_usage: 'Never used',
+        churned_7d: 'Churned this week (active the week before)',
+        declining: 'Declining (weekly spend halved)',
+        growing: 'Growing (weekly spend ≥ 1.5×)',
+        recharged_today: 'Credited today',
+        low_balance: 'Active with balance under $1'
+      },
+      userStatus: {
+        active: 'Active',
+        disabled: 'Disabled'
+      },
+      roles: {
+        user: 'User',
+        admin: 'Admin',
+        root: 'Root'
+      },
+      fields: {
+        user: 'User',
+        status: 'Status',
+        lastUsed: 'Last used',
+        costToday: 'Spend today',
+        cost7d: 'Spend, 7 days',
+        change7d: 'WoW',
+        cost30d: 'Spend, 30 days',
+        activeDays30d: 'Active days (30d)',
+        balance: 'Balance',
+        totalRecharged: 'Total recharged',
+        totalUsed: 'Total spent',
+        createdAt: 'Signed up',
+        today: 'Spend today',
+        requestsCount: '{count} request | {count} requests',
+        daysValue: '{count} day | {count} days',
+        previousValue: 'prev. 7 days {value}',
+        rechargeToday: 'Credited today',
+        recharge30d: 'Credits, 30 days'
+      },
+      lastUsed: {
+        today: 'Today',
+        daysAgo: '{count} day ago | {count} days ago',
+        longAgo: 'Long ago',
+        never: 'Never'
+      },
+      detail: {
+        identity: 'User ID {id} · Username {username}',
+        trendTitle: 'Daily usage, last 90 days',
+        requestsChartAria: 'Daily requests for this user over the last 90 days',
+        costChartAria: 'Daily spend for this user over the last 90 days',
+        rechargeChartAria: 'Daily credits for this user over the last 90 days'
+      },
+      email: {
+        title: 'Email users matching these filters',
+        loading: 'Counting recipients…',
+        matched: 'Matching',
+        withEmail: 'With email',
+        suppressed: 'Unsubscribed',
+        sendable: 'Will receive',
+        previewHint: 'Recipients come from the locally synced user snapshot. Invalid or duplicate addresses are skipped when the batch is created; track progress on the Mass Email page.',
+        template: 'Email template',
+        templatePlaceholder: 'Select a template',
+        noTemplates: 'No email templates yet. Create one under Settings - Email templates first.',
+        subject: 'Subject:',
+        unsubscribe: 'Include an unsubscribe link',
+        unsubscribeHint: 'Each email gets the recipient\'s own unsubscribe link at the end. Put {placeholder} in the template to choose where it goes.',
+        unsubscribePlaceholderFound: '{placeholder} in the template is replaced with each recipient\'s own unsubscribe link.',
+        publicBaseUrl: 'Public TransitHub API address',
+        publicBaseUrlHint: 'Unsubscribe links open /email-unsubscribe under this address, so it must be reachable from the internet.',
+        privateUrlWarning: 'This looks like a local or private address; recipients outside your network may not be able to open the unsubscribe link.',
+        submit: 'Create batch ({count} recipients)',
+        created: 'Batch created: {count} recipients, {skipped} skipped (invalid, duplicate or unsubscribed).',
+        viewProgress: 'View progress'
+      },
+      suppressions: {
+        title: 'Unsubscribe list',
+        description: 'Addresses on this list never receive mass email, whichever way recipients are selected. Recipients are added automatically when they click an unsubscribe link.',
+        addLabel: 'Add addresses manually',
+        addPlaceholder: 'One per line, or separated by commas',
+        add: 'Add to list',
+        searchPlaceholder: 'Search email',
+        email: 'Email',
+        reason: 'Source',
+        createdAt: 'Added',
+        empty: 'The unsubscribe list is empty',
+        remove: 'Remove from list',
+        removeAria: 'Remove {email} from the unsubscribe list',
+        removeConfirm: 'Remove {email} from the unsubscribe list? It will receive mass email again.',
+        added: 'Added {added} addresses; ignored {invalid} invalid ones.',
+        removed: 'Removed {email} from the unsubscribe list.',
+        reasons: {
+          unsubscribe: 'Recipient unsubscribed',
+          manual: 'Added manually'
+        }
+      },
+      pagination: {
+        total: '{total} total',
+        previous: 'Previous',
+        next: 'Next'
+      },
+      errors: {
+        network: 'Network request failed. Check that the TransitHub service is reachable.',
+        request: 'User activity request failed. Please try again later.',
+        authRequired: 'An admin session for this workspace\'s site is required: sign in to the sub2api / new-api admin account on the dashboard first.',
+        platformUnsupported: 'User activity analysis only supports sub2api and new-api sites.',
+        syncInProgress: 'A sync is already running. Please try again shortly.',
+        usersFetch: 'Could not read the site\'s user list. Check that the admin session is valid.',
+        usageFetch: 'Could not read the site\'s usage data. sub2api needs an admin session; new-api needs admin rights (access tokens need the log:read scope) and data dashboard statistics enabled.',
+        interrupted: 'The sync was interrupted (service restart or timeout). Please sync again.',
+        invalidFilter: 'Invalid filter.',
+        notFound: 'The user does not exist or was deleted from the site.',
+        tooManyUsers: 'Sites with more than 50,000 users are not supported yet.',
+        tooManyRecipients: 'More than 10,000 recipients match. Narrow the filters.',
+        notSynced: 'No user data has been synced yet. Run a sync first.'
       }
     },
     settings: {

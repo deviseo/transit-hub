@@ -10,7 +10,7 @@ export type MassEmailBatchStatus = 'queued' | 'running' | 'completed' | 'complet
 
 export type MassEmailItemStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'uncertain' | 'cancelled'
 
-export type MassEmailSelectionMode = 'selected' | 'all'
+export type MassEmailSelectionMode = 'selected' | 'all' | 'segment'
 
 export interface MassEmailUser {
   id: string
@@ -46,6 +46,9 @@ export interface MassEmailBatchFilters {
   status: string
   role: string
   search?: string
+  // 仅 segment 方式（用户活跃分析的筛选条件）使用。
+  segment?: string
+  inactiveDays?: number
 }
 
 export interface CreateMassEmailBatchRequest {
@@ -54,6 +57,8 @@ export interface CreateMassEmailBatchRequest {
   userIds?: string[]
   filters: MassEmailBatchFilters
   requestId: string
+  // 非空时每封邮件附带退订链接，指向该 TransitHub API 公开地址。
+  publicBaseUrl?: string
 }
 
 export interface MassEmailBatch {
@@ -64,6 +69,7 @@ export interface MassEmailBatch {
   templateSubject: string
   selectionMode: MassEmailSelectionMode | string
   filters: MassEmailBatchFilters
+  unsubscribeLink?: boolean
   status: MassEmailBatchStatus | string
   recipientCount: number
   skippedCount: number
@@ -107,4 +113,23 @@ export interface PaginatedMassEmailBatchItemsResponse {
   page: number
   pageSize: number
   totalPages: number
+}
+
+export interface MassEmailSuppression {
+  email: string
+  reason: 'unsubscribe' | 'manual' | string
+  createdAt: string
+}
+
+export interface PaginatedMassEmailSuppressionsResponse {
+  items: MassEmailSuppression[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
+export interface AddMassEmailSuppressionsResult {
+  added: number
+  invalid: number
 }

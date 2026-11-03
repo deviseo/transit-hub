@@ -1,6 +1,9 @@
 package mass_email
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	BatchStatusQueued              = "queued"
@@ -26,6 +29,8 @@ type SelectionMode string
 const (
 	SelectionModeSelected SelectionMode = "selected"
 	SelectionModeAll      SelectionMode = "all"
+	// SelectionModeSegment 按「用户活跃分析」的筛选条件，从本地同步的用户快照解析收件人（sub2api / new-api 通用）。
+	SelectionModeSegment SelectionMode = "segment"
 )
 
 type requestError string
@@ -46,6 +51,54 @@ const (
 	ErrSendFailed            = requestError("admin.massEmail.errors.sendFailed")
 	ErrActiveBatchExists     = requestError("admin.massEmail.errors.activeBatchExists")
 	ErrRecipientLimitReached = requestError("admin.massEmail.errors.recipientLimitReached")
+	ErrSegmentUnavailable    = requestError("admin.massEmail.errors.segmentUnavailable")
+	ErrSegmentNotSynced      = requestError("admin.massEmail.errors.segmentNotSynced")
+	ErrInvalidPublicURL      = requestError("admin.massEmail.errors.invalidPublicUrl")
+	ErrInvalidSuppression    = requestError("admin.massEmail.errors.invalidSuppression")
+	// ErrSuppressed 是发送时发现收件人已退订的 item 错误 key。
+	ErrSuppressed = requestError("admin.massEmail.errors.suppressed")
+)
+
+// SegmentRecipient 是按活跃分群解析出的收件人。
+type SegmentRecipient struct {
+	UpstreamUserID string
+	Email          string
+	Username       string
+}
+
+// SegmentRecipientResolver 按筛选条件返回收件人（由 user_activity 模块实现，server 中适配）。
+// 超过 max 个时返回 ErrRecipientLimitReached；工作区从未同步过时返回 ErrSegmentNotSynced。
+type SegmentRecipientResolver interface {
+	ResolveSegmentRecipients(ctx context.Context, userID string, adminAccountID string, filters BatchFilters, max int) ([]SegmentRecipient, error)
+}
+
+// Suppression 是退订名单中的一条记录。
+type Suppression struct {
+	Email     string    `json:"email"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type SuppressionPage struct {
+	Items    []Suppression `json:"items"`
+	Total    int           `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"pageSize"`
+	Pages    int           `json:"pages"`
+}
+
+type AddSuppressionsRequest struct {
+	Emails []string `json:"emails"`
+}
+
+type AddSuppressionsResult struct {
+	Added   int `json:"added"`
+	Invalid int `json:"invalid"`
+}
+
+const (
+	SuppressionReasonUnsubscribe = "unsubscribe"
+	SuppressionReasonManual      = "manual"
 )
 
 type UserQuery struct {
@@ -80,6 +133,9 @@ type BatchFilters struct {
 	Status string `json:"status"`
 	Role   string `json:"role"`
 	Search string `json:"search,omitempty"`
+	// Segment / InactiveDays 只用于 segment 选择方式。
+	Segment      string `json:"segment,omitempty"`
+	InactiveDays int    `json:"inactiveDays,omitempty"`
 }
 
 type CreateBatchRequest struct {
@@ -88,6 +144,8 @@ type CreateBatchRequest struct {
 	UserIDs       []string      `json:"userIds,omitempty"`
 	Filters       BatchFilters  `json:"filters,omitempty"`
 	RequestID     string        `json:"requestId"`
+	// PublicBaseURL 非空时，每封邮件附带指向该地址（TransitHub 访问地址）的退订链接。
+	PublicBaseURL string `json:"publicBaseUrl,omitempty"`
 }
 
 type Batch struct {
@@ -101,6 +159,7 @@ type Batch struct {
 	TemplateHTML    string
 	SelectionMode   SelectionMode
 	Filters         BatchFilters
+	PublicBaseURL   string
 	Status          string
 	RecipientCount  int
 	SkippedCount    int
@@ -123,6 +182,7 @@ type BatchDTO struct {
 	TemplateSubject string        `json:"templateSubject"`
 	SelectionMode   SelectionMode `json:"selectionMode"`
 	Filters         BatchFilters  `json:"filters"`
+	UnsubscribeLink bool          `json:"unsubscribeLink"`
 	Status          string        `json:"status"`
 	RecipientCount  int           `json:"recipientCount"`
 	SkippedCount    int           `json:"skippedCount"`

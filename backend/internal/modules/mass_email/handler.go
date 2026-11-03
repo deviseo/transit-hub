@@ -31,6 +31,9 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, accounts AdminAccountR
 	mux.HandleFunc("GET /api/mass-email/batches", handler.listBatches)
 	mux.HandleFunc("GET /api/mass-email/batches/", handler.getBatch)
 	mux.HandleFunc("POST /api/mass-email/batches/", handler.batchAction)
+	mux.HandleFunc("GET /api/mass-email/suppressions", handler.listSuppressions)
+	mux.HandleFunc("POST /api/mass-email/suppressions", handler.addSuppressions)
+	mux.HandleFunc("DELETE /api/mass-email/suppressions", handler.removeSuppression)
 }
 
 func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {

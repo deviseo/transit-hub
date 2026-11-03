@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -128,16 +129,14 @@ func (r *Repository) CreateBatch(ctx context.Context, batch Batch, items []Batch
 	row := tx.QueryRow(ctx, `
 		INSERT INTO mass_email_batches (
 			id, user_id, admin_account_id, request_id, template_id, template_name, template_subject,
-			template_html, selection_mode, filters, status, recipient_count, skipped_count
+			template_html, selection_mode, filters, status, recipient_count, skipped_count, public_base_url
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14)
 		ON CONFLICT (user_id, admin_account_id, request_id) DO NOTHING
-		RETURNING id, user_id, admin_account_id, request_id, template_id, template_name, template_subject,
-			template_html, selection_mode, filters, status, recipient_count, skipped_count, sent_count,
-			failed_count, uncertain_count, cancelled_count, created_at, updated_at, started_at, finished_at, cancelled_at
+		RETURNING `+batchColumnsSQL+`
 	`, batch.ID, batch.UserID, batch.AdminAccountID, batch.RequestID, batch.TemplateID, batch.TemplateName,
 		batch.TemplateSubject, batch.TemplateHTML, string(batch.SelectionMode), string(filtersJSON), batch.Status,
-		batch.RecipientCount, batch.SkippedCount)
+		batch.RecipientCount, batch.SkippedCount, batch.PublicBaseURL)
 	created, err := scanBatch(row)
 	if err != nil {
 		if isActiveBatchUniqueViolation(err) {
@@ -474,11 +473,12 @@ func finalizeBatchInTx(ctx context.Context, tx pgx.Tx, batchID string) error {
 	return err
 }
 
-const batchSelectSQL = `
-	SELECT id, user_id, admin_account_id, request_id, template_id, template_name, template_subject,
+const batchColumnsSQL = `id, user_id, admin_account_id, request_id, template_id, template_name, template_subject,
 		template_html, selection_mode, filters, status, recipient_count, skipped_count, sent_count,
-		failed_count, uncertain_count, cancelled_count, created_at, updated_at, started_at, finished_at, cancelled_at
-	FROM mass_email_batches`
+		failed_count, uncertain_count, cancelled_count, created_at, updated_at, started_at, finished_at, cancelled_at,
+		public_base_url`
+
+const batchSelectSQL = `SELECT ` + batchColumnsSQL + ` FROM mass_email_batches`
 
 const itemSelectSQL = `
 	SELECT id, batch_id, user_id, admin_account_id, upstream_user_id, recipient_email, normalized_email,
@@ -494,7 +494,8 @@ func scanBatch(row batchScanner) (Batch, error) {
 	if err := row.Scan(&batch.ID, &batch.UserID, &batch.AdminAccountID, &batch.RequestID, &batch.TemplateID,
 		&batch.TemplateName, &batch.TemplateSubject, &batch.TemplateHTML, &selectionMode, &filtersJSON, &batch.Status,
 		&batch.RecipientCount, &batch.SkippedCount, &batch.SentCount, &batch.FailedCount, &batch.UncertainCount,
-		&batch.CancelledCount, &batch.CreatedAt, &batch.UpdatedAt, &batch.StartedAt, &batch.FinishedAt, &batch.CancelledAt); err != nil {
+		&batch.CancelledCount, &batch.CreatedAt, &batch.UpdatedAt, &batch.StartedAt, &batch.FinishedAt, &batch.CancelledAt,
+		&batch.PublicBaseURL); err != nil {
 		return Batch{}, err
 	}
 	batch.SelectionMode = SelectionMode(selectionMode)
@@ -539,4 +540,117 @@ func newID() (string, error) {
 func isActiveBatchUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_mass_email_batches_one_active_workspace"
+}
+
+// GetItemByID 按 item ID 读取收件记录（退订链接使用，item ID 是 128 位随机值）。
+func (r *Repository) GetItemByID(ctx context.Context, id string) (BatchItem, error) {
+	rows, err := r.db.Query(ctx, itemSelectSQL+` WHERE id = $1`, id)
+	if err != nil {
+		return BatchItem{}, err
+	}
+	defer rows.Close()
+	items, err := scanItems(rows)
+	if err != nil {
+		return BatchItem{}, err
+	}
+	if len(items) == 0 {
+		return BatchItem{}, ErrNotFound
+	}
+	return items[0], nil
+}
+
+// IsSuppressed 判断地址是否在工作区的退订名单中。
+func (r *Repository) IsSuppressed(ctx context.Context, userID string, adminAccountID string, normalizedEmail string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM email_suppressions WHERE user_id = $1 AND admin_account_id = $2 AND email_normalized = $3)
+	`, userID, adminAccountID, normalizedEmail).Scan(&exists)
+	return exists, err
+}
+
+// SuppressedAmong 返回给定地址中在退订名单里的那些。
+func (r *Repository) SuppressedAmong(ctx context.Context, userID string, adminAccountID string, normalizedEmails []string) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	if len(normalizedEmails) == 0 {
+		return result, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT email_normalized FROM email_suppressions
+		WHERE user_id = $1 AND admin_account_id = $2 AND email_normalized = ANY($3::text[])
+	`, userID, adminAccountID, normalizedEmails)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		result[email] = struct{}{}
+	}
+	return result, rows.Err()
+}
+
+// AddSuppressions 把地址加入退订名单（已存在的保持原记录），返回新加入的数量。
+func (r *Repository) AddSuppressions(ctx context.Context, userID string, adminAccountID string, normalizedEmails []string, reason string) (int, error) {
+	if len(normalizedEmails) == 0 {
+		return 0, nil
+	}
+	tag, err := r.db.Exec(ctx, `
+		INSERT INTO email_suppressions (user_id, admin_account_id, email_normalized, reason)
+		SELECT $1, $2, email, $4 FROM unnest($3::text[]) AS email
+		ON CONFLICT (user_id, admin_account_id, email_normalized) DO NOTHING
+	`, userID, adminAccountID, normalizedEmails, reason)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// RemoveSuppression 把地址移出退订名单。
+func (r *Repository) RemoveSuppression(ctx context.Context, userID string, adminAccountID string, normalizedEmail string) (bool, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM email_suppressions WHERE user_id = $1 AND admin_account_id = $2 AND email_normalized = $3`,
+		userID, adminAccountID, normalizedEmail)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ListSuppressions 分页列出退订名单。
+func (r *Repository) ListSuppressions(ctx context.Context, userID string, adminAccountID string, search string, page int, pageSize int) ([]Suppression, int, error) {
+	pattern := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(search) + "%"
+	rows, err := r.db.Query(ctx, `
+		SELECT email_normalized, reason, created_at, count(*) OVER ()
+		FROM email_suppressions
+		WHERE user_id = $1 AND admin_account_id = $2 AND ($3 = '' OR email_normalized LIKE $4 ESCAPE '\')
+		ORDER BY created_at DESC, email_normalized ASC
+		LIMIT $5 OFFSET $6
+	`, userID, adminAccountID, search, pattern, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := make([]Suppression, 0)
+	total := 0
+	for rows.Next() {
+		var item Suppression
+		if err := rows.Scan(&item.Email, &item.Reason, &item.CreatedAt, &total); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(items) == 0 && page > 1 {
+		if err := r.db.QueryRow(ctx, `
+			SELECT count(*) FROM email_suppressions
+			WHERE user_id = $1 AND admin_account_id = $2 AND ($3 = '' OR email_normalized LIKE $4 ESCAPE '\')
+		`, userID, adminAccountID, search, pattern).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	}
+	return items, total, nil
 }
