@@ -31,6 +31,7 @@ import (
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
+	"transithub/backend/internal/shared/outbound"
 )
 
 const (
@@ -81,7 +82,18 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	group_rates.RegisterRoutes(server.mux, groupRatesService, adminAccountsService)
-	upstreamHTTPClient := &http.Client{Timeout: upstreamRequestTimeout}
+
+	// 出站代理：访问上游站点（含自己的 sub2api/new-api 站点）、工单身份校验和探活请求共用同一套代理配置。
+	// 配置保存在「系统设置 - 网络代理」中，修改后立即生效；从未保存过时沿用启动环境变量（HTTPS_PROXY/NO_PROXY），
+	// 保持旧部署行为不变。排行榜与抽奖的防 SSRF 传输层不走代理，保持原状。
+	outboundProxy := outbound.NewController()
+	systemService := system.NewService(cfg)
+	systemService.SetOutboundProxy(system.NewRepository(db), outboundProxy, systemAdminChecker{auth: authService, adminEmail: cfg.AdminEmail})
+	if err := systemService.LoadOutboundProxy(context.Background()); err != nil {
+		log.Printf("[outbound-proxy] load saved settings failed, falling back to environment variables: %v", err)
+	}
+
+	upstreamHTTPClient := outboundProxy.NewClient(upstreamRequestTimeout)
 	platformService := upstream.NewPlatformService(upstream.NewHTTPClient(upstreamHTTPClient))
 	upstreamCache := upstream.NewRedisSiteCache(redisClient)
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)
@@ -100,7 +112,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	if err := ticketsRepository.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
-	ticketsSub2APIClient := tickets.NewSub2APIClient(&http.Client{Timeout: upstreamRequestTimeout})
+	ticketsSub2APIClient := tickets.NewSub2APIClient(outboundProxy.NewClient(upstreamRequestTimeout))
 	ticketsSessions := tickets.NewEmbedSessionStore(redisClient)
 	ticketsStorage, err := tickets.NewAttachmentStorage(cfg.TicketUploadDir)
 	if err != nil {
@@ -222,6 +234,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	connHealthService.SetAdminAccountResolver(adminAccountsService)
+	connHealthService.SetHTTPTransport(outboundProxy.NewTransport())
 	// 注入平台中性的分组/账号读取能力：admin 分组健康主列表用它拉取 admin 全量分组及
 	// 分组下账号/渠道，叠加 real_connections 探活状态。platformService 已实现所需方法。
 	connHealthService.SetPlatformGroupReader(platformService)
@@ -298,11 +311,20 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	metricsService.StartScheduler(context.Background())
 	dashboard.RegisterRoutes(server.mux, dashboardService, metricsService)
 
-	// 系统信息 API：开源版仅保留版本号展示
-	systemService := system.NewService(cfg)
+	// 系统信息 API：版本号与系统级设置（出站代理），systemService 已在上方创建并加载代理配置。
 	system.RegisterRoutes(server.mux, systemService)
 
 	return server
+}
+
+// systemAdminChecker 把 auth.Service 与 ADMIN_EMAIL 适配为 system.SystemAdminChecker。
+type systemAdminChecker struct {
+	auth       *auth.Service
+	adminEmail string
+}
+
+func (c systemAdminChecker) IsSystemAdmin(ctx context.Context, userID string) (bool, error) {
+	return c.auth.IsSystemAdmin(ctx, userID, c.adminEmail)
 }
 
 type groupRateSnapshotWriter struct {

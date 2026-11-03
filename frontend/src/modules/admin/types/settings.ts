@@ -132,3 +132,41 @@ export type TestEmailTemplateResponse = {
   success: boolean
   message: string
 }
+
+// 出站代理生效方式：沿用启动环境变量（从未保存过配置）/ 直连 / 使用代理。
+export type OutboundProxyMode = 'environment' | 'direct' | 'proxy'
+
+export type OutboundProxySettings = {
+  configured: boolean
+  enabled: boolean
+  // 密码已脱敏为 ***，原样提交时后端沿用已保存的密码
+  proxyUrl: string
+  bypass: string
+  mode: OutboundProxyMode
+  canEdit: boolean
+  environment: {
+    proxyUrl: string
+    bypass: string
+  }
+  updatedAt?: string
+}
+
+export type SaveOutboundProxyPayload = {
+  enabled: boolean
+  proxyUrl: string
+  bypass: string
+}
+
+export type TestOutboundProxyPayload = SaveOutboundProxyPayload & {
+  targetUrl: string
+}
+
+export type OutboundProxyFailure = 'dns' | 'proxy' | 'tls' | 'timeout' | 'refused' | 'network'
+
+export type TestOutboundProxyResponse = {
+  ok: boolean
+  route: 'proxy' | 'direct'
+  statusCode?: number
+  durationMs: number
+  failure?: OutboundProxyFailure
+}

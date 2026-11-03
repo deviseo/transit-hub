@@ -1,12 +1,16 @@
 import type {
   EmailTemplate,
   NotificationChannelSettings,
+  OutboundProxySettings,
   SaveEmailTemplatePayload,
+  SaveOutboundProxyPayload,
   SaveSmtpSettingsPayload,
   SmtpSettings,
   StrategySettings,
   TestNotificationChannelPayload,
   TestNotificationChannelResponse,
+  TestOutboundProxyPayload,
+  TestOutboundProxyResponse,
   TestSmtpEmailPayload,
   TestSmtpEmailResponse,
   TestEmailTemplatePayload,
@@ -143,6 +147,25 @@ export const saveSmtpSettings = async (payload: SaveSmtpSettingsPayload): Promis
 
 export const testSmtpEmail = async (payload: TestSmtpEmailPayload): Promise<TestSmtpEmailResponse> => (
   requestJson<TestSmtpEmailResponse>('/settings/smtp/test-email', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+)
+
+// 出站代理是系统级设置（对整个 TransitHub 生效），接口在 /system 下，只有系统管理员可以修改。
+export const getOutboundProxy = async (): Promise<OutboundProxySettings> => (
+  requestJson<OutboundProxySettings>('/system/outbound-proxy')
+)
+
+export const saveOutboundProxy = async (payload: SaveOutboundProxyPayload): Promise<OutboundProxySettings> => (
+  requestJson<OutboundProxySettings>('/system/outbound-proxy', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+)
+
+export const testOutboundProxy = async (payload: TestOutboundProxyPayload): Promise<TestOutboundProxyResponse> => (
+  requestJson<TestOutboundProxyResponse>('/system/outbound-proxy/test', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

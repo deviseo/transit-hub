@@ -1505,7 +1505,7 @@ export default {
       },
       errors: {
         invalidUrl: '站点 URL 无效，请检查后重试。',
-        network: '网络或 CORS 请求失败，请检查站点地址与跨域配置。',
+        network: '无法连接上游站点（网络、代理或 TLS 错误）。请检查站点地址，或在「系统设置 - 网络代理」中调整代理。',
         auth: '登录失败，请检查账号或密码。',
         request: '上游接口请求失败，请稍后重试。',
         invalidResponse: '上游返回内容无法解析。',
@@ -2199,7 +2199,61 @@ export default {
         strategy: '自动化与策略',
         channels: '通知与渠道',
         templates: '消息模板',
-        email: '邮件设置'
+        email: '邮件设置',
+        network: '网络代理'
+      },
+      proxy: {
+        title: '网络代理',
+        subtitle: 'TransitHub 访问上游站点（包括你自己的 sub2api / new-api 站点）、校验工单身份和探活时使用的代理。修改后立即生效，无需重启。通知机器人不受影响，Telegram 有单独的代理设置。',
+        loading: '正在读取代理设置…',
+        mode: {
+          environment: '当前生效：沿用启动时的环境变量代理 {proxy}',
+          environmentDirect: '当前生效：沿用启动时的环境变量（未设置代理，直连）',
+          proxy: '当前生效：使用代理 {proxy}',
+          direct: '当前生效：不使用代理（直连）'
+        },
+        unconfiguredHint: '还没有在这里保存过代理设置，下方已按启动环境变量预填。保存后以这里的设置为准。',
+        readOnly: '代理设置对整个 TransitHub 生效，只有系统管理员（ADMIN_EMAIL 对应的账号）可以修改。',
+        enable: '启用代理',
+        enableHelp: '关闭后所有上游请求直连。',
+        url: '代理地址',
+        urlPlaceholder: '例如 http://127.0.0.1:7897，支持 http、https、socks5',
+        urlHelp: "需要账号密码时写成 http://用户名:密码{'@'}地址:端口。已保存的密码显示为 ***，不修改会保留原密码。",
+        urlRequired: '启用代理时必须填写代理地址。',
+        bypass: '不走代理的地址',
+        bypassPlaceholder: '例如 milus.one, *.example.com, 10.0.0.0/8',
+        bypassHelp: '用逗号或换行分隔。填写域名会同时匹配它的子域名，也支持 IP 和网段；localhost 与 127.0.0.1 始终直连。',
+        save: '保存代理设置',
+        saved: '已保存，并已立即生效',
+        test: {
+          title: '测试连接',
+          help: '用上面尚未保存的设置访问一个地址，确认能否连通，例如填写你的上游站点地址。',
+          target: '测试地址',
+          targetPlaceholder: 'https://你的上游站点地址',
+          run: '测试连接',
+          running: '测试中…',
+          success: '连接成功（{route}，HTTP {status}，{ms} ms）',
+          failure: '连接失败（{route}，{ms} ms）：{reason}',
+          routes: {
+            proxy: '经代理',
+            direct: '直连'
+          },
+          failures: {
+            dns: '域名无法解析，请检查地址是否正确',
+            proxy: '代理无法连接到目标站点，或代理本身不可用。请检查代理是否在运行、代理规则或节点，或把该地址加入「不走代理的地址」',
+            tls: 'TLS 握手或证书校验失败',
+            timeout: '连接超时',
+            refused: '连接被拒绝，请检查地址和端口',
+            network: '网络连接失败'
+          }
+        },
+        errors: {
+          forbidden: '只有系统管理员（ADMIN_EMAIL 对应的账号）可以修改代理设置。',
+          invalidUrl: '代理地址无效：请填写 http、https 或 socks5 地址，例如 http://127.0.0.1:7897。',
+          invalidTarget: '测试地址无效，请填写 http 或 https 地址。',
+          request: '代理设置请求失败，请稍后重试。',
+          unavailable: '代理设置暂不可用。'
+        }
       },
       sections: {
         basic: {

@@ -38,6 +38,13 @@ func NewRealProbeRunner() *RealProbeRunner {
 	return &RealProbeRunner{client: &http.Client{Timeout: ProbeTimeout}}
 }
 
+// SetHTTPTransport 让独立探活与模型发现请求使用指定的 Transport（系统设置中的出站代理）。
+// 必须在 StartScheduler 之前调用。
+func (s *Service) SetHTTPTransport(transport http.RoundTripper) {
+	s.probeRunner = &RealProbeRunner{client: &http.Client{Timeout: ProbeTimeout, Transport: transport}}
+	s.modelDiscovery = &ModelDiscoveryRunner{client: &http.Client{Timeout: modelDiscoveryTimeout, Transport: transport}}
+}
+
 // Probe 发起一次真实轻量探活，返回分类后的结果。err 只用于调用方感知调用本身是否被 ctx 取消，
 // 正常的上游错误都归类进 ProbeOutcome.Result，不通过 error 返回。
 func (r *RealProbeRunner) Probe(ctx context.Context, req ProbeRequest) ProbeOutcome {

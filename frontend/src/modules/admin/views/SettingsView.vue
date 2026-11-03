@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail } from 'lucide-vue-next'
+import { Plus, Save, Loader2, CheckCircle2, MessageSquare, Send, Trash2, Timer, AlertTriangle, TrendingUp, Info, Mail, Globe } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import EmailTemplatesPanel from '../components/settings/EmailTemplatesPanel.vue'
 import NotificationTemplateEditor from '../components/settings/NotificationTemplateEditor.vue'
+import OutboundProxyPanel from '../components/settings/OutboundProxyPanel.vue'
 import {
   getNotificationChannelSettings,
   getSmtpSettings,
@@ -21,7 +22,7 @@ import type { NotificationChannel, NotificationChannelSettings, NotificationTemp
 const { t } = useI18n()
 
 // Tab Settings
-const activeTab = ref<'strategy' | 'channels' | 'email'>('strategy')
+const activeTab = ref<'strategy' | 'channels' | 'email' | 'network'>('strategy')
 
 // Save loading states
 const isSavingStrategy = ref(false)
@@ -599,6 +600,22 @@ onMounted(async () => {
           <div class="flex items-center gap-2">
             <Mail class="w-4 h-4" />
             {{ t('admin.settings.tabs.email') }}
+          </div>
+        </button>
+        <button
+          id="settings-tab-network"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'network'"
+          aria-controls="settings-panel-network"
+          @click="activeTab = 'network'"
+          class="relative whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:px-6"
+          :class="activeTab === 'network' ? 'text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-surface/50'"
+        >
+          <div v-if="activeTab === 'network'" class="absolute inset-0 -z-10 rounded-md border border-border/50 bg-background shadow-sm"></div>
+          <div class="flex items-center gap-2">
+            <Globe class="w-4 h-4" />
+            {{ t('admin.settings.tabs.network') }}
           </div>
         </button>
       </div>
@@ -1188,6 +1205,13 @@ onMounted(async () => {
           </div>
         </section>
         <EmailTemplatesPanel />
+        </div>
+
+        <!-- ============================================ -->
+        <!-- Network Proxy Tab（系统级设置）               -->
+        <!-- ============================================ -->
+        <div v-else-if="activeTab === 'network'" id="settings-panel-network" role="tabpanel" aria-labelledby="settings-tab-network">
+          <OutboundProxyPanel />
         </div>
       </transition>
     </div>

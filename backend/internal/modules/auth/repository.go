@@ -98,6 +98,18 @@ func (r *Repository) UserIDByEmail(ctx context.Context, email string) (string, e
 	return id, err
 }
 
+// UserIDByEmailIfExists 与 UserIDByEmail 相同，但账号不存在时返回 exists=false 而不是错误。
+func (r *Repository) UserIDByEmailIfExists(ctx context.Context, email string) (string, bool, error) {
+	id, err := r.UserIDByEmail(ctx, email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
 func (r *Repository) CreateSession(ctx context.Context, userID string, tokenHash string, expiresAt time.Time) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO auth_sessions (id, "tokenHash", "userId", "expiresAt", "createdAt")

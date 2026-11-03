@@ -1505,7 +1505,7 @@ export default {
       },
       errors: {
         invalidUrl: 'The site URL is invalid. Check it and try again.',
-        network: 'Network or CORS request failed. Check the site URL and cross-origin settings.',
+        network: 'Could not reach the upstream site (network, proxy, or TLS error). Check the site URL, or adjust the proxy under System Settings → Network Proxy.',
         auth: 'Login failed. Check the account or password.',
         request: 'The upstream API request failed. Try again later.',
         invalidResponse: 'The upstream response could not be parsed.',
@@ -2199,7 +2199,61 @@ export default {
         strategy: 'Strategy & Automation',
         channels: 'Channels & Alerts',
         templates: 'Message Templates',
-        email: 'Email Settings'
+        email: 'Email Settings',
+        network: 'Network Proxy'
+      },
+      proxy: {
+        title: 'Network Proxy',
+        subtitle: 'The proxy TransitHub uses to reach upstream sites (including your own sub2api / new-api site), verify ticket identities, and run health probes. Changes take effect immediately without a restart. Notification bots are not affected; Telegram has its own proxy setting.',
+        loading: 'Loading proxy settings…',
+        mode: {
+          environment: 'In effect: proxy from the startup environment variables, {proxy}',
+          environmentDirect: 'In effect: startup environment variables (no proxy set, connecting directly)',
+          proxy: 'In effect: using proxy {proxy}',
+          direct: 'In effect: no proxy (connecting directly)'
+        },
+        unconfiguredHint: 'Proxy settings have not been saved here yet; the form below is prefilled from the startup environment variables. Once saved, these settings take over.',
+        readOnly: 'Proxy settings apply to the whole TransitHub instance and can only be changed by the system administrator (the ADMIN_EMAIL account).',
+        enable: 'Enable proxy',
+        enableHelp: 'When off, all upstream requests connect directly.',
+        url: 'Proxy address',
+        urlPlaceholder: 'For example http://127.0.0.1:7897; http, https and socks5 are supported',
+        urlHelp: "For a proxy that needs credentials, use http://user:password{'@'}host:port. A saved password is shown as *** and is kept unless you change it.",
+        urlRequired: 'Enter a proxy address to enable the proxy.',
+        bypass: 'Addresses that skip the proxy',
+        bypassPlaceholder: 'For example milus.one, *.example.com, 10.0.0.0/8',
+        bypassHelp: 'Separate entries with commas or new lines. A domain also matches its subdomains; IPs and CIDR ranges are supported. localhost and 127.0.0.1 always connect directly.',
+        save: 'Save proxy settings',
+        saved: 'Saved and applied',
+        test: {
+          title: 'Test connection',
+          help: 'Use the unsaved settings above to request an address and check that it is reachable, such as your upstream site URL.',
+          target: 'Test address',
+          targetPlaceholder: 'https://your-upstream-site',
+          run: 'Test connection',
+          running: 'Testing…',
+          success: 'Connected ({route}, HTTP {status}, {ms} ms)',
+          failure: 'Connection failed ({route}, {ms} ms): {reason}',
+          routes: {
+            proxy: 'via proxy',
+            direct: 'direct'
+          },
+          failures: {
+            dns: 'The domain could not be resolved. Check the address.',
+            proxy: 'The proxy could not reach the target site, or the proxy itself is unavailable. Check that the proxy is running and its rules or node, or add the address to the bypass list.',
+            tls: 'TLS handshake or certificate verification failed.',
+            timeout: 'The connection timed out.',
+            refused: 'The connection was refused. Check the address and port.',
+            network: 'The network connection failed.'
+          }
+        },
+        errors: {
+          forbidden: 'Only the system administrator (the ADMIN_EMAIL account) can change proxy settings.',
+          invalidUrl: 'Invalid proxy address. Use an http, https or socks5 address such as http://127.0.0.1:7897.',
+          invalidTarget: 'Invalid test address. Use an http or https address.',
+          request: 'The proxy settings request failed. Try again later.',
+          unavailable: 'Proxy settings are currently unavailable.'
+        }
       },
       sections: {
         basic: {

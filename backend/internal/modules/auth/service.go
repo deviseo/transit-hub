@@ -202,6 +202,28 @@ func (s *Service) CurrentUser(ctx context.Context, accessToken string) (CurrentU
 	return CurrentUser{ID: userID}, nil
 }
 
+// IsSystemAdmin 判断用户能否修改系统级设置（对整个实例生效的配置，例如出站代理）。
+// 配置了 ADMIN_EMAIL 时只有该账号可以；未配置时只有实例内仅有一个账号时由该账号管理，
+// 避免多用户实例中任意注册用户修改影响所有人的全局配置。
+func (s *Service) IsSystemAdmin(ctx context.Context, userID string, adminEmail string) (bool, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false, nil
+	}
+	if email := normalizeEmail(adminEmail); email != "" {
+		adminID, exists, err := s.repository.UserIDByEmailIfExists(ctx, email)
+		if err != nil || !exists {
+			return false, err
+		}
+		return adminID == userID, nil
+	}
+	count, err := s.repository.CountUsers(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count == 1, nil
+}
+
 func (s *Service) createSession(ctx context.Context, strategy string, email string) (TokenResponse, error) {
 	token, err := randomToken(32)
 	if err != nil {
