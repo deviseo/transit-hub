@@ -1402,30 +1402,24 @@ func todayEnd() int64 {
 	return end.Unix()
 }
 
-// ListSub2APIKeys 获取上游 Sub2API 站点的 API Key 列表。
-// 按创建时间倒序返回，最多 100 条。每条包含 ID、Key 值、名称、所属分组等信息。
+// ListSub2APIKeys 获取上游 Sub2API 站点的全部 API Key（按创建时间倒序逐页拉取，不只取第一页）。
+// 每条包含 ID、Key 值、名称、所属分组等信息。
 func (s *PlatformService) ListSub2APIKeys(session Session) ([]Sub2APIKeyItem, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	response, err := s.httpClient.requestJSON(
-		session.BaseURL+"/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc",
-		requestOptions{
-			AccessToken: session.AccessToken,
-			TokenType:   session.TokenType,
-		},
-	)
+	records, err := s.collectUpstreamKeyRecords(func(page int) string {
+		return session.BaseURL + "/api/v1/keys?page=" + strconv.Itoa(page) + "&page_size=" + strconv.Itoa(upstreamKeyListPageSize) + "&sort_by=created_at&sort_order=desc"
+	}, requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	items := dataArray(response.Payload)
-	keys := make([]Sub2APIKeyItem, 0, len(items))
-	for _, item := range items {
-		record, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
+	keys := make([]Sub2APIKeyItem, 0, len(records))
+	for _, record := range records {
 		keyItem := Sub2APIKeyItem{
 			ID:   groupID2(record),
 			Name: safeString(record, "name"),
@@ -1931,28 +1925,20 @@ func (s *PlatformService) FetchNewAPITokenKey(session Session, tokenID string) (
 	return "", newRequestError(ErrorInvalidResponse, PlatformNewAPI)
 }
 
-// ListNewAPITokens 列出上游 new-api 站点的 token 列表。
+// ListNewAPITokens 列出上游 new-api 站点的全部 token（逐页拉取，不只取第一页）。
 // 返回与 Sub2APIKeyItem 相同的结构，便于前端统一使用。
 func (s *PlatformService) ListNewAPITokens(session Session) ([]Sub2APIKeyItem, error) {
 	if session.Platform != PlatformNewAPI {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/?p=1&page_size=100", requestOptions{
-		Cookie:      session.Cookie,
-		UserID:      session.UserID,
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-	})
+	records, err := s.collectUpstreamKeyRecords(func(page int) string {
+		return session.BaseURL + "/api/token/?p=" + strconv.Itoa(page) + "&page_size=" + strconv.Itoa(upstreamKeyListPageSize)
+	}, newAPIAuthOptions(session))
 	if err != nil {
 		return nil, err
 	}
-	items := dataArray(response.Payload)
-	tokens := make([]Sub2APIKeyItem, 0, len(items))
-	for _, item := range items {
-		record, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
+	tokens := make([]Sub2APIKeyItem, 0, len(records))
+	for _, record := range records {
 		token := Sub2APIKeyItem{
 			ID:   groupID2(record),
 			Name: safeString(record, "name"),
@@ -1972,6 +1958,57 @@ func (s *PlatformService) ListNewAPITokens(session Session) ([]Sub2APIKeyItem, e
 		tokens = append(tokens, token)
 	}
 	return tokens, nil
+}
+
+const (
+	// upstreamKeyListPageSize / upstreamKeyListMaxPages 控制上游 key 列表的分页拉取。
+	// 以前只取第一页（100 条），key 超过 100 个时绑定弹窗和凭据校验都会找不到较早创建的 key。
+	upstreamKeyListPageSize = 100
+	upstreamKeyListMaxPages = 100
+)
+
+// collectUpstreamKeyRecords 逐页拉取上游 key 列表并按 ID 去重，满足任一条件即停止：
+//   - 已拿到响应声明的 total 条记录；
+//   - 遇到空页；
+//   - 某一页没有带来任何新 ID（上游忽略分页参数、反复返回同一页时防止重复拉取）。
+//
+// 上游没有返回 total 时不以「短页」作为结束条件：部分旧版本忽略 page_size、每页固定条数，
+// 只能靠空页或无新 ID 判断结束，代价是列表不足一页时多一次请求。
+func (s *PlatformService) collectUpstreamKeyRecords(pageURL func(page int) string, options requestOptions) ([]map[string]any, error) {
+	records := make([]map[string]any, 0)
+	seen := make(map[string]struct{})
+	for page := 1; page <= upstreamKeyListMaxPages; page++ {
+		response, err := s.httpClient.requestJSON(pageURL(page), options)
+		if err != nil {
+			return nil, err
+		}
+		items := dataArray(response.Payload)
+		if len(items) == 0 {
+			break
+		}
+		added := 0
+		for _, item := range items {
+			record, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if id := groupID2(record); id != "" {
+				if _, duplicate := seen[id]; duplicate {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			records = append(records, record)
+			added++
+		}
+		if added == 0 {
+			break
+		}
+		if total, hasTotal := paginationTotal(response.Payload); hasTotal && len(records) >= total {
+			break
+		}
+	}
+	return records, nil
 }
 
 // DeleteNewAPIToken 删除上游 new-api 站点的指定 token。
