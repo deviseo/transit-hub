@@ -186,9 +186,16 @@ func TestApplyUpdateInstallsAVerifiedPackage(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// 先检查更新（管理员看到弹窗），再开始更新：沿用检查的结果，不再请求一次 GitHub。
+	if _, err := service.CheckUpdate(ctx, "admin", false); err != nil {
+		t.Fatal(err)
+	}
 	version, err := service.ApplyUpdate(ctx, "admin")
 	if err != nil || version != "v1.1.0" {
 		t.Fatalf("expected the update to start, got %q %v", version, err)
+	}
+	if calls := fake.releaseCalls.Load(); calls != 1 {
+		t.Fatalf("the update should reuse the fresh check, GitHub was asked %d times", calls)
 	}
 	// 更新进行中（到切换为止）不能再开始一次。
 	if _, err := service.ApplyUpdate(ctx, "admin"); err == nil || err.Error() != ErrorUpdateInProgress {

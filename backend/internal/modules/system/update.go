@@ -285,7 +285,8 @@ func (s *Service) ApplyUpdate(ctx context.Context, userID string) (string, error
 	if !s.updates.begin() {
 		return "", requestError(ErrorUpdateInProgress)
 	}
-	release, _, err := s.latestRelease(ctx, true)
+	// 用刚才检查更新的结果（10 分钟内有效），不再多请求一次 GitHub（国内直连 GitHub 时常不稳定）。
+	release, _, err := s.latestRelease(ctx, false)
 	if err != nil {
 		s.updates.finish("")
 		return "", err
@@ -428,15 +429,20 @@ func (s *Service) latestRelease(ctx context.Context, force bool) (githubRelease,
 	request.Header.Set("User-Agent", s.userAgent())
 	response, err := s.updateHTTPClient(updateCheckTimeout).Do(request)
 	if err != nil {
+		log.Printf("[update] check latest release: %v", err)
 		return githubRelease{}, time.Time{}, requestError(ErrorUpdateCheckFailed)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil || response.StatusCode != http.StatusOK {
+		// GitHub 限流时返回 403/429，X-RateLimit-Remaining 为 0。
+		log.Printf("[update] check latest release: HTTP %d, rate limit remaining %q, read error %v",
+			response.StatusCode, response.Header.Get("X-RateLimit-Remaining"), err)
 		return githubRelease{}, time.Time{}, requestError(ErrorUpdateCheckFailed)
 	}
 	var release githubRelease
 	if err := json.Unmarshal(body, &release); err != nil || release.TagName == "" || release.Draft || release.Prerelease {
+		log.Printf("[update] check latest release: unexpected response (%v)", err)
 		return githubRelease{}, time.Time{}, requestError(ErrorUpdateCheckFailed)
 	}
 	checker.latest = &release
