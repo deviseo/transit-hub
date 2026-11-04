@@ -51,6 +51,7 @@ import { useAdminAccounts } from '../composables/useAdminAccounts'
 import type { DashboardColorToken, DashboardMetricData, DashboardMetricKey, DashboardPeriod } from '../types/dashboard'
 import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
 import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
+import { columnHighlightPointer } from '../utils/chartTooltip'
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -396,7 +397,7 @@ const performanceChartOption = computed<EChartsCoreOption>(() => {
       backgroundColor: theme.card,
       borderColor: theme.border,
       textStyle: { color: theme.foreground },
-      axisPointer: { type: 'shadow', shadowStyle: { color: theme.border } },
+      axisPointer: columnHighlightPointer(theme.border),
     },
     legend: {
       top: 0,

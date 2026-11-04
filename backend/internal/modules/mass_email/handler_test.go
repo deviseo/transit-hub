@@ -3,6 +3,7 @@ package mass_email
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -171,3 +172,36 @@ func (f fakeAccounts) RequireCurrentID(ctx context.Context, userID string) (stri
 }
 
 var _ = time.Now
+
+type failingSessions struct{ err error }
+
+func (f failingSessions) RequireSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, error) {
+	return upstream.Session{}, f.err
+}
+
+// 站点会话失效时必须返回 409 而不是 401：前端把任何 401 都当作 TransitHub 登录过期并登出。
+func TestHandlerSiteSessionErrorsAreNotUnauthorized(t *testing.T) {
+	for _, sessionErr := range []string{"admin.mySites.errors.authRequired", "admin.mySites.errors.adminOnly", upstream.ErrorAuth} {
+		mux := http.NewServeMux()
+		service := NewService(newFakeRepo(), failingSessions{err: errors.New(sessionErr)}, &fakeUsers{}, &fakeSettings{})
+		RegisterRoutes(mux, service, fakeAccounts{"user-1": "admin-1"})
+
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/mass-email/users", "", "user-1"))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s: expected 409, got %d body=%s", sessionErr, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), string(ErrUpstreamAuth)) {
+			t.Fatalf("%s: expected the re-login error key, got %s", sessionErr, rec.Body.String())
+		}
+	}
+
+	mux := http.NewServeMux()
+	service := NewService(newFakeRepo(), failingSessions{err: errors.New("admin.upstream.errors.network")}, &fakeUsers{}, &fakeSettings{})
+	RegisterRoutes(mux, service, fakeAccounts{"user-1": "admin-1"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, authedRequest(http.MethodGet, "/api/mass-email/users", "", "user-1"))
+	if rec.Code == http.StatusUnauthorized || !strings.Contains(rec.Body.String(), string(ErrUpstreamRequest)) {
+		t.Fatalf("other site errors must map to the generic request error, got %d %s", rec.Code, rec.Body.String())
+	}
+}

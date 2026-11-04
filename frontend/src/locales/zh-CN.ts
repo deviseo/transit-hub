@@ -119,8 +119,11 @@ export default {
       upstream: '上游管理',
       groupRates: '分组倍率',
       settings: '系统设置',
-      userActivity: '用户活跃',
+      userActivity: '用户分析',
+      sales: '销售分析',
+      profit: '利润分析',
       massEmail: '群发邮件',
+      client: '客户端',
       signOut: '退出登录'
     },
     adminAccounts: {
@@ -793,7 +796,7 @@ export default {
         recipientLimitReached: '本次选择超过 10,000 个收件人上限，请缩小筛选范围后重试。',
         itemGeneric: '该收件人发送失败，请稍后查看批次获取最新详情。',
         segmentUnavailable: '按活跃分群群发不可用。',
-        segmentNotSynced: '还没有同步过用户活跃数据，请先在「用户活跃」页面同步。',
+        segmentNotSynced: '还没有同步过用户数据：登录自己站点后会在后台自动同步，也可以在「用户分析」页面马上同步。',
         invalidPublicUrl: '退订链接地址无效，请填写 http(s) 开头的完整地址。',
         invalidSuppression: '请输入有效的邮箱地址（单次最多 1000 个）。',
         suppressed: '收件人已退订，未发送。'
@@ -840,8 +843,8 @@ export default {
         loading: '加载中…'
       },
       empty: {
-        title: '还没有用户活跃数据',
-        description: '开始同步后，系统会用当前工作区的管理员会话读取站点用户列表和每日用量（首次拉取最近 62 天，之后每小时自动增量同步，并逐步回补更早的历史），数据只保存在本地用于分析。',
+        title: '还没有用户数据',
+        description: '登录自己站点后，系统会在一小时内自动在后台开始同步：用当前工作区的管理员会话读取站点用户列表和每日用量（首次拉取最近 62 天，之后每小时自动增量同步，并逐步回补更早的历史），数据只保存在本地用于分析。也可以点下面的按钮马上开始。',
         runningTitle: '正在首次同步',
         runningDescription: '正在读取站点用户和最近 62 天的用量，通常需要 1～3 分钟；完成后页面会自动刷新。'
       },
@@ -1084,13 +1087,13 @@ export default {
       },
       errors: {
         network: '网络请求失败，请检查 TransitHub 服务是否可用。',
-        request: '用户活跃数据请求失败，请稍后重试。',
+        request: '用户分析数据请求失败，请稍后重试。',
         authRequired: '需要当前工作区站点的管理员会话：请先在仪表盘登录 sub2api / new-api 管理员账号。',
-        platformUnsupported: '当前工作区的站点类型不支持用户活跃分析（仅支持 sub2api 和 new-api）。',
+        platformUnsupported: '当前工作区的站点类型不支持用户分析（仅支持 sub2api 和 new-api）。',
         syncInProgress: '同步正在进行中，请稍后再试。',
         usersFetch: '读取站点用户列表失败，请确认管理员会话有效。',
         usageFetch: '读取站点用量数据失败。sub2api 需要管理员会话；new-api 需要管理员权限（访问令牌需包含 log:read），且站点开启了数据看板统计。',
-        interrupted: '同步被中断（服务重启或超时），请重新同步。',
+        interrupted: '上次同步被服务重启或超时打断，会在后台自动继续，无需操作。',
         invalidFilter: '筛选条件无效。',
         notFound: '用户不存在或已从站点删除。',
         tooManyUsers: '站点用户超过 50,000 人，暂不支持同步。',
@@ -1098,7 +1101,486 @@ export default {
         notSynced: '还没有同步过用户数据，请先同步。'
       }
     },
+    sales: {
+      title: '销售分析',
+      subtitle: '入账结构、付费用户、转化与复购、收入集中度和入账排行。数据来自「用户分析」同步到本地的数据，只读。',
+      common: {
+        placeholder: '—'
+      },
+      source: {
+        lastSynced: '数据来自用户分析同步 · 最近同步 {time}',
+        neverSynced: '尚未同步用户数据',
+        basis: '金额按 ¥{price}/$1 换算（与仪表盘营收口径一致）'
+      },
+      range: {
+        label: '统计区间',
+        lastDays: '近 {days} 天',
+        from: '开始日期',
+        to: '结束日期',
+        apply: '应用',
+        current: '统计区间：{range}（截至昨日的完整自然日，或自定义区间）',
+        previous: '对比上一周期：{range}'
+      },
+      actions: {
+        refresh: '刷新',
+        changePrice: '修改售价',
+        goUserActivity: '去用户分析同步数据',
+        showTable: '表格',
+        showChart: '图表',
+        viewDetail: '查看 {name} 的详情'
+      },
+      empty: {
+        title: '还没有可分析的数据',
+        description: '销售分析使用「用户分析」同步到本地的用户、入账和用量数据。登录自己站点后会在后台自动同步，也可以去用户分析页面马上同步。'
+      },
+      coverage: {
+        partial: '入账数据从 {from} 开始覆盖，所选区间不完整，汇总只包含已覆盖的日期。',
+        snapshot: 'new-api 站点的入账按两次同步之间的余额变化统计（从 {from} 开始），无法区分充值来源，也无法识别首次入账用户。',
+        usagePartial: '用量数据只覆盖 {range}，所选区间不完整',
+        previousMissing: '上一周期没有完整的入账数据，无法计算环比'
+      },
+      kpi: {
+        credits: '入账金额',
+        creditsHint: '{count} 笔 · 另有扣减 {deductions}',
+        payers: '入账用户',
+        payersHint: '首次入账 {newPayers} 人 · 复购 {repeat} 人',
+        arppu: '人均入账',
+        arppuHint: '入账金额 ÷ 入账用户',
+        consumption: '用户消耗',
+        consumptionHint: '入账 ÷ 消耗 = {ratio}',
+        consumptionNone: '所选区间没有消耗',
+        balanceChange: '资金沉淀',
+        balanceChangeHint: '期末用户余额 {value}',
+        balanceUnknown: '缺少期初或期末的余额快照'
+      },
+      trend: {
+        title: '每日入账与消耗',
+        subtitle: '柱：按渠道堆叠的入账；线：用户消耗',
+        total: '入账合计',
+        deductions: '扣减',
+        consumption: '用户消耗',
+        day: '日期',
+        noData: '无数据',
+        aria: '{range} 每日入账（按渠道）与用户消耗'
+      },
+      channels: {
+        title: '入账渠道',
+        subtitle: '扣减（管理员扣款、余额减少）单独列出，不计入入账合计',
+        channel: '渠道',
+        amount: '金额',
+        share: '占入账',
+        events: '笔数',
+        users: '人数',
+        perEvent: '笔均',
+        notCounted: '不计入',
+        empty: '所选区间没有入账记录。',
+        recordsNote: '在线充值来自站点支付订单；兑换码可能是售卡也可能是赠送；邀请返利转入不是现金收入。'
+      },
+      conversion: {
+        title: '转化、复购与集中度',
+        registered: '新用户转化',
+        registeredHint: '区间内注册 {registered} 人，已入账 {paid} 人',
+        repeat: '复购率',
+        repeatHint: '{payers} 个入账用户中 {repeat} 人在 2 天及以上有入账',
+        concentration: '前 10 名占比',
+        concentrationHint: '第 1 名占 {top1}',
+        distribution: '人均入账分布',
+        bucket: '{min} ~ {max}',
+        bucketOpen: '{min} 以上',
+        bucketUsers: '{count} 人'
+      },
+      payers: {
+        title: '入账排行',
+        subtitle: '按区间内入账金额排序，前 20 名；点击用户查看详情',
+        user: '用户',
+        credits: '入账',
+        events: '笔数 / 天数',
+        eventsValue: '{events} 笔 / {days} 天',
+        channels: '渠道',
+        consumption: '区间消耗',
+        balance: '当前余额',
+        lastCredit: '最近入账',
+        empty: '所选区间没有入账用户。'
+      },
+      footnote: '入账包含在线充值、兑换码、管理员加款和邀请返利转入（new-api 为余额增加），按「我的站点售价」换算为人民币，不等于实收现金；资金沉淀是期末与期初的用户余额之差。',
+      errors: {
+        network: '网络请求失败，请检查网络后重试。',
+        request: '销售分析数据加载失败，请稍后重试。',
+        invalidRange: '统计区间无效：开始日期不能晚于结束日期，结束日期不能晚于今天，跨度不超过 366 天。'
+      }
+    },
+    client: {
+      title: '客户端',
+      subtitle: '给用户发一个专属链接：用 TransitLink 打开就能接入你的站点，界面换成你的品牌，一键配置时用你推荐的分组和模型。',
+      save: '保存',
+      saving: '保存中…',
+      saved: '已保存',
+      cancel: '取消',
+      loading: '正在加载…',
+      link: {
+        title: '专属链接',
+        description: '用户点这个链接会打开 TransitLink，自动接入你的站点并换上你的品牌。',
+        enabled: '开启',
+        enabledHelp: '关掉后链接和配置接口都不能用；已经接入的用户照常使用，只是不再更新品牌和公告。',
+        hubUrl: 'TransitHub 对外地址',
+        hubUrlHelp: '用户的电脑要能访问这个地址。只需要对外开放 /api/client/ 开头的接口，管理后台不用开放。',
+        siteUrl: '用户访问的站点地址',
+        siteUrlHelp: '默认用工作区的站点地址；用户访问的地址不一样时（例如单独的 API 域名）填这里。',
+        link: '专属链接',
+        unsaved: '保存一次就会生成链接。',
+        disabledNote: '还没开启，链接暂时打不开。',
+        copy: '复制',
+        copied: '已复制',
+        reset: '重置链接',
+        resetConfirm: '重置后旧链接马上失效，已经接入的用户下次读取配置也会失败，确定吗？',
+        configUrl: '配置地址',
+        openConfig: '在浏览器里查看'
+      },
+      brand: {
+        title: '品牌',
+        description: '用户接入后，TransitLink 显示你的名称、logo 和主题色。',
+        name: '名称',
+        namePlaceholder: '默认用站点名：{name}',
+        color: '主题色',
+        logo: 'Logo',
+        upload: '上传图片',
+        remove: '移除',
+        logoUrl: '或者填图片地址（https）',
+        logoHelp: 'PNG、JPG、WebP、GIF，不超过 256 KB，建议用正方形。',
+        uploaded: '已上传图片，保存后生效。',
+        welcome: '欢迎语',
+        welcomePlaceholder: '例如：欢迎使用，遇到问题随时找客服',
+        preview: '预览',
+        previewHome: '首页',
+        previewTools: '工具'
+      },
+      recommend: {
+        title: '推荐配置',
+        description: '用户一键配置时默认用这里的分组和模型，用户也可以自己改。',
+        claudeCode: 'Claude Code',
+        codex: 'Codex',
+        group: '分组',
+        model: '模型',
+        groupAuto: '不指定（客户端按分组名自动推荐）',
+        groupManual: '分组名（new-api）或分组 ID（sub2api）',
+        missingGroup: '{group}（站点里已经没有这个分组）',
+        claudeModelPlaceholder: '不指定（用 Claude Code 的默认模型）',
+        codexModelPlaceholder: '不指定（自动选最新的 GPT 模型）',
+        groupsLoading: '正在读取站点分组…',
+        groupsFailed: '读取站点分组失败：{error}。可以直接填分组。'
+      },
+      notice: {
+        title: '公告与客服',
+        description: '公告和客服方式显示在 TransitLink 的首页。',
+        notice: '公告',
+        noticePlaceholder: '例如：本周六 2:00–4:00 维护',
+        support: '客服方式',
+        supportEmpty: '还没有添加客服方式。',
+        add: '添加',
+        remove: '删除',
+        type: '类型',
+        label: '名称，例如：Telegram 群',
+        value: '链接、号码或邮箱',
+        types: {
+          telegram: 'Telegram',
+          qq: 'QQ',
+          wechat: '微信',
+          discord: 'Discord',
+          email: '邮箱',
+          url: '网页',
+          other: '其他'
+        }
+      },
+      errors: {
+        invalid: '有内容格式不对，请检查后再保存。',
+        logoTooLarge: 'Logo 太大了，请换一张不超过 256 KB 的图片。',
+        logoType: 'Logo 只支持 PNG、JPG、WebP、GIF。',
+        request: '请求失败，请稍后再试。',
+        network: '网络错误，请检查连接。'
+      }
+    },
+    update: {
+      title: '检查更新',
+      checking: '正在检查…',
+      current: '当前版本',
+      latest: '最新版本',
+      publishedAt: '发布于 {date}',
+      upToDate: '已经是最新版本。',
+      available: '有新版本 {version}',
+      newVersion: '有新版本 {version}，点击查看',
+      badge: '有新版本',
+      notes: '更新说明',
+      howTo: '更新方法（Docker 部署）',
+      step1: '把 docker-compose.prod.yml 里的镜像版本改成 {version}（用 latest 的跳过这一步）。',
+      step2: '在部署目录运行下面的命令，拉取新镜像并重启：',
+      copy: '复制命令',
+      viewRelease: '在 GitHub 上查看这个版本',
+      recheck: '重新检查',
+      close: '关闭',
+      online: {
+        title: '在线更新',
+        description: '服务器会从 GitHub 下载 {version}，校验无误后安装并自动重启。通常一两分钟，重启时页面会暂时打不开，完成后自动刷新。',
+        start: '更新到 {version}',
+        confirm: '确定现在更新到 {version} 吗？重启时正在进行的后台采集会中断，重启后可以重新开始。',
+        confirmButton: '确定更新',
+        cancel: '取消'
+      },
+      progress: {
+        downloading: '正在下载 {version}…',
+        downloadLabel: '下载进度',
+        downloaded: '已下载 {done} / {total} MB（{percent}%）',
+        installing: '下载完成，正在校验并安装…',
+        restarting: '正在重启到 {version}…',
+        reloading: '已更新到 {version}，正在刷新页面…',
+        keepOpen: '请不要关闭这个页面，更新完成后会自动刷新。',
+        stalled: '等了 3 分钟还没连上服务。请稍后刷新页面；如果一直打不开，请查看服务器日志（docker compose logs app）。',
+        reverted: '新版本没能启动，服务已自动退回 {version}。请查看服务器日志（docker compose logs app）找原因，或者用下面的 Docker 方法更新。',
+        reload: '刷新页面'
+      },
+      reasons: {
+        notAdmin: '只有系统管理员可以在线更新。',
+        unsupported: '这台服务器不支持在线更新（需要在 Linux 服务器上运行，并且数据目录可写）。',
+        noPackage: '这个版本没有在线更新包。'
+      },
+      errors: {
+        checkFailed: '检查更新失败：连不上 GitHub，或者请求太频繁，请稍后再试。',
+        forbidden: '只有系统管理员可以在线更新。',
+        inProgress: '已经在更新了，请稍候。',
+        unavailable: '现在没有可以安装的新版本，请重新检查。',
+        failed: '更新失败，当前版本不受影响。请稍后重试；一直失败时请查看服务器日志（docker compose logs app）。'
+      }
+    },
+    collections: {
+      running: '后台采集中',
+      runningProfit: '利润分析正在后台采集',
+      runningUsers: '用户分析正在后台同步',
+      separator: '；',
+      view: '查看',
+      goDashboard: '去仪表盘登录',
+      dismiss: '关闭提醒',
+      unknownError: '采集出错，请稍后再看。',
+      profit: {
+        done: '利润分析采集完成',
+        firstDone: '利润分析首次采集完成',
+        resumed: '利润分析已在后台继续并采集完成',
+        doneDetail: '数据已更新到 {date}',
+        failed: '利润分析采集失败'
+      },
+      users: {
+        done: '用户数据同步完成',
+        firstDone: '用户分析首次同步完成',
+        resumed: '用户数据已在后台继续并同步完成',
+        doneDetail: '共 {count} 个用户，销售分析也已更新',
+        failed: '用户数据同步失败',
+        viewSales: '看销售分析'
+      }
+    },
+    profit: {
+      title: '利润分析',
+      subtitle: '按上游和分组看毛利：营收来自自己站点每条路由（sub2api 上游账号 / new-api 渠道）的分组统计，成本来自已登记上游站点的消耗，按上游域名自动对应，不需要手动绑定。只读。',
+      common: {
+        placeholder: '—'
+      },
+      sync: {
+        never: '尚未采集',
+        lastSynced: '{time}采集',
+        coverage: '数据覆盖 {range}',
+        routes: '{count} 条路由',
+        running: '正在采集…',
+        failed: '最近一次采集失败：{reason}'
+      },
+      sources: {
+        sub2api_groups: '营收按账号和分组统计',
+        newapi_flow: '营收来自数据看板（按渠道和分组）',
+        newapi_log_stat: '营收按渠道逐个查询日志'
+      },
+      source: {
+        basis: '营收按 ¥{price}/$1 换算（与仪表盘一致）'
+      },
+      range: {
+        label: '统计区间',
+        lastDays: '近 {days} 天',
+        from: '开始日期',
+        to: '结束日期',
+        apply: '应用',
+        current: '统计区间：{range}（截至昨天的完整自然日）',
+        previous: '对比上一周期：{range}'
+      },
+      actions: {
+        refresh: '刷新',
+        sync: '立即采集',
+        startSync: '开始首次采集',
+        changePrice: '修改售价',
+        goDashboard: '去仪表盘登录',
+        goUpstream: '去登记上游',
+        showTable: '表格',
+        showChart: '图表',
+        expand: '展开 {name} 的站点和路由',
+        collapse: '收起 {name}'
+      },
+      empty: {
+        title: '还没有利润数据',
+        description: '利润分析会读取自己站点每条路由按分组的营收，以及已登记上游站点每天的消耗，按上游域名自动对应。登录自己站点后，系统会在一小时内自动在后台开始首次采集（回补最近 30 天，可能需要几分钟），之后每小时自动补齐；也可以点下面的按钮马上开始。',
+        runningTitle: '正在进行首次采集',
+        runningDescription: '正在回补最近 30 天的营收和上游成本，可能需要几分钟，完成后页面会自动刷新。',
+        requirements: '需要先在仪表盘登录自己站点的管理员账号，并在「上游管理」登记上游站点、设置充值倍率。'
+      },
+      coverage: {
+        partial: '所选区间还没有全部采集或定稿：已采集 {range}，定稿到 {complete}。没有采集的日期不计入合计。',
+        previousMissing: '上一周期没有完整的数据，无法计算环比'
+      },
+      kpi: {
+        revenue: '营收',
+        revenueHint: '自己站点用户的消耗，按售价换算',
+        cost: '上游成本',
+        costHint: '已登记上游站点的消耗 × 充值倍率',
+        costFailedHint: '有 {count} 个站点日的成本查询失败，成本可能偏低',
+        profit: '毛利',
+        profitHint: '毛利率 {margin}',
+        previousMargin: '（上期 {margin}）',
+        profitDelta: '较上期 {value}',
+        attributed: '归因覆盖',
+        attributedHint: '未归因营收 {value}（成本未知）',
+        unmatched: '未匹配成本',
+        unmatchedHint: '有成本，但没有路由指向的上游'
+      },
+      insights: {
+        title: '需要关注',
+        severity: {
+          critical: '严重',
+          warning: '注意',
+          info: '提示'
+        },
+        negativeMargin: '上游 {subject} 在亏损：成本比营收多 {value}。',
+        unmatchedCost: '上游 {subject} 有成本 {value}，但没有路由指向它：可能路由地址和登记地址不是同一个域名，或者 key 在本站以外被使用。',
+        unregistered: '有 {value} 营收来自没有登记的上游 {subject}，成本没有计入。登记后就能算出毛利。',
+        lowRunway: '{subject} 的余额约可用 {days}，建议充值 {topUp}。',
+        costSpike: '上游 {subject} 昨天的成本占营收 {ratio}，明显高于前 7 天的中位数 {baseline}：可能上游涨价，或 key 在本站以外被使用。',
+        noRate: '{subject} 没有设置充值倍率，成本按 0 计算。',
+        costFailed: '{subject} 有 {count} 天成本查询失败，这些天的成本没有计入。',
+        priceIncrease: '{subject} 倍率上调 {change}，按近 7 天消耗估算每天多 {value}。',
+        priceIncreaseUnknown: '{subject} 倍率上调 {change}，暂时无法估算对成本的影响。'
+      },
+      trend: {
+        title: '每日营收、成本与毛利',
+        subtitle: '线：营收和上游成本；柱：毛利（可能为负）',
+        revenue: '营收',
+        cost: '上游成本',
+        profit: '毛利',
+        margin: '毛利率',
+        day: '日期',
+        noData: '未采集',
+        aria: '{range} 每日营收、上游成本与毛利'
+      },
+      upstreams: {
+        title: '按上游',
+        subtitle: '同一个域名下的站点和路由归为一个上游（api.example.com 和 example.com 视为同一个）；点击展开查看站点和路由',
+        upstream: '上游',
+        revenue: '营收',
+        cost: '成本',
+        profit: '毛利',
+        margin: '毛利率',
+        balance: '余额',
+        runway: '续航',
+        topUp: '建议充值',
+        topUpHint: '按近 7 天日均成本，备足 7 天还差的金额',
+        routes: '{count} 条路由',
+        noRoutes: '没有路由',
+        noRoutesHint: '没有路由指向这个上游，它的成本计入「未匹配成本」。',
+        runwayDays: '{days} 天',
+        runwayLong: '很长',
+        sites: '上游站点',
+        site: '站点',
+        rechargeRate: '充值倍率',
+        rangeCost: '区间成本',
+        avgDailyCost: '近 7 天日均成本',
+        deleted: '已删除',
+        noRate: '未设置充值倍率',
+        failedDays: '{count} 天查询失败',
+        routeList: '路由',
+        route: '路由',
+        groups: '分组',
+        routeRevenue: '区间营收',
+        routeDisabled: '已停用',
+        routeError: '异常',
+        routeDeleted: '已删除',
+        empty: '还没有登记上游站点，或所选区间没有成本和营收。'
+      },
+      groups: {
+        title: '按分组',
+        subtitle: '分组成本按该分组在每个上游的营收占比分摊；毛利和毛利率只算已归因的营收',
+        group: '分组',
+        revenue: '营收',
+        cost: '分摊成本',
+        profit: '毛利',
+        margin: '毛利率',
+        unattributed: '未归因营收',
+        none: '（无分组）',
+        empty: '所选区间没有营收。'
+      },
+      unattributed: {
+        title: '未归因营收',
+        subtitle: '这些营收找不到对应的已登记上游，成本未知，不计入毛利率',
+        category: '类别',
+        address: '上游地址',
+        routes: '路由',
+        revenue: '营收',
+        categories: {
+          official: '官方账号 / 没有填地址',
+          unregistered: '没有登记的上游',
+          unknown: '未知路由'
+        },
+        unknownRoute: '已删除或站点没有记录的路由',
+        empty: '所选区间的营收都已归因。'
+      },
+      priceChanges: {
+        title: '上游调价',
+        subtitle: '上游站点同步时检测到的分组倍率变化（最近 30 天），按该分组近 7 天的消耗估算对每天成本的影响；只提示，不会改价',
+        detectedAt: '检测时间',
+        site: '上游站点',
+        group: '分组',
+        multiplier: '倍率',
+        avgDailyCost: '近 7 天日均成本',
+        impact: '每天成本影响',
+        noUsage: '近 7 天未使用',
+        noRate: '未设置充值倍率',
+        failed: '无法估算',
+        empty: '最近 30 天没有检测到上游分组倍率变化。'
+      },
+      footnote: '营收是自己站点用户的消耗（站点额度）按「我的站点售价」换算的人民币；成本是已登记上游站点的消耗 × 充值倍率。路由地址和上游站点按域名对应，分组成本按营收占比分摊。数据是完整自然日（北京时间），每小时 10 分自动采集；续航和建议充值按近 7 天日均成本计算。',
+      warnings: {
+        costFailed: '部分上游站点的成本查询失败，相关日期的成本可能偏低；最近两天会自动重试。',
+        flowFallback: '站点没有开启数据看板（或版本较旧），已改为逐个渠道查询营收，采集会慢一些。',
+        tooManyRoutes: '路由超过 500 条，只统计了前 500 条。'
+      },
+      errors: {
+        authRequired: '自己站点的管理员登录已失效，请先在仪表盘重新登录。',
+        platformUnsupported: '当前站点类型不支持利润分析（只支持 sub2api 和 new-api）。',
+        syncInProgress: '正在采集中，请稍后再试。',
+        routesFetch: '读取站点的账号 / 渠道列表失败，请稍后重试。',
+        revenueFetch: '读取站点的营收统计失败，请稍后重试。',
+        network: '网络请求失败，请检查网络后重试。',
+        interrupted: '上次采集被服务重启打断，会在服务启动约 2 分钟后在后台自动继续，无需操作。',
+        invalidRange: '统计区间无效：开始日期不能晚于结束日期，结束日期不能晚于昨天，跨度不超过 366 天。',
+        request: '利润分析数据加载失败，请稍后重试。'
+      }
+    },
     settings: {
+      dailyReport: {
+        title: '经营日报',
+        help: '每天在设定的时间，把昨天的营收、成本、毛利、入账、活跃用户和上游余额汇总发给机器人。数据来自仪表盘与用户分析的本地数据，不会访问站点。',
+        time: '发送时间（北京时间）',
+        timeHelp: '服务在设定时间之后才启动时，当天仍会补发一次',
+        preview: '预览昨日日报',
+        sendTest: '立即测试发送',
+        sent: '已发送给 {count} 个机器人',
+        previewTitle: '日报内容预览',
+        saveHint: '开关、时间和机器人需要点击右上角「保存」后生效；预览和测试发送不需要先保存。',
+        errors: {
+          noBots: '请先选择至少一个接收机器人。',
+          request: '日报生成或发送失败，请稍后重试。'
+        }
+      },
       title: '系统设置',
       subtitle: '管理系统运行参数、通知渠道及自动化策略。',
       save: '保存配置',
@@ -1127,11 +1609,12 @@ export default {
           groupName: '默认分组',
           oldRate: '1.0000',
           newRate: '1.1200',
-          changeDirection: '上升'
+          changeDirection: '上升',
+          costImpact: '按该分组近 7 天日均成本 ¥20.00 估算，每天约多 ¥4.00'
         }
       },
       balanceTemplateVars: '(支持变量: {siteName}, {balance}, {threshold})',
-      multiplierTemplateVars: '(支持变量: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection})',
+      multiplierTemplateVars: '(支持变量: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection}, {costImpact})',
       unnamedBot: '未命名机器人',
       noBotsConfigured: '请先在"通知与渠道"中配置机器人',
       mustSelectBot: '必须选择至少一个通知机器人',
@@ -1142,6 +1625,7 @@ export default {
       varOldRate: '原倍率',
       varNewRate: '新倍率',
       varChangeDirection: '变更方向',
+      varCostImpact: '成本影响',
       botNameLabel: '机器人名称标识',
       botNameDingtalkPlaceholder: '例如：钉钉主群',
       botNameWecomPlaceholder: '例如：企业微信主群',
@@ -1267,7 +1751,7 @@ export default {
         },
         templates: {
           balanceDefaultTemplate: '🔴 **余额预警**\n\n🏷️ **站点：** {siteName}\n💰 **当前余额：** ¥{balance}\n⚠️ **预警阈值：** ¥{threshold}\n\n请及时检查并充值，避免服务中断。',
-          multiplierDefaultTemplate: '🟠 **倍率变更预警**\n\n🏷️ **站点：** {siteName}\n📦 **分组：** {groupName}\n📊 **倍率：** {oldRate}x → **{newRate}x**（{changeDirection}）\n\n🔎 请确认成本变化，并检查下游定价策略。',
+          multiplierDefaultTemplate: '🟠 **倍率变更预警**\n\n🏷️ **站点：** {siteName}\n📦 **分组：** {groupName}\n📊 **倍率：** {oldRate}x → **{newRate}x**（{changeDirection}）\n💸 **成本影响：** {costImpact}\n\n🔎 请确认成本变化，并检查下游定价策略。',
           balanceTemplatePlaceholder: '例如：🔴 {siteName} 当前余额 ¥{balance}，已低于 ¥{threshold}。',
           multiplierTemplatePlaceholder: '例如：🟠 {siteName} / {groupName}：{oldRate}x → {newRate}x。'
         }
@@ -1358,7 +1842,6 @@ export default {
     },
     system: {
       version: '版本 {version}',
-      openRelease: '查看发布说明',
       openGithubRepository: '在 GitHub 上查看源码',
       errors: {
         network: '系统信息请求失败，请检查网络连接。',

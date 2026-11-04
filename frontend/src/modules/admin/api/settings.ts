@@ -7,6 +7,8 @@ import type {
   SaveSmtpSettingsPayload,
   SmtpSettings,
   StrategySettings,
+  DailyReport,
+  SendDailyReportTestResponse,
   TestNotificationChannelPayload,
   TestNotificationChannelResponse,
   TestOutboundProxyPayload,
@@ -168,5 +170,17 @@ export const testOutboundProxy = async (payload: TestOutboundProxyPayload): Prom
   requestJson<TestOutboundProxyResponse>('/system/outbound-proxy/test', {
     method: 'POST',
     body: JSON.stringify(payload),
+  })
+)
+
+// 经营日报：预览当前工作区昨天的日报（不发送）；测试发送给表单里选中的机器人（为空时使用已保存的设置）。
+export const previewDailyReport = async (): Promise<DailyReport> => (
+  requestJson<DailyReport>('/reports/daily/preview')
+)
+
+export const sendDailyReportTest = async (botIds: string[]): Promise<SendDailyReportTestResponse> => (
+  requestJson<SendDailyReportTestResponse>('/reports/daily/test', {
+    method: 'POST',
+    body: JSON.stringify({ botIds }),
   })
 )

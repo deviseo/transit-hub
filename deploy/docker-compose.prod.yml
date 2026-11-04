@@ -4,7 +4,7 @@ services:
   # TransitHub 应用服务：包含 Go 后端和已构建的前端静态文件。
   app:
     # 发布部署必须使用与代码内置版本号一致的固定镜像 tag。
-    image: deviseo/transithub:v0.1.15
+    image: deviseo/transithub:v1.0.0
     restart: unless-stopped
     depends_on:
       postgres:
@@ -14,6 +14,9 @@ services:
     ports:
       # 左侧 10621 是宿主机访问端口，可按需修改；右侧 10621 是容器内服务端口。
       - "10621:10621"
+    volumes:
+      # 在线更新下载的新版本放在这里。不挂载也能在线更新，但重建容器后会回到镜像自带的版本。
+      - ../data/app:/app/data
     environment:
       PORT: "10621"
       # 业务时区：决定仪表盘「今日」统计的日期边界，需与午夜快照调度使用的 Asia/Shanghai 保持一致。

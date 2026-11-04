@@ -84,6 +84,7 @@ func siteIDs(rows []UserRow) string {
 func TestRepositoryPostgresSnapshotAndAnalytics(t *testing.T) {
 	pool := openPostgresTestPool(t)
 	applyMigration(t, pool, "000020_create_user_activity.sql")
+	applyMigration(t, pool, "000023_add_sync_started_by.sql")
 	repo := NewRepository(pool)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()
@@ -280,6 +281,7 @@ func TestRepositoryPostgresSnapshotAndAnalytics(t *testing.T) {
 func TestRepositoryPostgresSyncState(t *testing.T) {
 	pool := openPostgresTestPool(t)
 	applyMigration(t, pool, "000020_create_user_activity.sql")
+	applyMigration(t, pool, "000023_add_sync_started_by.sql")
 	repo := NewRepository(pool)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()
@@ -288,7 +290,7 @@ func TestRepositoryPostgresSyncState(t *testing.T) {
 		t.Fatalf("missing state must report ok=false: %v %v", ok, err)
 	}
 	from, to := day("2026-09-01"), day("2026-11-02")
-	state := SyncState{Platform: "sub2api", Status: SyncStatusRunning, SyncedFrom: &from, SyncedTo: &to, UserCount: 3, LastStartedAt: timePtr(testNow)}
+	state := SyncState{Platform: "sub2api", Status: SyncStatusRunning, SyncedFrom: &from, SyncedTo: &to, UserCount: 3, LastStartedAt: timePtr(testNow), StartedBy: StartedByAuto}
 	if err := repo.SaveSyncState(ctx, testWorkspace, state); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
@@ -296,7 +298,7 @@ func TestRepositoryPostgresSyncState(t *testing.T) {
 		t.Fatalf("reset running: %v", err)
 	}
 	got, ok, err := repo.GetSyncState(ctx, testWorkspace)
-	if err != nil || !ok || got.Status != SyncStatusFailed || got.ErrorKey != ErrorInterrupted || formatDay(*got.SyncedFrom) != "2026-09-01" || formatDay(*got.SyncedTo) != "2026-11-02" || got.UserCount != 3 {
+	if err != nil || !ok || got.Status != SyncStatusFailed || got.ErrorKey != ErrorInterrupted || formatDay(*got.SyncedFrom) != "2026-09-01" || formatDay(*got.SyncedTo) != "2026-11-02" || got.UserCount != 3 || got.StartedBy != StartedByAuto {
 		t.Fatalf("unexpected state after reset: %+v %v %v", got, ok, err)
 	}
 	workspaces, err := repo.ListSyncedWorkspaces(ctx)
@@ -308,6 +310,7 @@ func TestRepositoryPostgresSyncState(t *testing.T) {
 func TestRepositoryPostgresRechargeAndBalance(t *testing.T) {
 	pool := openPostgresTestPool(t)
 	applyMigration(t, pool, "000020_create_user_activity.sql")
+	applyMigration(t, pool, "000023_add_sync_started_by.sql")
 	repo := NewRepository(pool)
 	ctx, cancel := context.WithTimeout(context.Background(), postgresTestTimeout)
 	defer cancel()

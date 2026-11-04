@@ -59,6 +59,24 @@ const routes = [
         component: () => import('./modules/admin/views/UserActivityView.vue')
       },
       {
+        path: 'sales',
+        name: 'AdminSales',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/SalesView.vue')
+      },
+      {
+        path: 'profit',
+        name: 'AdminProfit',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/ProfitView.vue')
+      },
+      {
+        path: 'client',
+        name: 'AdminClient',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/ClientView.vue')
+      },
+      {
         path: 'mass-email',
         name: 'AdminMassEmail',
         meta: { requiresWorkspace: true },

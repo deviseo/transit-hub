@@ -119,8 +119,11 @@ export default {
       upstream: 'Upstream',
       groupRates: 'Group Rates',
       settings: 'Settings',
-      userActivity: 'User Activity',
+      userActivity: 'User Analytics',
+      sales: 'Sales',
+      profit: 'Profit',
       massEmail: 'Mass Email',
+      client: 'Client',
       signOut: 'Sign Out'
     },
     adminAccounts: {
@@ -793,7 +796,7 @@ export default {
         recipientLimitReached: 'This selection exceeds the 10,000-recipient limit. Narrow the filters and try again.',
         itemGeneric: 'Recipient delivery failed. Check the batch later for updated details.',
         segmentUnavailable: 'Sending by activity segment is unavailable.',
-        segmentNotSynced: 'User activity has not been synced yet. Sync it on the User Activity page first.',
+        segmentNotSynced: 'User data has not been synced yet. It syncs in the background after you sign in to your site, or you can sync it now on the User Analytics page.',
         invalidPublicUrl: 'Invalid unsubscribe link address. Enter a full http(s) URL.',
         invalidSuppression: 'Enter valid email addresses (up to 1,000 at a time).',
         suppressed: 'The recipient unsubscribed; nothing was sent.'
@@ -840,8 +843,8 @@ export default {
         loading: 'Loading…'
       },
       empty: {
-        title: 'No user activity data yet',
-        description: 'Once you start syncing, TransitHub reads the site\'s user list and daily usage with this workspace\'s admin session (the last 62 days first, then hourly incremental syncs that gradually backfill older history). The data stays in TransitHub for analysis.',
+        title: 'No user data yet',
+        description: 'After you sign in to your site, TransitHub starts syncing in the background within an hour: it reads the site\'s user list and daily usage with this workspace\'s admin session (the last 62 days first, then hourly incremental syncs that gradually backfill older history). The data stays in TransitHub for analysis. You can also start right away with the button below.',
         runningTitle: 'Running the first sync',
         runningDescription: 'Reading site users and the last 62 days of usage. This usually takes 1–3 minutes; the page refreshes automatically when it finishes.'
       },
@@ -1084,13 +1087,13 @@ export default {
       },
       errors: {
         network: 'Network request failed. Check that the TransitHub service is reachable.',
-        request: 'User activity request failed. Please try again later.',
+        request: 'User analytics request failed. Please try again later.',
         authRequired: 'An admin session for this workspace\'s site is required: sign in to the sub2api / new-api admin account on the dashboard first.',
-        platformUnsupported: 'User activity analysis only supports sub2api and new-api sites.',
+        platformUnsupported: 'User analytics only supports sub2api and new-api sites.',
         syncInProgress: 'A sync is already running. Please try again shortly.',
         usersFetch: 'Could not read the site\'s user list. Check that the admin session is valid.',
         usageFetch: 'Could not read the site\'s usage data. sub2api needs an admin session; new-api needs admin rights (access tokens need the log:read scope) and data dashboard statistics enabled.',
-        interrupted: 'The sync was interrupted (service restart or timeout). Please sync again.',
+        interrupted: 'The last sync was interrupted by a service restart or timeout. It resumes in the background automatically; no action needed.',
         invalidFilter: 'Invalid filter.',
         notFound: 'The user does not exist or was deleted from the site.',
         tooManyUsers: 'Sites with more than 50,000 users are not supported yet.',
@@ -1098,7 +1101,486 @@ export default {
         notSynced: 'No user data has been synced yet. Run a sync first.'
       }
     },
+    sales: {
+      title: 'Sales',
+      subtitle: 'Credit sources, paying users, conversion and repeat purchases, revenue concentration, and top payers. Read-only, based on the data synced by User Analytics.',
+      common: {
+        placeholder: '—'
+      },
+      source: {
+        lastSynced: 'Data synced by User Analytics · last sync {time}',
+        neverSynced: 'User data has not been synced yet',
+        basis: 'Amounts converted at ¥{price} per $1 (same as dashboard revenue)'
+      },
+      range: {
+        label: 'Period',
+        lastDays: 'Last {days} days',
+        from: 'Start date',
+        to: 'End date',
+        apply: 'Apply',
+        current: 'Period: {range} (complete days through yesterday, or a custom range)',
+        previous: 'Compared with: {range}'
+      },
+      actions: {
+        refresh: 'Refresh',
+        changePrice: 'Change price',
+        goUserActivity: 'Sync data in User Analytics',
+        showTable: 'Table',
+        showChart: 'Chart',
+        viewDetail: 'View details of {name}'
+      },
+      empty: {
+        title: 'No data to analyze yet',
+        description: 'Sales analysis uses the users, credits, and usage that User Analytics syncs locally. It syncs in the background after you sign in to your site, or you can sync now on the User Analytics page.'
+      },
+      coverage: {
+        partial: 'Credit data starts on {from}, so the selected period is incomplete. Totals only include covered days.',
+        snapshot: 'For new-api sites, credits are measured from balance changes between syncs (since {from}). Their source and first-time payers cannot be identified.',
+        usagePartial: 'Usage data only covers {range}, so the selected period is incomplete',
+        previousMissing: 'The previous period has no complete credit data, so no change is shown'
+      },
+      kpi: {
+        credits: 'Credits',
+        creditsHint: '{count} credits · plus {deductions} deducted',
+        payers: 'Paying users',
+        payersHint: '{newPayers} first-time · {repeat} repeat',
+        arppu: 'Credits per paying user',
+        arppuHint: 'Credits ÷ paying users',
+        consumption: 'User spend',
+        consumptionHint: 'Credits ÷ spend = {ratio}',
+        consumptionNone: 'No spend in this period',
+        balanceChange: 'Balance growth',
+        balanceChangeHint: 'User balance at period end: {value}',
+        balanceUnknown: 'Missing a balance snapshot at the start or end'
+      },
+      trend: {
+        title: 'Daily credits and spend',
+        subtitle: 'Bars: credits stacked by source; line: user spend',
+        total: 'Total credits',
+        deductions: 'Deducted',
+        consumption: 'User spend',
+        day: 'Date',
+        noData: 'No data',
+        aria: 'Daily credits by source and user spend for {range}'
+      },
+      channels: {
+        title: 'Credit sources',
+        subtitle: 'Deductions (admin deductions, balance decreases) are listed separately and not counted in credits',
+        channel: 'Source',
+        amount: 'Amount',
+        share: 'Share',
+        events: 'Count',
+        users: 'Users',
+        perEvent: 'Average',
+        notCounted: 'Not counted',
+        empty: 'No credits in this period.',
+        recordsNote: 'Online top-ups come from site payment orders; redeem codes may be sold or given away; referral rebates are not cash income.'
+      },
+      conversion: {
+        title: 'Conversion, repeat purchases, and concentration',
+        registered: 'New-user conversion',
+        registeredHint: '{paid} of {registered} users registered in the period have credits',
+        repeat: 'Repeat rate',
+        repeatHint: '{repeat} of {payers} paying users have credits on 2 or more days',
+        concentration: 'Top 10 share',
+        concentrationHint: 'Top user: {top1}',
+        distribution: 'Credits per paying user',
+        bucket: '{min} – {max}',
+        bucketOpen: '{min} and above',
+        bucketUsers: '{count} users'
+      },
+      payers: {
+        title: 'Top payers',
+        subtitle: 'Ranked by credits in the period, top 20; select a user for details',
+        user: 'User',
+        credits: 'Credits',
+        events: 'Credits / days',
+        eventsValue: '{events} / {days} days',
+        channels: 'Sources',
+        consumption: 'Spend in period',
+        balance: 'Current balance',
+        lastCredit: 'Last credit',
+        empty: 'No paying users in this period.'
+      },
+      footnote: 'Credits include online top-ups, redeem codes, admin top-ups, and referral rebates (balance increases on new-api), converted to CNY at your site price. They are not the same as cash received. Balance growth is the change in total user balance over the period.',
+      errors: {
+        network: 'Network request failed. Check your connection and try again.',
+        request: 'Failed to load sales data. Please try again later.',
+        invalidRange: 'Invalid period: the start date must not be after the end date, the end date must not be after today, and the period must not exceed 366 days.'
+      }
+    },
+    client: {
+      title: 'Client',
+      subtitle: 'Send your users one link: it opens TransitLink, connects them to your site with your branding, and one-click setup uses the groups and models you recommend.',
+      save: 'Save',
+      saving: 'Saving…',
+      saved: 'Saved',
+      cancel: 'Cancel',
+      loading: 'Loading…',
+      link: {
+        title: 'Site link',
+        description: 'Opening this link starts TransitLink, connects your site and applies your branding.',
+        enabled: 'On',
+        enabledHelp: 'When off, the link and the config API stop working. Users who already connected keep working, but branding and notices no longer update.',
+        hubUrl: 'Public TransitHub address',
+        hubUrlHelp: "Users' computers must be able to reach this address. Only paths under /api/client/ need to be public; the admin console does not.",
+        siteUrl: 'Site address for users',
+        siteUrlHelp: "Defaults to the workspace's site address. Fill this in if users reach the site at a different address, such as a separate API domain.",
+        link: 'Site link',
+        unsaved: 'Save once to create the link.',
+        disabledNote: 'Not turned on yet, so the link does not work.',
+        copy: 'Copy',
+        copied: 'Copied',
+        reset: 'Reset link',
+        resetConfirm: 'The old link stops working right away, and connected users will fail to refresh their config. Continue?',
+        configUrl: 'Config URL',
+        openConfig: 'View in browser'
+      },
+      brand: {
+        title: 'Branding',
+        description: 'Once connected, TransitLink shows your name, logo and theme color.',
+        name: 'Name',
+        namePlaceholder: 'Defaults to the site name: {name}',
+        color: 'Theme color',
+        logo: 'Logo',
+        upload: 'Upload image',
+        remove: 'Remove',
+        logoUrl: 'Or enter an image URL (https)',
+        logoHelp: 'PNG, JPG, WebP or GIF, up to 256 KB. Square images work best.',
+        uploaded: 'Image uploaded. It takes effect after you save.',
+        welcome: 'Welcome message',
+        welcomePlaceholder: 'For example: Welcome! Contact support any time',
+        preview: 'Preview',
+        previewHome: 'Home',
+        previewTools: 'Tools'
+      },
+      recommend: {
+        title: 'Recommended setup',
+        description: 'One-click setup uses these groups and models by default. Users can still change them.',
+        claudeCode: 'Claude Code',
+        codex: 'Codex',
+        group: 'Group',
+        model: 'Model',
+        groupAuto: 'Not set (the client picks by group name)',
+        groupManual: 'Group name (new-api) or group ID (sub2api)',
+        missingGroup: '{group} (no longer on the site)',
+        claudeModelPlaceholder: "Not set (Claude Code's default model)",
+        codexModelPlaceholder: 'Not set (the newest GPT model)',
+        groupsLoading: "Loading the site's groups…",
+        groupsFailed: "Couldn't load the site's groups: {error}. You can type the group instead."
+      },
+      notice: {
+        title: 'Notice and support',
+        description: "The notice and support contacts appear on TransitLink's home page.",
+        notice: 'Notice',
+        noticePlaceholder: 'For example: maintenance this Saturday 2:00–4:00',
+        support: 'Support contacts',
+        supportEmpty: 'No support contacts yet.',
+        add: 'Add',
+        remove: 'Remove',
+        type: 'Type',
+        label: 'Name, for example: Telegram group',
+        value: 'Link, number or email',
+        types: {
+          telegram: 'Telegram',
+          qq: 'QQ',
+          wechat: 'WeChat',
+          discord: 'Discord',
+          email: 'Email',
+          url: 'Website',
+          other: 'Other'
+        }
+      },
+      errors: {
+        invalid: 'Something is not in the right format. Please check and save again.',
+        logoTooLarge: 'The logo is too large. Please use an image up to 256 KB.',
+        logoType: 'The logo must be PNG, JPG, WebP or GIF.',
+        request: 'The request failed. Please try again later.',
+        network: 'Network error. Please check your connection.'
+      }
+    },
+    update: {
+      title: 'Check for updates',
+      checking: 'Checking…',
+      current: 'Current version',
+      latest: 'Latest version',
+      publishedAt: 'released {date}',
+      upToDate: "You're on the latest version.",
+      available: 'Version {version} is available',
+      newVersion: 'Version {version} is available. Click for details',
+      badge: 'Update available',
+      notes: 'Release notes',
+      howTo: 'How to update (Docker)',
+      step1: 'Change the image version in docker-compose.prod.yml to {version} (skip this if you use latest).',
+      step2: 'Run this in your deployment folder to pull the new image and restart:',
+      copy: 'Copy command',
+      viewRelease: 'View this release on GitHub',
+      recheck: 'Check again',
+      close: 'Close',
+      online: {
+        title: 'Online update',
+        description: 'The server downloads {version} from GitHub, verifies it, installs it and restarts. This usually takes a minute or two. The page is briefly unavailable during the restart and reloads by itself when done.',
+        start: 'Update to {version}',
+        confirm: 'Update to {version} now? Background collections that are running will stop during the restart; you can start them again afterwards.',
+        confirmButton: 'Update now',
+        cancel: 'Cancel'
+      },
+      progress: {
+        downloading: 'Downloading {version}…',
+        downloadLabel: 'Download progress',
+        downloaded: '{done} / {total} MB downloaded ({percent}%)',
+        installing: 'Download complete. Verifying and installing…',
+        restarting: 'Restarting into {version}…',
+        reloading: 'Updated to {version}. Reloading the page…',
+        keepOpen: 'Keep this page open. It reloads by itself when the update is done.',
+        stalled: "The server hasn't come back after 3 minutes. Reload the page in a moment; if it still won't open, check the server logs (docker compose logs app).",
+        reverted: "The new version didn't start, so the server went back to {version}. Check the server logs (docker compose logs app) for the cause, or update with Docker as shown below.",
+        reload: 'Reload page'
+      },
+      reasons: {
+        notAdmin: 'Only the system admin can update online.',
+        unsupported: "This server can't update online (it needs to run on Linux with a writable data folder).",
+        noPackage: "This release doesn't include an online update package."
+      },
+      errors: {
+        checkFailed: "Couldn't check for updates: GitHub is unreachable or rate-limited. Please try again later.",
+        forbidden: 'Only the system admin can update online.',
+        inProgress: 'An update is already running. Please wait.',
+        unavailable: 'There is no new version to install right now. Please check again.',
+        failed: 'The update failed; the current version is unaffected. Try again later, and check the server logs (docker compose logs app) if it keeps failing.'
+      }
+    },
+    collections: {
+      running: 'Collecting in background',
+      runningProfit: 'Profit data is being collected in the background',
+      runningUsers: 'User data is being synced in the background',
+      separator: '; ',
+      view: 'View',
+      goDashboard: 'Sign in on the dashboard',
+      dismiss: 'Dismiss',
+      unknownError: 'Collection failed. Check again later.',
+      profit: {
+        done: 'Profit collection finished',
+        firstDone: 'First profit collection finished',
+        resumed: 'Profit collection resumed and finished',
+        doneDetail: 'Data is up to date through {date}',
+        failed: 'Profit collection failed'
+      },
+      users: {
+        done: 'User data sync finished',
+        firstDone: 'First user data sync finished',
+        resumed: 'User data sync resumed and finished',
+        doneDetail: '{count} user; sales analysis is updated too | {count} users; sales analysis is updated too',
+        failed: 'User data sync failed',
+        viewSales: 'View sales'
+      }
+    },
+    profit: {
+      title: 'Profit',
+      subtitle: 'Gross profit by upstream and group: revenue comes from each route on your own site (sub2api upstream accounts / new-api channels) split by group, cost comes from the usage of registered upstream sites, matched automatically by upstream domain with no manual binding. Read-only.',
+      common: {
+        placeholder: '—'
+      },
+      sync: {
+        never: 'Not collected yet',
+        lastSynced: 'Collected {time}',
+        coverage: 'Data covers {range}',
+        routes: '{count} route | {count} routes',
+        running: 'Collecting…',
+        failed: 'The last collection failed: {reason}'
+      },
+      sources: {
+        sub2api_groups: 'Revenue by account and group',
+        newapi_flow: 'Revenue from the data dashboard (by channel and group)',
+        newapi_log_stat: 'Revenue from per-channel log queries'
+      },
+      source: {
+        basis: 'Revenue converted at ¥{price}/$1 (same as the dashboard)'
+      },
+      range: {
+        label: 'Range',
+        lastDays: 'Last {days} days',
+        from: 'Start date',
+        to: 'End date',
+        apply: 'Apply',
+        current: 'Range: {range} (complete days up to yesterday)',
+        previous: 'Compared with: {range}'
+      },
+      actions: {
+        refresh: 'Refresh',
+        sync: 'Collect now',
+        startSync: 'Start first collection',
+        changePrice: 'Change price',
+        goDashboard: 'Sign in on the dashboard',
+        goUpstream: 'Register upstream',
+        showTable: 'Table',
+        showChart: 'Chart',
+        expand: 'Show sites and routes of {name}',
+        collapse: 'Hide {name}'
+      },
+      empty: {
+        title: 'No profit data yet',
+        description: 'Profit analysis reads the revenue of every route on your own site by group, plus the daily usage of registered upstream sites, and matches them by upstream domain. After you sign in to your site, the first collection starts in the background within an hour (it backfills the last 30 days and may take a few minutes), then catches up every hour. You can also start right away with the button below.',
+        runningTitle: 'Running the first collection',
+        runningDescription: 'Backfilling revenue and upstream cost for the last 30 days. This may take a few minutes; the page refreshes when it finishes.',
+        requirements: 'Sign in to your own site’s admin account on the dashboard first, and register upstream sites with their recharge rates under Upstream.'
+      },
+      coverage: {
+        partial: 'Not every day in this range is collected or final yet: collected {range}, final through {complete}. Days without data are not included.',
+        previousMissing: 'The previous period has no complete data, so no comparison is available'
+      },
+      kpi: {
+        revenue: 'Revenue',
+        revenueHint: 'Usage by your users, converted at your price',
+        cost: 'Upstream cost',
+        costHint: 'Usage on registered upstream sites × recharge rate',
+        costFailedHint: '{count} site-day failed to load; cost may be understated | {count} site-days failed to load; cost may be understated',
+        profit: 'Gross profit',
+        profitHint: 'Margin {margin}',
+        previousMargin: ' (previous {margin})',
+        profitDelta: '{value} vs previous',
+        attributed: 'Attributed',
+        attributedHint: 'Unattributed revenue {value} (cost unknown)',
+        unmatched: 'Unmatched cost',
+        unmatchedHint: 'Upstreams with cost but no route pointing to them'
+      },
+      insights: {
+        title: 'Needs attention',
+        severity: {
+          critical: 'Critical',
+          warning: 'Warning',
+          info: 'Info'
+        },
+        negativeMargin: 'Upstream {subject} is losing money: cost exceeds revenue by {value}.',
+        unmatchedCost: 'Upstream {subject} has cost {value} but no route points to it. The route address may use a different domain than the registered site, or the key is used outside this site.',
+        unregistered: '{value} of revenue comes from the unregistered upstream {subject}; its cost is not counted. Register it to see the margin.',
+        lowRunway: 'The balance of {subject} lasts about {days}; top up {topUp}.',
+        costSpike: 'Yesterday, cost on upstream {subject} was {ratio} of revenue, well above the 7-day median of {baseline}. The upstream may have raised prices, or the key is used outside this site.',
+        noRate: '{subject} has no recharge rate, so its cost counts as 0.',
+        costFailed: 'Cost for {subject} failed to load on {count} day; that day is not counted. | Cost for {subject} failed to load on {count} days; those days are not counted.',
+        priceIncrease: '{subject} raised its multiplier by {change}; based on the last 7 days this costs about {value} more per day.',
+        priceIncreaseUnknown: '{subject} raised its multiplier by {change}; the cost impact cannot be estimated yet.'
+      },
+      trend: {
+        title: 'Daily revenue, cost and profit',
+        subtitle: 'Lines: revenue and upstream cost; bars: gross profit (may be negative)',
+        revenue: 'Revenue',
+        cost: 'Upstream cost',
+        profit: 'Gross profit',
+        margin: 'Margin',
+        day: 'Date',
+        noData: 'Not collected',
+        aria: 'Daily revenue, upstream cost and gross profit for {range}'
+      },
+      upstreams: {
+        title: 'By upstream',
+        subtitle: 'Sites and routes under the same domain form one upstream (api.example.com and example.com count as one); click a row for its sites and routes',
+        upstream: 'Upstream',
+        revenue: 'Revenue',
+        cost: 'Cost',
+        profit: 'Profit',
+        margin: 'Margin',
+        balance: 'Balance',
+        runway: 'Runway',
+        topUp: 'Suggested top-up',
+        topUpHint: 'What is missing to cover 7 days at the 7-day average daily cost',
+        routes: '{count} route | {count} routes',
+        noRoutes: 'No routes',
+        noRoutesHint: 'No route points to this upstream; its cost counts as unmatched.',
+        runwayDays: '{days} days',
+        runwayLong: 'Long',
+        sites: 'Upstream sites',
+        site: 'Site',
+        rechargeRate: 'Recharge rate',
+        rangeCost: 'Cost in range',
+        avgDailyCost: '7-day avg daily cost',
+        deleted: 'Deleted',
+        noRate: 'No recharge rate',
+        failedDays: '{count} day failed | {count} days failed',
+        routeList: 'Routes',
+        route: 'Route',
+        groups: 'Groups',
+        routeRevenue: 'Revenue in range',
+        routeDisabled: 'Disabled',
+        routeError: 'Error',
+        routeDeleted: 'Deleted',
+        empty: 'No upstream sites are registered, or this range has no cost or revenue.'
+      },
+      groups: {
+        title: 'By group',
+        subtitle: 'Group cost is allocated by the group’s share of revenue on each upstream; profit and margin only cover attributed revenue',
+        group: 'Group',
+        revenue: 'Revenue',
+        cost: 'Allocated cost',
+        profit: 'Profit',
+        margin: 'Margin',
+        unattributed: 'Unattributed',
+        none: '(no group)',
+        empty: 'No revenue in this range.'
+      },
+      unattributed: {
+        title: 'Unattributed revenue',
+        subtitle: 'This revenue has no matching registered upstream; its cost is unknown and it is excluded from margins',
+        category: 'Category',
+        address: 'Upstream address',
+        routes: 'Routes',
+        revenue: 'Revenue',
+        categories: {
+          official: 'Official account / no address',
+          unregistered: 'Unregistered upstream',
+          unknown: 'Unknown route'
+        },
+        unknownRoute: 'Deleted or unrecorded route',
+        empty: 'All revenue in this range is attributed.'
+      },
+      priceChanges: {
+        title: 'Upstream price changes',
+        subtitle: 'Group multiplier changes detected while syncing upstream sites (last 30 days), with the daily cost impact estimated from the group’s last 7 days of usage. Notice only, nothing is repriced.',
+        detectedAt: 'Detected',
+        site: 'Upstream site',
+        group: 'Group',
+        multiplier: 'Multiplier',
+        avgDailyCost: '7-day avg daily cost',
+        impact: 'Daily cost impact',
+        noUsage: 'Unused in 7 days',
+        noRate: 'No recharge rate',
+        failed: 'Cannot estimate',
+        empty: 'No upstream group multiplier changes in the last 30 days.'
+      },
+      footnote: 'Revenue is your users’ usage (site credits) converted to CNY at your site price; cost is the usage on registered upstream sites × recharge rate. Route addresses and upstream sites are matched by domain, and group cost is allocated by revenue share. Data covers complete days (Beijing time) and is collected every hour at :10; runway and suggested top-up use the 7-day average daily cost.',
+      warnings: {
+        costFailed: 'Some upstream sites failed to report cost, so cost on those days may be understated; the last two days are retried automatically.',
+        flowFallback: 'The site’s data dashboard is off (or the version is older), so revenue is queried channel by channel and collection is slower.',
+        tooManyRoutes: 'There are more than 500 routes; only the first 500 are counted.'
+      },
+      errors: {
+        authRequired: 'The admin sign-in for your own site has expired. Sign in again on the dashboard.',
+        platformUnsupported: 'This site type is not supported (only sub2api and new-api).',
+        syncInProgress: 'A collection is already running. Try again later.',
+        routesFetch: 'Failed to read the site’s accounts / channels. Try again later.',
+        revenueFetch: 'Failed to read the site’s revenue statistics. Try again later.',
+        network: 'Network request failed. Check your connection and try again.',
+        interrupted: 'The last collection was interrupted by a service restart. It resumes in the background about 2 minutes after startup; no action needed.',
+        invalidRange: 'Invalid range: the start cannot be after the end, the end cannot be after yesterday, and the span cannot exceed 366 days.',
+        request: 'Failed to load profit data. Try again later.'
+      }
+    },
     settings: {
+      dailyReport: {
+        title: 'Daily business report',
+        help: 'Every day at the set time, send yesterday\'s revenue, cost, gross profit, credits, active users, and upstream balance to your bots. It uses local dashboard and User Analytics data and never contacts your sites.',
+        time: 'Send time (Beijing time)',
+        timeHelp: 'If the service starts after this time, the report is still sent once that day',
+        preview: 'Preview yesterday\'s report',
+        sendTest: 'Send a test now',
+        sent: 'Sent to {count} bots',
+        previewTitle: 'Report preview',
+        saveHint: 'The switch, time, and bots take effect after you select Save at the top; preview and test sending work without saving.',
+        errors: {
+          noBots: 'Select at least one bot to receive the report.',
+          request: 'Failed to generate or send the report. Please try again later.'
+        }
+      },
       title: 'System Settings',
       subtitle: 'Manage system parameters, notification channels, and automation strategies.',
       save: 'Save Settings',
@@ -1127,11 +1609,12 @@ export default {
           groupName: 'Default group',
           oldRate: '1.0000',
           newRate: '1.1200',
-          changeDirection: 'increased'
+          changeDirection: 'increased',
+          costImpact: 'about ¥4.00 more per day, based on a 7-day average of ¥20.00'
         }
       },
       balanceTemplateVars: '(Variables: {siteName}, {balance}, {threshold})',
-      multiplierTemplateVars: '(Variables: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection})',
+      multiplierTemplateVars: '(Variables: {siteName}, {groupName}, {oldRate}, {newRate}, {changeDirection}, {costImpact})',
       unnamedBot: 'Unnamed Bot',
       noBotsConfigured: 'Configure bots in "Channels & Alerts" first',
       mustSelectBot: 'At least one notification bot must be selected',
@@ -1142,6 +1625,7 @@ export default {
       varOldRate: 'Old rate',
       varNewRate: 'New rate',
       varChangeDirection: 'Change direction',
+      varCostImpact: 'Cost impact',
       botNameLabel: 'Bot Name',
       botNameDingtalkPlaceholder: 'e.g., DingTalk Main',
       botNameWecomPlaceholder: 'e.g., WeCom Main',
@@ -1267,7 +1751,7 @@ export default {
         },
         templates: {
           balanceDefaultTemplate: '🔴 **Balance warning**\n\n🏷️ **Site:** {siteName}\n💰 **Current balance:** CNY {balance}\n⚠️ **Warning threshold:** CNY {threshold}\n\nPlease review and recharge the upstream account to avoid service interruption.',
-          multiplierDefaultTemplate: '🟠 **Multiplier change warning**\n\n🏷️ **Site:** {siteName}\n📦 **Group:** {groupName}\n📊 **Rate:** {oldRate}x → **{newRate}x** ({changeDirection})\n\n🔎 Review the cost change and confirm whether downstream pricing needs adjustment.',
+          multiplierDefaultTemplate: '🟠 **Multiplier change warning**\n\n🏷️ **Site:** {siteName}\n📦 **Group:** {groupName}\n📊 **Rate:** {oldRate}x → **{newRate}x** ({changeDirection})\n💸 **Cost impact:** {costImpact}\n\n🔎 Review the cost change and confirm whether downstream pricing needs adjustment.',
           balanceTemplatePlaceholder: 'e.g., 🔴 {siteName} has CNY {balance} remaining, below CNY {threshold}.',
           multiplierTemplatePlaceholder: 'e.g., 🟠 {siteName} / {groupName}: {oldRate}x → {newRate}x.'
         }
@@ -1358,7 +1842,6 @@ export default {
     },
     system: {
       version: 'Version {version}',
-      openRelease: 'View release notes',
       openGithubRepository: 'View source on GitHub',
       errors: {
         network: 'System info request failed. Check your network connection.',

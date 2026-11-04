@@ -18,6 +18,7 @@ type Handler struct {
 func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	handler := &Handler{service: service}
 	mux.HandleFunc("GET /api/user-activity/summary", handler.summary)
+	mux.HandleFunc("GET /api/user-activity/sync", handler.syncStatus)
 	mux.HandleFunc("POST /api/user-activity/sync", handler.sync)
 	mux.HandleFunc("GET /api/user-activity/users", handler.listUsers)
 	mux.HandleFunc("GET /api/user-activity/users/{id}", handler.userDetail)
@@ -48,6 +49,20 @@ func (h *Handler) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusAccepted, status)
+}
+
+// syncStatus 只返回同步状态（页面顶部的后台同步提醒轮询使用）。
+func (h *Handler) syncStatus(w http.ResponseWriter, r *http.Request) {
+	ws, ok := h.workspace(w, r)
+	if !ok {
+		return
+	}
+	status, err := h.service.SyncStatusOf(r.Context(), ws)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, status)
 }
 
 func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {

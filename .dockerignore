@@ -12,3 +12,5 @@ backend/dist
 .env.*
 docs
 development-docs
+dist
+data

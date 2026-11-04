@@ -73,7 +73,7 @@ func (s *Service) TriggerSync(ctx context.Context, ws Workspace) (SyncStatus, er
 		s.release(ws)
 		return SyncStatus{}, requestError(ErrorPlatform)
 	}
-	state, err := s.markRunning(ctx, ws, session.Platform)
+	state, err := s.markRunning(ctx, ws, session.Platform, StartedByManual)
 	if err != nil {
 		s.release(ws)
 		return SyncStatus{}, err
@@ -89,8 +89,13 @@ func (s *Service) TriggerSync(ctx context.Context, ws Workspace) (SyncStatus, er
 	return s.syncStatus(state, true), nil
 }
 
-// SyncWorkspace 同步执行一次（定时任务使用）。
+// SyncWorkspace 同步执行一次例行同步（定时任务使用）。
 func (s *Service) SyncWorkspace(ctx context.Context, ws Workspace) error {
+	return s.SyncWorkspaceAs(ctx, ws, StartedBySchedule)
+}
+
+// SyncWorkspaceAs 同步执行一次，startedBy 记录这次同步是怎么开始的。还没同步过的工作区会话不可用时不创建状态。
+func (s *Service) SyncWorkspaceAs(ctx context.Context, ws Workspace, startedBy string) error {
 	if !s.acquire(ws) {
 		return requestError(ErrorSyncInProgress)
 	}
@@ -98,14 +103,14 @@ func (s *Service) SyncWorkspace(ctx context.Context, ws Workspace) error {
 	session, err := s.sessions.RequireSession(ctx, ws.UserID, ws.AdminAccountID)
 	if err != nil {
 		mapped := mapSessionError(err)
-		s.saveFailure(ws, mapped)
+		s.saveFailure(ws, mapped, startedBy)
 		return mapped
 	}
 	if !supportedPlatform(session.Platform) {
-		s.saveFailure(ws, requestError(ErrorPlatform))
+		s.saveFailure(ws, requestError(ErrorPlatform), startedBy)
 		return requestError(ErrorPlatform)
 	}
-	state, err := s.markRunning(ctx, ws, session.Platform)
+	state, err := s.markRunning(ctx, ws, session.Platform, startedBy)
 	if err != nil {
 		return err
 	}
@@ -133,7 +138,7 @@ func (s *Service) release(ws Workspace) {
 	delete(s.running, ws)
 }
 
-func (s *Service) markRunning(ctx context.Context, ws Workspace, platform upstream.Platform) (SyncState, error) {
+func (s *Service) markRunning(ctx context.Context, ws Workspace, platform upstream.Platform, startedBy string) (SyncState, error) {
 	state, _, err := s.store.GetSyncState(ctx, ws)
 	if err != nil {
 		return SyncState{}, err
@@ -143,13 +148,15 @@ func (s *Service) markRunning(ctx context.Context, ws Workspace, platform upstre
 	state.Status = SyncStatusRunning
 	state.ErrorKey = ""
 	state.LastStartedAt = &started
+	state.StartedBy = startedBy
 	if err := s.store.SaveSyncState(ctx, ws, state); err != nil {
 		return SyncState{}, err
 	}
 	return state, nil
 }
 
-func (s *Service) saveFailure(ws Workspace, err error) {
+// saveFailure 记录一次没能开始的同步（会话不可用、平台不支持）：也算一次尝试，记下尝试时间和方式，页面据此提醒。
+func (s *Service) saveFailure(ws Workspace, err error, startedBy string) {
 	ctx, cancel := context.WithTimeout(context.Background(), stateSaveTimeout)
 	defer cancel()
 	state, ok, getErr := s.store.GetSyncState(ctx, ws)
@@ -157,6 +164,9 @@ func (s *Service) saveFailure(ws Workspace, err error) {
 		// 从未同步过的工作区不因定时任务失败而创建状态。
 		return
 	}
+	attemptedAt := s.now()
+	state.LastStartedAt = &attemptedAt
+	state.StartedBy = startedBy
 	state.Status = SyncStatusFailed
 	state.ErrorKey = errorKeyOf(err)
 	if saveErr := s.store.SaveSyncState(ctx, ws, state); saveErr != nil {
@@ -745,7 +755,8 @@ func errorKeyOf(err error) string {
 	return ErrorRequest
 }
 
-// StartScheduler 启动定时同步：每小时同步一次已经开始使用该功能（同步过至少一次）的工作区。
+// StartScheduler 启动后台同步：重启前未完成的同步标记为被打断；服务启动 syncStartDelay 后在后台继续这些同步，
+// 并为新工作区开始首次同步；此后每小时（hh:00:30）同步所有同步过的工作区。
 func (s *Service) StartScheduler(ctx context.Context) {
 	if err := s.store.ResetRunningSyncs(ctx, ErrorInterrupted); err != nil {
 		log.Printf("[user-activity] reset interrupted syncs failed err=%v", err)
@@ -753,13 +764,15 @@ func (s *Service) StartScheduler(ctx context.Context) {
 	go func() {
 		timer := time.NewTimer(syncStartDelay)
 		defer timer.Stop()
+		startup := true
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-timer.C:
 			}
-			s.syncDueWorkspaces(ctx)
+			s.syncDueWorkspaces(ctx, startup)
+			startup = false
 			timer.Reset(s.untilNextSlot(s.now()))
 		}
 	}()
@@ -777,13 +790,17 @@ func (s *Service) untilNextSlot(now time.Time) time.Duration {
 	return wait
 }
 
-func (s *Service) syncDueWorkspaces(ctx context.Context) {
+// syncDueWorkspaces 是一轮后台同步：被重启打断的同步马上继续（resume）；其余同步过的工作区例行同步（schedule，
+// 服务刚启动的那一轮跳过，留给整点）；保存了管理员会话、还没同步过的工作区自动开始首次同步（auto）。
+func (s *Service) syncDueWorkspaces(ctx context.Context, startup bool) {
 	workspaces, err := s.store.ListSyncedWorkspaces(ctx)
 	if err != nil {
 		log.Printf("[user-activity] list workspaces failed err=%v", err)
 		return
 	}
+	known := make(map[Workspace]bool, len(workspaces))
 	for _, ws := range workspaces {
+		known[ws] = true
 		if ctx.Err() != nil {
 			return
 		}
@@ -791,14 +808,43 @@ func (s *Service) syncDueWorkspaces(ctx context.Context) {
 		if err != nil || !ok {
 			continue
 		}
-		// 刚手动同步过的工作区跳过本轮；但每天的第一次同步不跳过，保证日界附近的入账归到正确的日期。
-		if state.LastStartedAt != nil && s.now().Sub(*state.LastStartedAt) < minScheduledGap && s.dayOf(*state.LastStartedAt).Equal(s.dayOf(s.now())) {
+		startedBy := StartedBySchedule
+		if state.Status == SyncStatusFailed && state.ErrorKey == ErrorInterrupted {
+			startedBy = StartedByResume
+		} else if startup {
+			continue
+		} else if state.LastStartedAt != nil && s.now().Sub(*state.LastStartedAt) < minScheduledGap && s.dayOf(*state.LastStartedAt).Equal(s.dayOf(s.now())) {
+			// 刚手动同步过的工作区跳过本轮；但每天的第一次同步不跳过，保证日界附近的入账归到正确的日期。
 			continue
 		}
-		runCtx, cancel := context.WithTimeout(ctx, syncTimeout)
-		if err := s.SyncWorkspace(runCtx, ws); err != nil && !errors.Is(err, requestError(ErrorSyncInProgress)) {
-			log.Printf("[user-activity] scheduled sync failed user_id=%s admin_account_id=%s err=%v", ws.UserID, ws.AdminAccountID, err)
-		}
-		cancel()
+		s.runScheduled(ctx, ws, startedBy)
 	}
+	if s.workspaces == nil {
+		return
+	}
+	candidates, err := s.workspaces.SessionWorkspaces(ctx)
+	if err != nil {
+		log.Printf("[user-activity] list session workspaces failed err=%v", err)
+		return
+	}
+	for _, ws := range candidates {
+		if known[ws] || ctx.Err() != nil {
+			continue
+		}
+		s.runScheduled(ctx, ws, StartedByAuto)
+	}
+}
+
+func (s *Service) runScheduled(ctx context.Context, ws Workspace, startedBy string) {
+	runCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+	err := s.SyncWorkspaceAs(runCtx, ws, startedBy)
+	if err == nil || errors.Is(err, requestError(ErrorSyncInProgress)) {
+		return
+	}
+	// 还没同步过的工作区会话失效或平台不支持时不记日志（每小时都会再试），避免刷屏。
+	if startedBy == StartedByAuto && (errors.Is(err, requestError(ErrorAuthRequired)) || errors.Is(err, requestError(ErrorPlatform))) {
+		return
+	}
+	log.Printf("[user-activity] background sync failed user_id=%s admin_account_id=%s started_by=%s err=%v", ws.UserID, ws.AdminAccountID, startedBy, err)
 }

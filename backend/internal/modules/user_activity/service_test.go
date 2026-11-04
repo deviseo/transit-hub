@@ -732,3 +732,74 @@ func TestDayOfUsesBusinessTimezone(t *testing.T) {
 		t.Fatalf("dayOf = %s", got)
 	}
 }
+
+type sessionWorkspaceList []Workspace
+
+func (l sessionWorkspaceList) SessionWorkspaces(ctx context.Context) ([]Workspace, error) {
+	return l, nil
+}
+
+// expiringSessions：expired 里的工作区管理员会话已失效，其余正常。
+type expiringSessions struct {
+	session upstream.Session
+	expired map[string]bool
+}
+
+func (e expiringSessions) RequireSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, error) {
+	if e.expired[adminAccountID] {
+		return upstream.Session{}, errors.New("admin.mySites.errors.authRequired")
+	}
+	return e.session, nil
+}
+
+func TestBackgroundSyncResumesInterruptedAndStartsNewWorkspaces(t *testing.T) {
+	store := newFakeStore()
+	from, to := day("2026-10-01"), day("2026-11-01")
+	interruptedAt := testNow.Add(-10 * time.Minute)
+	store.states[testWorkspace] = SyncState{Platform: "sub2api", Status: SyncStatusFailed, ErrorKey: ErrorInterrupted, LastStartedAt: &interruptedAt, SyncedFrom: &from, SyncedTo: &to}
+	routine := Workspace{UserID: "user-1", AdminAccountID: "account-routine"}
+	routineAt := testNow.Add(-3 * time.Hour)
+	store.states[routine] = SyncState{Platform: "sub2api", Status: SyncStatusSuccess, LastStartedAt: &routineAt, SyncedFrom: &from, SyncedTo: &to}
+	stale := Workspace{UserID: "user-1", AdminAccountID: "account-stale"}
+	store.states[stale] = SyncState{Platform: "sub2api", Status: SyncStatusFailed, ErrorKey: ErrorInterrupted, StartedBy: StartedByManual, LastStartedAt: &interruptedAt, SyncedFrom: &from, SyncedTo: &to}
+	fresh := Workspace{UserID: "user-1", AdminAccountID: "account-fresh"}
+	expired := Workspace{UserID: "user-1", AdminAccountID: "account-expired"}
+	platform := &fakePlatform{sub2apiUsers: sub2apiUsers(3), trend: func(date string) ([]upstream.Sub2APIUserUsageTrendPoint, error) { return nil, nil }}
+	sessions := expiringSessions{session: upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: "https://site.example.test", AccessToken: "token"}, expired: map[string]bool{expired.AdminAccountID: true, stale.AdminAccountID: true}}
+	service := newService(store, sessions, platform, fakeAccounts{})
+	service.now = func() time.Time { return testNow }
+	service.pause = 0
+	service.SetWorkspaceLister(sessionWorkspaceList{testWorkspace, fresh, expired})
+
+	// 服务刚启动：被打断的同步马上继续（即使不到 45 分钟），新工作区开始首次同步；例行同步留给整点。
+	service.syncDueWorkspaces(context.Background(), true)
+	if state := store.states[testWorkspace]; state.Status != SyncStatusSuccess || state.StartedBy != StartedByResume {
+		t.Fatalf("interrupted syncs resume in the background: %+v", state)
+	}
+	if state, ok := store.states[fresh]; !ok || state.Status != SyncStatusSuccess || state.StartedBy != StartedByAuto {
+		t.Fatalf("workspaces with a saved session start their first sync automatically: %+v %v", state, ok)
+	}
+	if _, ok := store.states[expired]; ok {
+		t.Fatal("a workspace whose session expired must not get a failed state before its first sync")
+	}
+	if state := store.states[routine]; !state.LastStartedAt.Equal(routineAt) || state.StartedBy != "" {
+		t.Fatalf("routine syncs wait for the hourly slot after a restart: %+v", state)
+	}
+	// 会话失效、没能继续的同步也记下这次尝试（时间、方式、原因），页面据此提醒。
+	if state := store.states[stale]; state.Status != SyncStatusFailed || state.ErrorKey != ErrorAuthRequired || state.StartedBy != StartedByResume || !state.LastStartedAt.Equal(testNow) {
+		t.Fatalf("a resume that cannot start records the attempt: %+v", state)
+	}
+
+	// 整点：例行同步；刚同步过的工作区按原规则跳过。
+	service.syncDueWorkspaces(context.Background(), false)
+	if state := store.states[routine]; state.StartedBy != StartedBySchedule || !state.LastStartedAt.Equal(testNow) {
+		t.Fatalf("hourly runs are routine: %+v", state)
+	}
+	if state := store.states[testWorkspace]; state.StartedBy != StartedByResume {
+		t.Fatalf("a workspace synced minutes ago is skipped this hour: %+v", state)
+	}
+	status, err := service.SyncStatusOf(context.Background(), fresh)
+	if err != nil || status.StartedBy != StartedByAuto || status.Status != SyncStatusSuccess {
+		t.Fatalf("sync status reports how the last run started: %+v %v", status, err)
+	}
+}

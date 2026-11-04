@@ -39,6 +39,21 @@ export type StrategySettings = {
   multiplierNotifyBotIds: string[]
   multiplierTemplate: string
   multiplierTemplateFormat?: NotificationTemplateFormat
+  // 经营日报：每天在 dailyReportTime（北京时间 HH:MM）把昨天的数据发给 dailyReportBotIds。
+  enableDailyReport?: boolean
+  dailyReportTime?: string
+  dailyReportBotIds?: string[]
+}
+
+export type DailyReport = {
+  date: string
+  workspace: string
+  text: string
+}
+
+export type SendDailyReportTestResponse = {
+  report: DailyReport
+  sent: number
 }
 
 export type DingtalkChannelSettings = {

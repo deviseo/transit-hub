@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,6 +42,50 @@ func (s *PlatformService) FetchSelfConsumeOnDate(session Session, date string, t
 		values.Set("start_date", day.Format("2006-01-02"))
 		values.Set("end_date", day.Format("2006-01-02"))
 		values.Set("timezone", loc.String())
+		response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/usage/stats?"+values.Encode(), requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
+		if err != nil {
+			return 0, err
+		}
+		return sub2APIUsageStatsCost(dataRecord(response.Payload)), nil
+	default:
+		return 0, newRequestError(ErrorNotFound, session.Platform)
+	}
+}
+
+// FetchSelfGroupConsume 读取当前登录账号在上游站点某个分组上 [startDate, endDate]（YYYY-MM-DD，按 timezone 切分自然日）
+// 的消费合计（美元口径），用于估算分组调价对成本的影响。只读：
+//   - sub2api：/api/v1/usage/stats?group_id=（需要数字分组 ID）；
+//   - new-api：/api/log/self/stat?type=2&group=（按分组名过滤该账号的消费日志）。
+func (s *PlatformService) FetchSelfGroupConsume(session Session, group GroupInfo, startDate string, endDate string, timezone string) (float64, error) {
+	if !session.IsAuthenticated() {
+		return 0, newRequestError(ErrorAuth, session.Platform)
+	}
+	loc, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil {
+		return 0, newRequestError(ErrorRequest, session.Platform)
+	}
+	start, errStart := time.ParseInLocation("2006-01-02", strings.TrimSpace(startDate), loc)
+	end, errEnd := time.ParseInLocation("2006-01-02", strings.TrimSpace(endDate), loc)
+	if errStart != nil || errEnd != nil || end.Before(start) {
+		return 0, newRequestError(ErrorRequest, session.Platform)
+	}
+	switch session.Platform {
+	case PlatformNewAPI:
+		name := strings.TrimSpace(group.Name)
+		if name == "" || name == defaultDisplay {
+			return 0, newRequestError(ErrorRequest, session.Platform)
+		}
+		return s.fetchNewAPIConsumeUSD(session, newAPISelfLogStatPath, start.Unix(), end.AddDate(0, 0, 1).Unix()-1, url.Values{"group": []string{name}})
+	case PlatformSub2API:
+		groupID, err := strconv.ParseInt(strings.TrimSpace(group.ID), 10, 64)
+		if err != nil || groupID <= 0 {
+			return 0, newRequestError(ErrorRequest, session.Platform)
+		}
+		values := url.Values{}
+		values.Set("start_date", start.Format("2006-01-02"))
+		values.Set("end_date", end.Format("2006-01-02"))
+		values.Set("timezone", loc.String())
+		values.Set("group_id", strconv.FormatInt(groupID, 10))
 		response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/usage/stats?"+values.Encode(), requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
 		if err != nil {
 			return 0, err

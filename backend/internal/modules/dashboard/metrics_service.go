@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/shared/bizclock"
 )
 
 // UpstreamLister 抽象上游站点读取，由 upstream.Service 实现。
@@ -46,8 +47,8 @@ type metricsStore interface {
 }
 
 const (
-	// dashboardTimezone 是仪表盘「今天 / 昨天」的时区（与上游 sub2api 默认时区一致）。
-	dashboardTimezone = "Asia/Shanghai"
+	// dashboardTimezone 是仪表盘「今天 / 昨天」的时区，即统一的业务时区（见 bizclock）。
+	dashboardTimezone = bizclock.Name
 	// staleRefreshWait 是打开仪表盘时等待补同步的最长时间，超时的站点先不计入，同步在后台继续。
 	staleRefreshWait = 8 * time.Second
 	// finalizeInterval 是定稿任务的检查间隔：零点后尽快定稿昨天；遇到站点暂时查询失败时下一轮重试。
@@ -158,9 +159,9 @@ func (s *MetricsService) LiveMetrics(ctx context.Context, userID string) (Metric
 
 	// 并行获取四项独立数据：今日盈利、站点余额、分组数量、上游指标。
 	// 各 goroutine 出错只记日志、降级为零值，不阻塞整体返回。
-	now := s.now()
-	today := now.Format("2006-01-02")
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	now := s.now().In(dashboardLocation())
+	today := now.Format(bizclock.DateLayout)
+	todayStart := bizclock.StartOfDay(now)
 	price := s.siteUnitPrice(ctx, userID, adminAccountID)
 	var (
 		todayProfit float64
@@ -373,11 +374,7 @@ func (s *MetricsService) StartScheduler(ctx context.Context) {
 }
 
 func dashboardLocation() *time.Location {
-	loc, err := time.LoadLocation(dashboardTimezone)
-	if err != nil {
-		return time.FixedZone("CST", 8*3600)
-	}
-	return loc
+	return bizclock.Location()
 }
 
 // finalizeRecent 为所有持有 admin 会话的工作区定稿最近的快照：昨天（还没有快照时新建）以及最近几天里
@@ -466,7 +463,7 @@ func (s *MetricsService) finalizeDay(ctx context.Context, userID string, adminAc
 	revenue *= price
 
 	// 零点后不久定稿昨天时，此刻的余额就是昨天结束时的余额；更晚定稿则保留快照里已有的余额（新建快照时才用当前值）。
-	keepBalances := !(day.Equal(today.AddDate(0, 0, -1)) && now.Sub(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())) < endOfDayWindow)
+	keepBalances := !(day.Equal(today.AddDate(0, 0, -1)) && now.Sub(bizclock.StartOfDay(now)) < endOfDayWindow)
 	var siteBalance float64
 	filterCfg, _ := s.metricsRepo.GetBalanceFilter(ctx, userID, adminAccountID)
 	if result, err := s.platform.FetchAdminSiteBalanceFiltered(session, upstream.BalanceFilter{
@@ -625,7 +622,7 @@ func (s *MetricsService) GroupUsageToday(ctx context.Context, userID string) (Gr
 	}
 
 	return GroupUsageTodayResponse{
-		Date:   time.Now().Format("2006-01-02"),
+		Date:   bizclock.DateOf(s.now()),
 		Total:  total,
 		Groups: items,
 	}, nil
@@ -671,7 +668,7 @@ func (s *MetricsService) UpstreamKeyUsageToday(ctx context.Context, userID strin
 	}
 
 	return UpstreamKeyUsageTodayResponse{
-		Date:        time.Now().Format("2006-01-02"),
+		Date:        bizclock.DateOf(s.now()),
 		Total:       total,
 		Keys:        responseItems,
 		FailedSites: failedSites,

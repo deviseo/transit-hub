@@ -77,3 +77,26 @@ func (r *Repository) Save(ctx context.Context, state State) error {
 	`, state.UserID, state.AdminAccountID, state.BaseURL, state.Email, string(sessionJSON))
 	return err
 }
+
+// ListSessionWorkspaces 返回保存了管理员会话、且工作区仍然存在的工作区（不校验会话是否仍然有效）。
+func (r *Repository) ListSessionWorkspaces(ctx context.Context) ([]SessionWorkspace, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT s.user_id, s.admin_account_id FROM my_site_states s
+		JOIN admin_accounts a ON a.user_id = s.user_id AND a.id = s.admin_account_id
+		WHERE s.admin_account_id <> ''
+		ORDER BY s.user_id, s.admin_account_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	workspaces := make([]SessionWorkspace, 0)
+	for rows.Next() {
+		var ws SessionWorkspace
+		if err := rows.Scan(&ws.UserID, &ws.AdminAccountID); err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, ws)
+	}
+	return workspaces, rows.Err()
+}

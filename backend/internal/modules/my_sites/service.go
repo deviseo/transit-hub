@@ -85,3 +85,22 @@ func (s *Service) StoredSession(ctx context.Context, userID string, adminAccount
 	}
 	return state.Session, true, nil
 }
+
+// SessionWorkspace 是保存了自己站点管理员会话的工作区。
+type SessionWorkspace struct {
+	UserID         string
+	AdminAccountID string
+}
+
+type sessionWorkspaceLister interface {
+	ListSessionWorkspaces(ctx context.Context) ([]SessionWorkspace, error)
+}
+
+// ListSessionWorkspaces 返回保存了管理员会话的工作区，供后台任务自动开始首次采集；不访问站点。
+func (s *Service) ListSessionWorkspaces(ctx context.Context) ([]SessionWorkspace, error) {
+	lister, ok := s.repository.(sessionWorkspaceLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListSessionWorkspaces(ctx)
+}

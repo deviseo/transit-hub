@@ -10,7 +10,8 @@ const (
 	defaultPort       = "10621"
 	defaultRedisURL   = "redis://127.0.0.1:6379/0"
 	defaultPublicDir  = "/app/public"
-	defaultAppVersion = "v0.1.15"
+	defaultDataDir    = "/app/data"
+	defaultAppVersion = "v1.0.0"
 )
 
 type Config struct {
@@ -20,6 +21,9 @@ type Config struct {
 	RedisURL    string
 	CORSOrigins []string
 	PublicDir   string // 前端静态文件目录，生产默认 /app/public
+	// 应用自己的数据目录，生产默认 /app/data：在线更新下载的新版本放在这里，需要挂载成持久卷，
+	// 否则重建容器后会回到镜像自带的版本。
+	DataDir string
 
 	// 初始化管理员
 	AdminEmail    string
@@ -28,8 +32,8 @@ type Config struct {
 	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
 	AllowPublicRegister bool
 
-	// 版本展示：开源版仅用于系统信息 API 和前端纯展示，不依赖任何远程授权/更新服务。
-	// 发布版本号由代码内置，不能由部署环境变量覆盖，避免部署用户随意修改后台展示版本。
+	// 版本号由代码内置，不能由部署环境变量覆盖，避免部署用户随意修改后台展示版本。
+	// 检查更新和在线更新时用它和 GitHub 上最新的正式版比较（不涉及任何授权服务）。
 	AppVersion string
 
 	// SMTP 密码加密密钥：base64 编码的 32 字节 AES-256-GCM key，由 settings 模块解析和校验。
@@ -51,6 +55,7 @@ func Load() Config {
 		RedisURL:    envOrDefault("REDIS_URL", defaultRedisURL),
 		CORSOrigins: splitOrigins(os.Getenv("CORS_ORIGINS")),
 		PublicDir:   envOrDefault("PUBLIC_DIR", defaultPublicDir),
+		DataDir:     envOrDefault("DATA_DIR", defaultDataDir),
 
 		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),

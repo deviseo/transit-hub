@@ -12,6 +12,7 @@ import SuppressionListDialog from '../components/user-activity/SuppressionListDi
 import UserActivityDetailDrawer from '../components/user-activity/UserActivityDetailDrawer.vue'
 import { getUserActivitySummary, listUserActivityUsers, triggerUserActivitySync } from '../api/userActivity'
 import { useUserActivityFormat } from '../composables/useUserActivityFormat'
+import { notifyCollectionStarted } from '../composables/useCollectionWatcher'
 import type { MassEmailBatch } from '../types/massEmail'
 import type {
   UserActivityFilter,
@@ -155,6 +156,8 @@ const filterSummary = computed(() => {
 
 const errorText = (key: string): string => (te(key) ? t(key) : t('admin.userActivity.errors.request'))
 const isAuthError = computed(() => errorKey.value === 'admin.userActivity.errors.authRequired' || sync.value?.errorKey === 'admin.userActivity.errors.authRequired')
+// 被服务重启打断的同步会在后台自动继续，不当作失败展示。
+const isInterrupted = computed(() => sync.value?.status === 'failed' && sync.value.errorKey === 'admin.userActivity.errors.interrupted')
 
 const syncDescription = computed(() => {
   const state = sync.value
@@ -229,6 +232,7 @@ const startSync = async () => {
     if (summary.value) summary.value = { ...summary.value, sync: status }
     else await loadSummary()
     syncPolling()
+    notifyCollectionStarted()
   } catch (error) {
     errorKey.value = error instanceof Error ? error.message : 'admin.userActivity.errors.request'
   } finally {
@@ -360,6 +364,10 @@ onBeforeUnmount(stopPolling)
         {{ errorText(errorKey) }}
         <RouterLink v-if="isAuthError" to="/admin" class="ml-1 font-medium underline underline-offset-2">{{ t('admin.userActivity.actions.goDashboard') }}</RouterLink>
       </span>
+    </div>
+    <div v-else-if="isInterrupted" class="flex items-start gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-foreground" role="status">
+      <Info class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+      <span>{{ t('admin.userActivity.errors.interrupted') }}</span>
     </div>
     <div v-else-if="sync?.status === 'failed' && sync.errorKey" class="flex items-start gap-3 rounded-lg border border-warning/20 bg-warning/10 p-3 text-sm text-warning" role="alert">
       <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />

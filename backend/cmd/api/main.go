@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,10 +15,13 @@ import (
 	"transithub/backend/internal/database"
 	"transithub/backend/internal/database/migrations"
 	"transithub/backend/internal/httpserver"
+	"transithub/backend/internal/selfupdate"
 )
 
 func main() {
 	cfg := config.Load()
+	// 在线更新：装了比自己新的版本就切换过去（成功时不会返回）；上次切换后没启动成功的版本不再使用。
+	selfupdate.Launch(cfg.DataDir, cfg.AppVersion)
 	ctx := context.Background()
 
 	db, err := database.Connect(ctx, cfg.DatabaseURL)
@@ -45,10 +49,17 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	listener, err := net.Listen("tcp", httpServer.Addr)
+	if err != nil {
+		log.Fatalf("listen: %v", err)
+	}
+	// 迁移已完成、端口已监听：如果这是刚在线更新上来的版本，确认启动成功。
+	selfupdate.MarkActive(cfg.DataDir, cfg.AppVersion)
+
 	go func() {
 		log.Printf("backend listening on :%s", cfg.Port)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen: %v", err)
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("serve: %v", err)
 		}
 	}()
 

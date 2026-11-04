@@ -86,6 +86,7 @@ The project is built as a Go backend with a Vue 3 admin frontend, backed by Post
 - **Group multiplier tracking** - A read-only list of upstream group multipliers with search, filters, changes, and history.
 - **User activity analytics** - Sync your own sub2api/new-api users and daily usage to find inactive or declining users, compare periods, and track top-ups, spend, and user balances.
 - **Mass email** - Email selected users or an activity segment, with an unsubscribe link and a per-workspace suppression list.
+- **TransitLink client** - Publish a site link for the TransitLink desktop client with your branding, recommended groups and models, notice, and support contacts. Users open the link to connect and set up Claude Code and Codex in one click.
 - **Notification channels** - Configure DingTalk, Feishu, and Telegram bots for balance warnings and multiplier changes.
 - **System settings** - Manage refresh intervals, notification strategy, and runtime display settings.
 
@@ -110,7 +111,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
-# - image tag (defaults to deviseo/transithub:v0.1.15)
+# - image tag (defaults to deviseo/transithub:v1.0.0)
 # - replace every change-this-* placeholder
 # - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -135,6 +136,7 @@ Persistent data is stored under the repository root `data/` directory by default
 ```text
 data/postgres
 data/redis
+data/app        # versions installed by online updates
 ```
 
 `SMTP_ENCRYPTION_KEY` is an optional environment variable, only required if you want to save an SMTP password or send test emails from **System Settings > Email Settings**. Its absence does not prevent the application from starting and does not affect any non-SMTP feature. Generate a value with:
@@ -144,6 +146,27 @@ openssl rand -base64 32
 ```
 
 This must be a base64-encoded 32-byte value, and it must be kept stable long-term once set. Rotating the key makes any previously saved SMTP password ciphertext undecryptable, requiring the password to be re-entered and saved.
+
+### Updating
+
+Click the version number in the admin console's top bar to check for updates.
+
+**Online update (system admin only).** When a newer release is available, open the dialog and choose **Update to vX.Y.Z**. The server downloads the package for its CPU from this repository's GitHub Releases, checks its SHA-256 against the release's `checksums.txt`, installs it under `/app/data/updates/`, and restarts itself into the new version. The page reloads by itself once the new version is up. If the new version fails on its first start, the server goes back to the version it was running before.
+
+- Keep the `../data/app:/app/data` volume from `deploy/docker-compose.prod.yml`. Without it an online update still works, but recreating the container brings back the version inside the image. Deployments created before v1.0.0 should add this `volumes` entry to the `app` service.
+- Online updates need Linux on amd64 or arm64. Downloads go through the outbound proxy from **System Settings** when one is enabled.
+- A newer image always takes precedence: if you pull an image that is newer than the online-installed version, the image's version runs.
+
+**Docker.** Change the image tag in `deploy/docker-compose.prod.yml` (skip this if you use `latest`), then run:
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml pull
+docker compose -f deploy/docker-compose.prod.yml up -d
+```
+
+### TransitLink Client Config
+
+The **Client** page publishes a read-only config at `/api/client/v1/sites/<code>` for the TransitLink desktop client. Your users' computers must be able to reach it, so expose `/api/client/` publicly (for example through your reverse proxy); the admin console and the other `/api/` paths can stay private. Set **Public TransitHub address** on that page to the public URL, then share the generated `transitlink://connect?config=...` link with your users.
 
 ### Development Services
 
@@ -160,8 +183,18 @@ This starts PostgreSQL and Redis on local ports `5432` and `6379`.
 Because the Dockerfile is stored in `deploy/` but expects the repository root as build context, build with:
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.15 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.0 .
 ```
+
+### Release Packages
+
+Online updates install the packages attached to a GitHub Release. Build them with:
+
+```bash
+scripts/build-release.sh v1.0.0
+```
+
+This writes `transithub_v1.0.0_linux_amd64.tar.gz`, `transithub_v1.0.0_linux_arm64.tar.gz` and `checksums.txt` to `dist/release/v1.0.0/`; upload all three to the release. The version must match `defaultAppVersion` in `backend/internal/config/config.go`, because the server uses it to confirm that the new version started.
 
 ## Local Development
 

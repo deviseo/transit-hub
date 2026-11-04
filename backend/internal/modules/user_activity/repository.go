@@ -259,11 +259,11 @@ func (r *Repository) GetSyncState(ctx context.Context, ws Workspace) (SyncState,
 	var state SyncState
 	err := r.db.QueryRow(ctx, `
 		SELECT platform, status, error_key, synced_from, synced_to, user_count, last_started_at, last_synced_at,
-			recharge_synced_from, recharge_synced_to, recharge_since, warning_key
+			recharge_synced_from, recharge_synced_to, recharge_since, warning_key, started_by
 		FROM user_activity_sync_states WHERE user_id = $1 AND admin_account_id = $2
 	`, ws.UserID, ws.AdminAccountID).Scan(&state.Platform, &state.Status, &state.ErrorKey, &state.SyncedFrom, &state.SyncedTo,
 		&state.UserCount, &state.LastStartedAt, &state.LastSyncedAt, &state.RechargeSyncedFrom, &state.RechargeSyncedTo,
-		&state.RechargeSince, &state.WarningKey)
+		&state.RechargeSince, &state.WarningKey, &state.StartedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SyncState{}, false, nil
 	}
@@ -278,22 +278,23 @@ func (r *Repository) SaveSyncState(ctx context.Context, ws Workspace, state Sync
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO user_activity_sync_states (
 			user_id, admin_account_id, platform, status, error_key, synced_from, synced_to, user_count, last_started_at, last_synced_at,
-			recharge_synced_from, recharge_synced_to, recharge_since, warning_key
+			recharge_synced_from, recharge_synced_to, recharge_since, warning_key, started_by
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
 			platform = EXCLUDED.platform, status = EXCLUDED.status, error_key = EXCLUDED.error_key,
 			synced_from = EXCLUDED.synced_from, synced_to = EXCLUDED.synced_to, user_count = EXCLUDED.user_count,
 			last_started_at = EXCLUDED.last_started_at, last_synced_at = EXCLUDED.last_synced_at,
 			recharge_synced_from = EXCLUDED.recharge_synced_from, recharge_synced_to = EXCLUDED.recharge_synced_to,
-			recharge_since = EXCLUDED.recharge_since, warning_key = EXCLUDED.warning_key
+			recharge_since = EXCLUDED.recharge_since, warning_key = EXCLUDED.warning_key, started_by = EXCLUDED.started_by
 	`, ws.UserID, ws.AdminAccountID, state.Platform, state.Status, state.ErrorKey, state.SyncedFrom, state.SyncedTo,
 		state.UserCount, state.LastStartedAt, state.LastSyncedAt, state.RechargeSyncedFrom, state.RechargeSyncedTo,
-		state.RechargeSince, state.WarningKey)
+		state.RechargeSince, state.WarningKey, state.StartedBy)
 	return err
 }
 
-// ResetRunningSyncs 把进程重启前未完成的同步标记为失败（单实例部署：启动时不会有其它进程在同步）。
+// ResetRunningSyncs 把进程重启前未完成的同步标记为被打断（单实例部署：启动时不会有其它进程在同步）；
+// 定时任务启动后会在后台继续。
 func (r *Repository) ResetRunningSyncs(ctx context.Context, errorKey string) error {
 	_, err := r.db.Exec(ctx, `UPDATE user_activity_sync_states SET status = $1, error_key = $2 WHERE status = $3`,
 		SyncStatusFailed, errorKey, SyncStatusRunning)

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound, BadgeDollarSign, TrendingUp, Loader2, MonitorSmartphone } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
+import { COLLECTION_PAGES, useCollectionWatcher } from '../composables/useCollectionWatcher'
+import NoticeStack from '../components/collections/NoticeStack.vue'
 import { clearAccessToken } from '@/modules/auth/api/auth'
-import { getSystemVersion } from '../api/system'
-import type { SystemVersionResponse } from '../api/system'
+import { checkSystemUpdate, getSystemVersion } from '../api/system'
+import type { SystemUpdateCheck, SystemVersionResponse } from '../api/system'
+import UpdateDialog from '../components/system/UpdateDialog.vue'
 import logoUrl from '@/assets/logo.png'
 
 const route = useRoute()
@@ -28,6 +31,12 @@ const toggleLocale = () => {
 
 const { currentAccount, noticeKey, loadCurrentAccount } = useAdminAccounts()
 
+// 后台采集提醒：顶部显示「后台采集中」，采集完成或失败时在右下角提醒（见 useCollectionWatcher）。
+const { running: runningCollections } = useCollectionWatcher(computed(() => currentAccount.value?.id ?? null))
+const runningCollectionsLabel = computed(() => runningCollections.value
+  .map((kind) => t(kind === 'profit' ? 'admin.collections.runningProfit' : 'admin.collections.runningUsers'))
+  .join(t('admin.collections.separator')))
+
 // 版本信息：开源版仅用于纯展示，不依赖授权/更新服务
 const versionInfo = ref<SystemVersionResponse | null>(null)
 
@@ -37,28 +46,27 @@ const loadVersionInfo = async () => {
   } catch {
     // 版本信息加载失败不阻塞页面
   }
+  // 后台检查一次有没有新版本（服务端缓存 10 分钟），有的话在版本号旁边提示；失败不打扰。
+  try {
+    updateInfo.value = await checkSystemUpdate()
+  } catch {
+    // 检查更新失败不影响使用
+  }
 }
 
-// GitHub 仓库地址是本项目唯一来源，版本号链接和图标入口都从这里派生，避免散落硬编码。
-const githubRepoUrl = 'https://github.com/deviseo/transit-hub'
-const githubReleasesUrl = `${githubRepoUrl}/releases`
+// 点版本号打开「检查更新」。
+const updateInfo = ref<SystemUpdateCheck | null>(null)
+const showUpdateDialog = ref(false)
+const hasUpdate = computed(() => updateInfo.value?.hasUpdate ?? false)
 
-// 非正式发布的占位版本号（本地预览/开发/未设置 APP_VERSION 时的默认值）不对应真实 tag，
-// 点击后退回 release 列表页，而不是跳到一个不存在的 tag 地址。
-const nonReleaseVersionPlaceholders = ['latest', 'local-preview', 'dev', '0.0.0']
+// GitHub 仓库地址：右上角的图标入口。版本号点开是「检查更新」，里面有对应版本的发布说明链接。
+const githubRepoUrl = 'https://github.com/deviseo/transit-hub'
 
 const versionLabel = computed(() => {
   const version = versionInfo.value?.version.trim()
   if (!version) return ''
   const bareVersion = version.replace(/^v+/i, '')
   return bareVersion ? `v${bareVersion}` : ''
-})
-
-const releaseUrl = computed(() => {
-  const version = versionInfo.value?.version.trim()
-  if (!version) return githubReleasesUrl
-  if (nonReleaseVersionPlaceholders.includes(version)) return githubReleasesUrl
-  return versionLabel.value ? `${githubReleasesUrl}/tag/${versionLabel.value}` : githubReleasesUrl
 })
 
 // 工作区选择页不显示侧边栏和业务菜单
@@ -126,8 +134,11 @@ const menuItems = computed<MenuEntry[]>(() => [
   { type: 'leaf', name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
   { type: 'leaf', name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
   { type: 'leaf', name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
+  { type: 'leaf', name: t('admin.menu.profit'), path: '/admin/profit', icon: TrendingUp },
   { type: 'leaf', name: t('admin.menu.userActivity'), path: '/admin/user-activity', icon: UsersRound },
+  { type: 'leaf', name: t('admin.menu.sales'), path: '/admin/sales', icon: BadgeDollarSign },
   { type: 'leaf', name: t('admin.menu.massEmail'), path: '/admin/mass-email', icon: Mail },
+  { type: 'leaf', name: t('admin.menu.client'), path: '/admin/client', icon: MonitorSmartphone },
   { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
 
@@ -303,18 +314,30 @@ watch(
 
         <div class="flex min-w-0 shrink-0 items-center gap-1 sm:gap-4">
           <div class="flex items-center gap-1 sm:gap-2">
-            <!-- 版本号展示：点击跳转到对应 GitHub release（非正式发布占位版本号退回 releases 列表）。 -->
-            <a
-              v-if="versionInfo"
-              :href="releaseUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="hidden sm:flex items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground hover:bg-surface-elevated hover:text-foreground transition-colors"
-              :title="t('admin.system.openRelease')"
-              :aria-label="t('admin.system.openRelease')"
+            <router-link
+              v-if="runningCollections.length > 0"
+              :to="COLLECTION_PAGES[runningCollections[0]]"
+              class="flex h-7 items-center gap-1.5 rounded-md bg-primary/10 px-2 text-xs font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :title="runningCollectionsLabel"
+              :aria-label="runningCollectionsLabel"
             >
+              <Loader2 class="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              <span class="hidden sm:inline">{{ t('admin.collections.running') }}</span>
+            </router-link>
+            <!-- 版本号：点击检查更新；有新版本时显示提示点。 -->
+            <button
+              v-if="versionInfo"
+              type="button"
+              class="hidden sm:flex items-center gap-1.5 h-7 px-2 rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              :class="hasUpdate ? 'bg-primary/10 text-primary hover:bg-primary/15' : 'text-muted-foreground hover:bg-surface-elevated hover:text-foreground'"
+              :title="hasUpdate ? t('admin.update.newVersion', { version: updateInfo?.latest }) : t('admin.update.title')"
+              :aria-label="hasUpdate ? t('admin.update.newVersion', { version: updateInfo?.latest }) : t('admin.update.title')"
+              @click="showUpdateDialog = true"
+            >
+              <span v-if="hasUpdate" class="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden="true"></span>
               {{ versionLabel }}
-            </a>
+              <span v-if="hasUpdate" class="hidden lg:inline">· {{ t('admin.update.badge') }}</span>
+            </button>
 
             <a
               :href="githubRepoUrl"
@@ -389,6 +412,8 @@ watch(
         </router-view>
       </main>
     </div>
+    <NoticeStack />
+    <UpdateDialog v-if="showUpdateDialog" @close="showUpdateDialog = false" @checked="(result) => (updateInfo = result)" />
   </div>
 </template>
 

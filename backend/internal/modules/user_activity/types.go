@@ -35,6 +35,14 @@ const (
 	SyncStatusFailed  = "failed"
 )
 
+// 同步是怎么开始的（前端据此决定完成后是否提醒）。
+const (
+	StartedByManual   = "manual"
+	StartedByAuto     = "auto"
+	StartedByResume   = "resume"
+	StartedBySchedule = "schedule"
+)
+
 // 用户分群（筛选预设）。
 const (
 	SegmentAll         = "all"
@@ -176,6 +184,7 @@ type SyncState struct {
 	RechargeSyncedTo   *time.Time
 	RechargeSince      *time.Time
 	WarningKey         string
+	StartedBy          string
 }
 
 // SyncStatus 是返回给前端的同步状态。
@@ -191,6 +200,7 @@ type SyncStatus struct {
 	// HistoryLimitDays 是该平台最多能回补的天数（sub2api 使用记录默认保留 90 天）。
 	HistoryLimitDays int    `json:"historyLimitDays"`
 	WarningKey       string `json:"warningKey,omitempty"`
+	StartedBy        string `json:"startedBy,omitempty"`
 }
 
 // PeriodMetrics 是某个日期区间（含两端）的汇总。

@@ -22,10 +22,12 @@ const fallbackTheme: DashboardChartTheme = {
   destructive: '#e5484d',
 }
 
+// CSS 变量是空格分隔的「H S% L%」。必须转成逗号分隔的 hsl()/hsla()：ECharts（zrender）只认这种写法，
+// 悬停时它要按原色算出高亮色，认不出空格写法就得到空颜色，悬停的柱子和整条折线会直接消失。
 const cssColor = (styles: CSSStyleDeclaration, variable: string, fallback: string, alpha?: number) => {
-  const value = styles.getPropertyValue(variable).trim()
-  if (!value) return fallback
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`
+  const parts = styles.getPropertyValue(variable).trim().split(/[\s,]+/).filter(Boolean)
+  if (parts.length !== 3) return fallback
+  return alpha == null ? `hsl(${parts.join(', ')})` : `hsla(${parts.join(', ')}, ${alpha})`
 }
 
 // ECharts 绘制到 canvas，无法直接解析 CSS var()。这里在主题切换时读取项目现有

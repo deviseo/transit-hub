@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"transithub/backend/internal/shared/bizclock"
 )
 
 const refreshSkewMS int64 = 60_000
@@ -428,8 +430,8 @@ func (s *PlatformService) FetchSub2APIGroupDailyStats(session Session, groups ..
 	if err := s.VerifySub2APIAdmin(session); err != nil {
 		return nil, err
 	}
-	today := time.Now().Format("2006-01-02")
-	statsURL := session.BaseURL + "/api/v1/admin/dashboard/groups?start_date=" + today + "&end_date=" + today
+	today := bizclock.Today()
+	statsURL := session.BaseURL + "/api/v1/admin/dashboard/groups?start_date=" + today + "&end_date=" + today + "&timezone=" + url.QueryEscape(bizclock.Name)
 	response, err := s.httpClient.requestJSON(statsURL, adminAuthOptions(session))
 	if err != nil {
 		return nil, err
@@ -458,7 +460,7 @@ func (s *PlatformService) FetchSub2APIAdminUsageStats(session Session, startDate
 	if session.Platform != PlatformSub2API || !session.IsAuthenticated() {
 		return 0, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	statsURL := session.BaseURL + "/api/v1/admin/usage/stats?start_date=" + startDate + "&end_date=" + endDate
+	statsURL := session.BaseURL + "/api/v1/admin/usage/stats?start_date=" + startDate + "&end_date=" + endDate + "&timezone=" + url.QueryEscape(bizclock.Name)
 	response, err := s.httpClient.requestJSON(statsURL, adminAuthOptions(session))
 	if err != nil {
 		return 0, err
@@ -871,7 +873,7 @@ func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]Gro
 	if len(keys) == 0 {
 		return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
 	}
-	today := time.Now().Format("2006-01-02")
+	today := bizclock.Today()
 	totals := map[string]float64{}
 	for _, item := range keys {
 		keyID := firstNumber(item, []string{"id"})
@@ -883,7 +885,7 @@ func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]Gro
 		// key carries its group object from /keys, so summing every key's actual cost
 		// by group gives a group-level total even when the admin dashboard endpoint is
 		// unavailable for ordinary upstream tokens.
-		statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + strconvInt(int64(*keyID)) + "&timezone=Asia%2FShanghai"
+		statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + strconvInt(int64(*keyID)) + "&timezone=" + url.QueryEscape(bizclock.Name)
 		statsResponse, err := s.httpClient.requestJSON(statsURL, authOptions)
 		if err != nil {
 			return nil, err
@@ -1054,7 +1056,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 		return nil, nil
 	}
 
-	today := time.Now().Format("2006-01-02")
+	today := bizclock.Today()
 	const maxKeyConcurrency = 4
 	sem := make(chan struct{}, maxKeyConcurrency)
 	var wg sync.WaitGroup
@@ -1069,7 +1071,7 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + record.id + "&timezone=Asia%2FShanghai"
+			statsURL := session.BaseURL + "/api/v1/usage/stats?start_date=" + today + "&end_date=" + today + "&api_key_id=" + record.id + "&timezone=" + url.QueryEscape(bizclock.Name)
 			response, err := s.httpClient.requestJSON(statsURL, authOptions)
 			if err != nil {
 				mu.Lock()
@@ -1414,16 +1416,15 @@ func newAPIUserID(loginData map[string]any) string {
 	return ""
 }
 
+// todayStart / todayEnd 是当前业务日（北京时间）的起止 Unix 秒。
 func todayStart() int64 {
-	now := time.Now()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	return start.Unix()
+	start, _ := bizclock.DayBounds(time.Now())
+	return start
 }
 
 func todayEnd() int64 {
-	now := time.Now()
-	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, int(time.Second-time.Nanosecond), now.Location())
-	return end.Unix()
+	_, end := bizclock.DayBounds(time.Now())
+	return end
 }
 
 // groupID2 从响应记录中提取 ID 并转为字符串，复用 groupID 的逻辑。
@@ -1450,12 +1451,12 @@ func (s *PlatformService) FetchAdminUsageStats(session Session, startDate, endDa
 
 // fetchNewAPIAdminUsageStats 调用 new-api 管理员全站统计接口 /api/log/stat，获取指定日期范围内
 // 本站所有用户的消费额度（即本站营收）。旧实现误用 /api/log/self/stat，只统计到管理员本人的调用。
-// 日期边界按服务进程本地时区（TZ）切分，与仪表盘「今日」的口径保持一致。
+// 日期边界按业务时区（北京时间）切分，与仪表盘「今日」的口径保持一致。
 func (s *PlatformService) fetchNewAPIAdminUsageStats(session Session, startDate, endDate string) (float64, error) {
 	if !session.IsAuthenticated() {
 		return 0, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	startTS, endTS, err := localDateRangeUnix(startDate, endDate, time.Local)
+	startTS, endTS, err := localDateRangeUnix(startDate, endDate, bizclock.Location())
 	if err != nil {
 		return 0, err
 	}

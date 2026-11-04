@@ -46,10 +46,11 @@ var (
 )
 
 type Service struct {
-	client            *http.Client
-	repository        *Repository
-	accounts          AdminAccountResolver
-	OnStrategyChanged func(StrategySettings)
+	client     *http.Client
+	repository *Repository
+	accounts   AdminAccountResolver
+	// OnStrategyChanged 在某个工作区保存策略后被调用（例如按工作区更新定时同步配置）。
+	OnStrategyChanged func(userID string, adminAccountID string, settings StrategySettings)
 
 	// smtpRepo 是 SMTP 存储层的窄接口，由 *Repository 结构性满足；测试可注入内存 fake。
 	smtpRepo smtpRepository
@@ -102,6 +103,8 @@ func DefaultStrategySettings() StrategySettings {
 		RefreshInterval:          minRefreshIntervalSeconds,
 		BalanceTemplateFormat:    NotificationTemplateFormatText,
 		MultiplierTemplateFormat: NotificationTemplateFormatText,
+		DailyReportTime:          DefaultDailyReportTime,
+		DailyReportBotIDs:        []string{},
 	}
 }
 
@@ -126,8 +129,26 @@ func (s *Service) GetNotificationChannels(ctx context.Context, userID string) (N
 	return normalized, nil
 }
 
-func (s *Service) GetFirstStrategy(ctx context.Context) (StrategySettings, error) {
-	return s.repository.GetFirstStrategy(ctx)
+// ListStrategies 返回所有工作区已保存的策略（已归一化）。
+func (s *Service) ListStrategies(ctx context.Context) ([]WorkspaceStrategy, error) {
+	strategies, err := s.repository.ListStrategies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range strategies {
+		strategies[i].Settings = normalizeStrategySettings(strategies[i].Settings)
+	}
+	return strategies, nil
+}
+
+// GetStrategyForWorkspace 读取指定工作区的策略；没有保存过时返回默认值。后台任务（站点同步后的预警）
+// 必须用站点所属的工作区读取，不能用用户当前选中的工作区。
+func (s *Service) GetStrategyForWorkspace(ctx context.Context, userID string, adminAccountID string) (StrategySettings, error) {
+	settings, err := s.repository.GetStrategy(ctx, userID, adminAccountID)
+	if err != nil {
+		return settings, err
+	}
+	return normalizeStrategySettings(settings), nil
 }
 
 func (s *Service) GetStrategy(ctx context.Context, userID string) (StrategySettings, error) {
@@ -148,7 +169,7 @@ func (s *Service) SaveStrategy(ctx context.Context, userID string, settings Stra
 		return StrategySettings{}, err
 	}
 	if s.OnStrategyChanged != nil {
-		s.OnStrategyChanged(settings)
+		s.OnStrategyChanged(userID, adminAccountID, settings)
 	}
 	return settings, nil
 }
@@ -308,6 +329,13 @@ func normalizeStrategySettings(settings StrategySettings) StrategySettings {
 	}
 	settings.BalanceTemplateFormat = normalizeNotificationTemplateFormat(settings.BalanceTemplateFormat)
 	settings.MultiplierTemplateFormat = normalizeNotificationTemplateFormat(settings.MultiplierTemplateFormat)
+	if _, ok := ParseDailyReportTime(settings.DailyReportTime); !ok {
+		settings.DailyReportTime = DefaultDailyReportTime
+	}
+	settings.DailyReportTime = strings.TrimSpace(settings.DailyReportTime)
+	if settings.DailyReportBotIDs == nil {
+		settings.DailyReportBotIDs = []string{}
+	}
 	return settings
 }
 
@@ -328,24 +356,20 @@ func (s *Service) TestNotification(ctx context.Context, dto TestNotificationRequ
 	}
 }
 
-// SendFormattedToBots 按模板格式向机器人发送通知（余额预警、倍率变更等）。格式会按各平台的原生能力
-// 转换：HTML 在不支持原生 HTML 的渠道转成 Markdown，旧纯文本发送路径保持不变。
-func (s *Service) SendFormattedToBots(ctx context.Context, userID string, botIDs []string, message string, format NotificationTemplateFormat) {
-	s.sendNotificationToBots(ctx, userID, botIDs, notificationMessage{
+// SendFormattedToWorkspaceBots 用指定工作区的机器人配置发送通知（余额预警、倍率变更、经营日报等）。
+// 格式会按各平台的原生能力转换：HTML 在不支持原生 HTML 的渠道转成 Markdown，纯文本保持不变。
+// 后台任务必须传入数据所属的工作区，不能依赖用户当前选中的工作区。
+func (s *Service) SendFormattedToWorkspaceBots(ctx context.Context, userID string, adminAccountID string, botIDs []string, message string, format NotificationTemplateFormat) {
+	s.sendNotificationToBots(ctx, userID, adminAccountID, botIDs, notificationMessage{
 		Content: message,
 		Format:  normalizeNotificationTemplateFormat(format),
 	})
 }
 
-// sendNotificationToBots 从数据库加载用户的渠道配置，匹配 ID 后逐个发送。
+// sendNotificationToBots 加载指定工作区的渠道配置，匹配 ID 后逐个发送。
 // 单个渠道失败只记录日志，不中断其他机器人发送（fire-and-forget）。
-func (s *Service) sendNotificationToBots(ctx context.Context, userID string, botIDs []string, message notificationMessage) {
-	if len(botIDs) == 0 || message.Content == "" {
-		return
-	}
-	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
-	if err != nil {
-		log.Printf("[settings] 当前 admin workspace 缺失 user_id=%s err=%v", userID, err)
+func (s *Service) sendNotificationToBots(ctx context.Context, userID string, adminAccountID string, botIDs []string, message notificationMessage) {
+	if len(botIDs) == 0 || message.Content == "" || adminAccountID == "" {
 		return
 	}
 	channels, err := s.repository.GetNotificationChannels(ctx, userID, adminAccountID)

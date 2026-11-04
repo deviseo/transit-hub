@@ -527,9 +527,11 @@ func mapSettingsError(err error) error {
 	}
 }
 
+// mapUpstreamError 把站点会话和站点请求的错误归成两类：需要重新登录站点（会话缺失、过期或不是管理员），
+// 以及其他请求失败。前者提示用户去仪表盘重新登录自己的站点。
 func mapUpstreamError(err error) error {
 	message := err.Error()
-	if strings.Contains(message, upstream.ErrorAuth) {
+	if strings.Contains(message, upstream.ErrorAuth) || strings.Contains(message, "authRequired") || strings.Contains(message, "adminOnly") {
 		return ErrUpstreamAuth
 	}
 	return fmt.Errorf("%w", ErrUpstreamRequest)

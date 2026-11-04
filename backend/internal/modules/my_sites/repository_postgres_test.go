@@ -127,3 +127,25 @@ func TestRepositoryPostgresKeepsLegacyColumnsUntouched(t *testing.T) {
 		t.Fatalf("unexpected state: %+v %v", state, err)
 	}
 }
+
+func TestRepositoryPostgresListsWorkspacesWithSessions(t *testing.T) {
+	pool := openMySitesTestPool(t)
+	ctx := context.Background()
+	repo := NewRepository(pool)
+	if err := repo.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `CREATE TABLE admin_accounts (id text PRIMARY KEY, user_id text NOT NULL); INSERT INTO admin_accounts VALUES ('account-1', 'user-1'), ('account-2', 'user-1')`); err != nil {
+		t.Fatalf("create admin_accounts: %v", err)
+	}
+	session := upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: "https://site.example.test", AccessToken: "token"}
+	for _, accountID := range []string{"account-2", "account-1", "account-deleted", ""} {
+		if err := repo.Save(ctx, State{UserID: "user-1", AdminAccountID: accountID, BaseURL: session.BaseURL, Email: "admin@example.test", Session: session}); err != nil {
+			t.Fatalf("save %q: %v", accountID, err)
+		}
+	}
+	workspaces, err := NewService(repo, nil).ListSessionWorkspaces(ctx)
+	if err != nil || len(workspaces) != 2 || workspaces[0].AdminAccountID != "account-1" || workspaces[1].AdminAccountID != "account-2" {
+		t.Fatalf("only existing workspaces with a saved session are listed: %+v %v", workspaces, err)
+	}
+}

@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/shared/bizclock"
 )
 
-// BusinessTimezone 是统计自然日使用的时区（与仪表盘一致）。
-const BusinessTimezone = "Asia/Shanghai"
+// BusinessTimezone 是统计自然日使用的时区，即统一的业务时区（见 bizclock）。
+const BusinessTimezone = bizclock.Name
 
 const (
 	defaultPageSize   = 20
@@ -78,9 +79,31 @@ type Service struct {
 	// pause 是连续请求站点接口之间的间隔，避免同步时给自己的站点造成压力。
 	pause time.Duration
 
+	// workspaces 为 nil 时定时任务只同步已经同步过的工作区，不自动开始首次同步。
+	workspaces WorkspaceLister
+
 	mu         sync.Mutex
 	running    map[Workspace]struct{}
 	background sync.WaitGroup
+}
+
+// WorkspaceLister 列出保存了自己站点管理员会话的工作区，定时任务据此为还没同步过的工作区在后台自动开始首次同步。
+type WorkspaceLister interface {
+	SessionWorkspaces(ctx context.Context) ([]Workspace, error)
+}
+
+// SetWorkspaceLister 让定时任务为保存了管理员会话、但还没同步过的工作区在后台自动开始首次同步。
+func (s *Service) SetWorkspaceLister(lister WorkspaceLister) {
+	s.workspaces = lister
+}
+
+// SyncStatusOf 返回工作区当前的同步状态。
+func (s *Service) SyncStatusOf(ctx context.Context, ws Workspace) (SyncStatus, error) {
+	state, ok, err := s.store.GetSyncState(ctx, ws)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	return s.syncStatus(state, ok), nil
 }
 
 func NewService(repository *Repository, sessions SessionProvider, platform PlatformClient, accounts AccountResolver) *Service {
@@ -88,10 +111,7 @@ func NewService(repository *Repository, sessions SessionProvider, platform Platf
 }
 
 func newService(store store, sessions SessionProvider, platform PlatformClient, accounts AccountResolver) *Service {
-	loc, err := time.LoadLocation(BusinessTimezone)
-	if err != nil {
-		loc = time.FixedZone("CST", 8*3600)
-	}
+	loc := bizclock.Location()
 	return &Service{
 		store:    store,
 		sessions: sessions,
@@ -407,7 +427,7 @@ func (s *Service) dayOf(t time.Time) time.Time {
 
 func (s *Service) syncStatus(state SyncState, ok bool) SyncStatus {
 	status := SyncStatus{Platform: state.Platform, Status: state.Status, ErrorKey: state.ErrorKey, UserCount: state.UserCount,
-		LastStartedAt: state.LastStartedAt, LastSyncedAt: state.LastSyncedAt, WarningKey: state.WarningKey}
+		LastStartedAt: state.LastStartedAt, LastSyncedAt: state.LastSyncedAt, WarningKey: state.WarningKey, StartedBy: state.StartedBy}
 	if !ok {
 		status.Status = ""
 	}

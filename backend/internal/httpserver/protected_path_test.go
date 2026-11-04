@@ -26,13 +26,15 @@ func TestProtectedPathCoversKeptAdminAPIs(t *testing.T) {
 	for _, path := range []string{
 		"/api/admin-accounts", "/api/upstream-sites/site-1", "/api/group-rates", "/api/group-rates/history",
 		"/api/settings/strategy", "/api/dashboard/metrics", "/api/system/proxy", "/api/user-activity/summary",
+		"/api/sales/summary", "/api/reports/daily/preview", "/api/profit/summary",
+		"/api/client-config", "/api/client-config/groups",
 	} {
 		if !server.protectedPath(path) {
 			t.Fatalf("expected %s to be protected", path)
 		}
 	}
-	// 公开接口：健康检查、登录和邮件退订页不经过 TransitHub 登录校验。
-	for _, path := range []string{"/api/health", "/api/auth/login", "/api/email-unsubscribe"} {
+	// 公开接口：健康检查、登录、邮件退订页和 TransitLink 读取客户端配置不经过 TransitHub 登录校验。
+	for _, path := range []string{"/api/health", "/api/auth/login", "/api/email-unsubscribe", "/api/client/v1/sites/abcdefghij", "/api/client/v1/sites/abcdefghij/logo"} {
 		if server.protectedPath(path) {
 			t.Fatalf("expected %s to stay public", path)
 		}

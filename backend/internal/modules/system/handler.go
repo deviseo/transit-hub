@@ -24,6 +24,9 @@ type Handler struct {
 func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	handler := &Handler{service: service}
 	mux.HandleFunc("GET /api/system/version", handler.version)
+	mux.HandleFunc("GET /api/system/update", handler.checkUpdate)
+	mux.HandleFunc("POST /api/system/update", handler.applyUpdate)
+	mux.HandleFunc("GET /api/system/update/progress", handler.updateProgress)
 	mux.HandleFunc("GET /api/system/outbound-proxy", handler.getOutboundProxy)
 	mux.HandleFunc("PUT /api/system/outbound-proxy", handler.saveOutboundProxy)
 	mux.HandleFunc("POST /api/system/outbound-proxy/test", handler.testOutboundProxy)
@@ -31,6 +34,58 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 
 func (h *Handler) version(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, h.service.Version())
+}
+
+// checkUpdate 对比当前版本和 GitHub 上最新的正式版（?force=1 时不用缓存），并说明能不能在线更新。
+func (h *Handler) checkUpdate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	result, err := h.service.CheckUpdate(r.Context(), userID, r.URL.Query().Get("force") == "1")
+	if err != nil {
+		writeUpdateError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
+}
+
+// applyUpdate 开始在线更新：在后台下载、校验、安装最新版本并切换过去（服务会重启几秒钟）。只有系统管理员能操作。
+func (h *Handler) applyUpdate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	version, err := h.service.ApplyUpdate(r.Context(), userID)
+	if err != nil {
+		writeUpdateError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusAccepted, ApplyUpdateResponse{Version: version})
+}
+
+// updateProgress 返回正在运行的版本和在线更新的进度（更新页面每隔几秒查一次）。
+func (h *Handler) updateProgress(w http.ResponseWriter, r *http.Request) {
+	httpjson.Write(w, http.StatusOK, h.service.UpdateProgress())
+}
+
+func writeUpdateError(w http.ResponseWriter, err error) {
+	var key requestError
+	if !errors.As(err, &key) {
+		log.Printf("[system] update: %v", err)
+		httpjson.WriteError(w, http.StatusInternalServerError, ErrorUpdateFailed)
+		return
+	}
+	status := http.StatusBadGateway
+	switch string(key) {
+	case ErrorUpdateForbidden:
+		status = http.StatusForbidden
+	case ErrorUpdateInProgress, ErrorUpdateUnavailable:
+		status = http.StatusConflict
+	}
+	httpjson.WriteError(w, status, string(key))
 }
 
 func (h *Handler) getOutboundProxy(w http.ResponseWriter, r *http.Request) {

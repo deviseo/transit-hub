@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -113,57 +114,106 @@ type DailyConsume struct {
 	Failed       int
 }
 
-// ConsumeOnDate 汇总工作区内各上游站点在 date（YYYY-MM-DD，按 timezone 切分）这一天的消费 × 充值倍率。
-// 逐站点刷新会话后直接按日期查询；查询失败时，如果缓存是在这一天内同步的，用缓存中的「今日消费」近似
-// （即当天最后一次同步的值），否则计为失败，不当作 0。
-func (s *Service) ConsumeOnDate(ctx context.Context, userID string, adminAccountID string, date string, timezone string) (DailyConsume, error) {
+// 站点某一天消费的状态。
+const (
+	ConsumeStatusOK           = "ok"
+	ConsumeStatusApproximated = "approximated"
+	ConsumeStatusFailed       = "failed"
+	ConsumeStatusNoRate       = "no_rate"
+)
+
+// SiteDailyConsume 是一个上游站点在某一天的消费（上游额度）；Cost = Consume × RechargeRate（人民币）。
+type SiteDailyConsume struct {
+	SiteID       string
+	SiteName     string
+	BaseURL      string
+	RechargeRate float64
+	Consume      float64
+	Cost         float64
+	Status       string
+}
+
+// SiteConsumesOnDate 逐个查询工作区内上游站点在 date（YYYY-MM-DD，按 timezone 切分）这一天的消费。
+// 刷新会话后直接按日期查询；查询失败时，如果缓存是在这一天内同步的，用缓存中的「今日消费」近似
+// （即当天最后一次同步的值），否则标记为失败，不当作 0。没有设置充值倍率的站点不查询、不计成本。
+func (s *Service) SiteConsumesOnDate(ctx context.Context, userID string, adminAccountID string, date string, timezone string) ([]SiteDailyConsume, error) {
 	sites, err := s.cache.ListByUser(ctx, userID)
 	if err != nil {
-		return DailyConsume{}, err
+		return nil, err
 	}
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
-		return DailyConsume{}, err
+		return nil, err
 	}
 	dayStart, err := time.ParseInLocation("2006-01-02", date, loc)
 	if err != nil {
-		return DailyConsume{}, err
+		return nil, err
 	}
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
-	result := DailyConsume{}
+	results := make([]SiteDailyConsume, 0, len(sites))
 	var mu sync.Mutex
 	sem := make(chan struct{}, consumeOnDateParallel)
 	var wg sync.WaitGroup
 	for _, site := range sites {
-		if site.AdminAccountID != adminAccountID || site.RechargeRate <= 0 {
+		if site.AdminAccountID != adminAccountID {
+			continue
+		}
+		base := SiteDailyConsume{SiteID: site.ID, SiteName: site.Name, BaseURL: site.BaseURL, RechargeRate: site.RechargeRate}
+		if site.RechargeRate <= 0 {
+			base.Status = ConsumeStatusNoRate
+			results = append(results, base)
 			continue
 		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(site *Site) {
+		go func(site *Site, item SiteDailyConsume) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			amount, ok := s.siteConsumeOnDate(ctx, site, date, timezone)
-			mu.Lock()
-			defer mu.Unlock()
-			if ok {
-				result.Total += amount * site.RechargeRate
-				result.Sites++
-				return
-			}
+			switch {
+			case ok:
+				item.Consume = amount
+				item.Status = ConsumeStatusOK
 			// 查询失败：只有当缓存是在这一天里同步的，「今日消费」才属于这一天。
-			if site.Metrics.TodayConsume.Value != nil && site.LastSyncedAt != nil &&
-				*site.LastSyncedAt >= dayStart.UnixMilli() && *site.LastSyncedAt < dayEnd.UnixMilli() {
-				result.Total += *site.Metrics.TodayConsume.Value * site.RechargeRate
-				result.Sites++
-				result.Approximated++
-				return
+			case site.Metrics.TodayConsume.Value != nil && site.LastSyncedAt != nil &&
+				*site.LastSyncedAt >= dayStart.UnixMilli() && *site.LastSyncedAt < dayEnd.UnixMilli():
+				item.Consume = *site.Metrics.TodayConsume.Value
+				item.Status = ConsumeStatusApproximated
+			default:
+				item.Status = ConsumeStatusFailed
 			}
-			result.Failed++
-		}(site)
+			item.Cost = item.Consume * site.RechargeRate
+			mu.Lock()
+			results = append(results, item)
+			mu.Unlock()
+		}(site, base)
 	}
 	wg.Wait()
+	sort.Slice(results, func(i, j int) bool { return results[i].SiteID < results[j].SiteID })
+	return results, nil
+}
+
+// ConsumeOnDate 汇总工作区内各上游站点在 date 这一天的消费 × 充值倍率（见 SiteConsumesOnDate）。
+func (s *Service) ConsumeOnDate(ctx context.Context, userID string, adminAccountID string, date string, timezone string) (DailyConsume, error) {
+	sites, err := s.SiteConsumesOnDate(ctx, userID, adminAccountID, date, timezone)
+	if err != nil {
+		return DailyConsume{}, err
+	}
+	result := DailyConsume{}
+	for _, site := range sites {
+		switch site.Status {
+		case ConsumeStatusOK:
+			result.Total += site.Cost
+			result.Sites++
+		case ConsumeStatusApproximated:
+			result.Total += site.Cost
+			result.Sites++
+			result.Approximated++
+		case ConsumeStatusFailed:
+			result.Failed++
+		}
+	}
 	return result, nil
 }
 

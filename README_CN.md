@@ -110,7 +110,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
-# - 镜像 tag（默认使用 deviseo/transithub:v0.1.15）
+# - 镜像 tag（默认使用 deviseo/transithub:v1.0.0）
 # - 替换所有 change-this-* 占位值
 # - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -135,6 +135,7 @@ http://YOUR_SERVER_IP:10621
 ```text
 data/postgres
 data/redis
+data/app        # 在线更新安装的新版本
 ```
 
 `SMTP_ENCRYPTION_KEY` 是可选环境变量，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。缺失该变量不会阻止应用启动，也不影响任何非 SMTP 功能。生成方式：
@@ -144,6 +145,27 @@ openssl rand -base64 32
 ```
 
 该值必须是 base64 编码的 32 字节随机值，且一经设置需要长期稳定保存；更换 key 后，旧的 SMTP 密码密文将无法解密，需要重新填写并保存密码。
+
+### 更新
+
+点击后台顶栏的版本号检查更新。
+
+**在线更新（仅系统管理员）**：有新版本时，在弹窗里点「更新到 vX.Y.Z」。服务器会从本仓库的 GitHub Release 下载对应 CPU 架构的更新包，用 Release 里的 `checksums.txt` 校验 SHA-256，安装到 `/app/data/updates/`，然后自动重启到新版本；新版本起来后页面自动刷新。新版本第一次启动失败时，服务会自动退回原来的版本。
+
+- 请保留 `deploy/docker-compose.prod.yml` 里 `../data/app:/app/data` 这个挂载。不挂载也能在线更新，但重建容器后会回到镜像自带的版本。v1.0.0 之前部署的，请给 `app` 服务补上这条 `volumes`。
+- 在线更新需要运行在 Linux（amd64 或 arm64）上；开启了「系统设置」里的出站代理时，下载会走代理。
+- 镜像版本更新时以镜像为准：拉取了比在线更新版本更新的镜像后，运行的是镜像里的版本。
+
+**Docker 更新**：把 `deploy/docker-compose.prod.yml` 里的镜像版本改成新版本（用 `latest` 的跳过这一步），然后运行：
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml pull
+docker compose -f deploy/docker-compose.prod.yml up -d
+```
+
+### TransitLink 客户端配置
+
+「客户端」页面会在 `/api/client/v1/sites/<代码>` 发布一份只读配置，供 TransitLink 桌面客户端读取。用户的电脑需要能访问到它，所以请把 `/api/client/` 公开出去（例如通过反向代理）；后台和其他 `/api/` 路径可以继续只在内网访问。在该页面把「TransitHub 对外地址」填成公网 URL，再把生成的 `transitlink://connect?config=...` 链接发给用户。
 
 ### 开发依赖服务
 
@@ -160,8 +182,18 @@ docker compose -f deploy/docker-compose.yml up -d
 由于 Dockerfile 放在 `deploy/`，但构建上下文需要使用仓库根目录，请使用：
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v0.1.15 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.0 .
 ```
+
+### 发布包
+
+在线更新安装的是 GitHub Release 里附带的更新包，用下面的命令构建：
+
+```bash
+scripts/build-release.sh v1.0.0
+```
+
+它会在 `dist/release/v1.0.0/` 生成 `transithub_v1.0.0_linux_amd64.tar.gz`、`transithub_v1.0.0_linux_arm64.tar.gz` 和 `checksums.txt`，三个文件都要上传到 Release。版本号必须和 `backend/internal/config/config.go` 里的 `defaultAppVersion` 一致，服务端靠它确认新版本已经启动。
 
 ## 本地开发
 
