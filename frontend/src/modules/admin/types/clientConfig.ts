@@ -36,8 +36,6 @@ export interface ClientConfig {
   configPath: string
   hubUrl: string
   siteUrl: string
-  defaultSiteUrl: string
-  siteName: string
   platform: string
   brand: ClientBrand
   recommend: ClientRecommend

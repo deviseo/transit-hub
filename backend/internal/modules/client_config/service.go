@@ -12,10 +12,10 @@ import (
 )
 
 // SiteInfo 是工作区对应的站点（站长自己的 new-api / sub2api）。
+// 不带工作区名称：它默认是站点管理员的登录账号，不能出现在对外的配置里。
 type SiteInfo struct {
 	Platform string
 	BaseURL  string
-	Name     string
 }
 
 // Sites 提供当前工作区和站点信息（由 admin_accounts 实现）。
@@ -132,8 +132,6 @@ func (s *Service) view(ctx context.Context, config Config) (AdminView, error) {
 		Code:            config.Code,
 		HubURL:          config.HubURL,
 		SiteURL:         config.SiteURL,
-		DefaultSiteURL:  site.BaseURL,
-		SiteName:        site.Name,
 		Platform:        site.Platform,
 		Brand:           config.Brand,
 		Recommend:       config.Recommend,
@@ -161,10 +159,6 @@ func (s *Service) Public(ctx context.Context, code string) (PublicConfig, error)
 	if baseURL == "" {
 		baseURL = site.BaseURL
 	}
-	brandName := config.Brand.Name
-	if brandName == "" {
-		brandName = site.Name
-	}
 	logo := config.Brand.Logo
 	if strings.HasPrefix(logo, "data:") {
 		// 上传的图片单独提供，配置里给相对地址（客户端按配置地址解析）。
@@ -174,14 +168,23 @@ func (s *Service) Public(ctx context.Context, code string) (PublicConfig, error)
 	if support == nil {
 		support = []SupportLink{}
 	}
+	// 站点名称只用对外地址的域名；没设品牌名称时留空，TransitLink 会显示站点自己的名称。
 	return PublicConfig{
 		Version:   1,
-		Site:      PublicSite{Name: site.Name, BaseURL: baseURL, Platform: site.Platform},
-		Brand:     PublicBrand{Name: brandName, LogoURL: logo, Color: config.Brand.Color, Welcome: config.Brand.Welcome},
+		Site:      PublicSite{Name: siteHost(baseURL), BaseURL: baseURL, Platform: site.Platform},
+		Brand:     PublicBrand{Name: config.Brand.Name, LogoURL: logo, Color: config.Brand.Color, Welcome: config.Brand.Welcome},
 		Recommend: config.Recommend,
 		Notice:    PublicNotice{Content: config.Notice, UpdatedAt: config.NoticeUpdatedAt},
 		Support:   support,
 	}, nil
+}
+
+// siteHost 返回站点地址的域名（带端口），例如 api.example.com。
+func siteHost(baseURL string) string {
+	if parsed, err := url.Parse(baseURL); err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return baseURL
 }
 
 // Logo 返回上传的 logo 图片（类型和内容）。

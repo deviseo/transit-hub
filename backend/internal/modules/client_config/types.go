@@ -94,8 +94,6 @@ type AdminView struct {
 	ConfigPath      string        `json:"configPath"`
 	HubURL          string        `json:"hubUrl"`
 	SiteURL         string        `json:"siteUrl"`
-	DefaultSiteURL  string        `json:"defaultSiteUrl"`
-	SiteName        string        `json:"siteName"`
 	Platform        string        `json:"platform"`
 	Brand           Brand         `json:"brand"`
 	Recommend       Recommend     `json:"recommend"`

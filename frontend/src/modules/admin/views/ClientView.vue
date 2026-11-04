@@ -31,8 +31,8 @@ const groupsError = ref('')
 
 const fromConfig = (config: ClientConfig): ClientConfigUpdate => ({
   enabled: config.enabled,
-  // 还没填过对外地址时，默认用现在访问 TransitHub 的地址。
-  hubUrl: config.hubUrl || window.location.origin,
+  // 对外地址要站长自己填：现在打开后台用的地址常常是内网或本机地址，不能直接发给用户。
+  hubUrl: config.hubUrl,
   siteUrl: config.siteUrl,
   brand: { ...config.brand },
   recommend: { claudeCode: { ...config.recommend.claudeCode }, codex: { ...config.recommend.codex } },
@@ -71,9 +71,11 @@ onMounted(() => {
   void loadGroups()
 })
 
+const hubUrlMissing = computed(() => !form.value?.hubUrl.trim())
+
 const configUrl = computed(() => {
-  if (!form.value || !loaded.value?.configPath) return ''
-  return `${form.value.hubUrl.replace(/\/+$/, '')}${loaded.value.configPath}`
+  if (!form.value || !loaded.value?.configPath || hubUrlMissing.value) return ''
+  return `${form.value.hubUrl.trim().replace(/\/+$/, '')}${loaded.value.configPath}`
 })
 
 const link = computed(() => (configUrl.value ? `transitlink://connect?config=${encodeURIComponent(configUrl.value)}` : ''))
@@ -148,7 +150,8 @@ const logoUrlInput = computed({
 })
 
 // —— 品牌预览 ——
-const previewName = computed(() => form.value?.brand.name || loaded.value?.siteName || 'TransitLink')
+// 没填名称时 TransitLink 显示站点自己的名称，预览里用「站点名称」代替。
+const previewName = computed(() => form.value?.brand.name || t('admin.client.brand.previewName'))
 const previewColor = computed(() => (/^#[0-9a-fA-F]{6}$/.test(form.value?.brand.color ?? '') ? form.value!.brand.color : defaultColor))
 const colorPicker = computed({
   get: () => previewColor.value,
@@ -219,14 +222,14 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
             </div>
             <div class="grid gap-2">
               <label for="client-site-url" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.link.siteUrl') }}</label>
-              <Input id="client-site-url" v-model="form.siteUrl" :placeholder="loaded.defaultSiteUrl" class="h-9 text-sm" />
+              <Input id="client-site-url" v-model="form.siteUrl" placeholder="https://api.example.com" class="h-9 text-sm" />
               <p class="text-xs text-muted-foreground">{{ t('admin.client.link.siteUrlHelp') }}</p>
             </div>
           </div>
 
           <div class="grid gap-2">
             <span class="text-xs font-medium text-muted-foreground">{{ t('admin.client.link.link') }}</span>
-            <p v-if="!link" class="rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">{{ t('admin.client.link.unsaved') }}</p>
+            <p v-if="!link" class="rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">{{ t(loaded.configPath && hubUrlMissing ? 'admin.client.link.needHubUrl' : 'admin.client.link.unsaved') }}</p>
             <template v-else>
               <div class="flex flex-wrap items-center gap-2">
                 <code class="min-w-0 flex-1 truncate rounded-lg border border-border/60 bg-surface/40 px-3 py-2 font-mono text-xs text-foreground">{{ link }}</code>
@@ -274,7 +277,7 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
             <div class="grid gap-4 md:grid-cols-2">
               <div class="grid gap-2">
                 <label for="client-brand-name" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.brand.name') }}</label>
-                <Input id="client-brand-name" v-model="form.brand.name" :placeholder="t('admin.client.brand.namePlaceholder', { name: loaded.siteName })" maxlength="40" class="h-9 text-sm" />
+                <Input id="client-brand-name" v-model="form.brand.name" :placeholder="t('admin.client.brand.namePlaceholder')" maxlength="40" class="h-9 text-sm" />
               </div>
               <div class="grid gap-2">
                 <label for="client-brand-color" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.brand.color') }}</label>

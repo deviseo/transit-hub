@@ -298,12 +298,7 @@ func (c clientSites) Site(ctx context.Context, userID string, adminAccountID str
 		if account.ID != adminAccountID {
 			continue
 		}
-		baseURL := strings.TrimRight(account.BaseURL, "/")
-		name := strings.TrimSpace(account.DisplayName)
-		if name == "" {
-			name = strings.TrimPrefix(strings.TrimPrefix(baseURL, "https://"), "http://")
-		}
-		return client_config.SiteInfo{Platform: account.Platform, BaseURL: baseURL, Name: name}, nil
+		return client_config.SiteInfo{Platform: account.Platform, BaseURL: strings.TrimRight(account.BaseURL, "/")}, nil
 	}
 	return client_config.SiteInfo{}, errors.New("admin account not found")
 }

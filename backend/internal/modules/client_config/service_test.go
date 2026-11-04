@@ -48,7 +48,7 @@ func (fakeSites) Site(_ context.Context, _ string, adminAccountID string) (SiteI
 	if adminAccountID != "acct-1" {
 		return SiteInfo{}, errors.New("deleted")
 	}
-	return SiteInfo{Platform: "newapi", BaseURL: "https://relay.example.com", Name: "示例中转"}, nil
+	return SiteInfo{Platform: "newapi", BaseURL: "https://relay.example.com"}, nil
 }
 
 type fakeGroups struct{}
@@ -85,7 +85,7 @@ func TestDefaultsBeforeFirstSave(t *testing.T) {
 	if view.Enabled || view.Code != "" || view.ConfigPath != "" {
 		t.Fatalf("unsaved config should be off without a code: %+v", view)
 	}
-	if view.DefaultSiteURL != "https://relay.example.com" || view.Platform != "newapi" || view.Support == nil {
+	if view.Platform != "newapi" || view.Support == nil {
 		t.Fatalf("site info missing: %+v", view)
 	}
 	if _, err := service.CurrentWorkspace(context.Background(), "nobody"); err == nil || err.Error() != ErrorNoCurrentAccount {
@@ -152,10 +152,10 @@ func TestSaveGeneratesCodeAndPublishes(t *testing.T) {
 	if !changed.NoticeUpdatedAt.After(firstNotice) {
 		t.Fatalf("changed notice gets a new time")
 	}
-	// 没有自定义名称时用站点名；用户访问地址可以单独设置。
+	// 没设品牌名称时留空（TransitLink 显示站点自己的名称）；站点名称只用对外地址的域名。
 	_, _ = service.Update(ctx, ws, UpdateRequest{Enabled: true, SiteURL: "https://api.relay.example.com/v1"})
 	public, _ = service.Public(ctx, "abcdefghij")
-	if public.Brand.Name != "示例中转" || public.Site.BaseURL != "https://api.relay.example.com" || public.Brand.LogoURL != "" {
+	if public.Brand.Name != "" || public.Site.Name != "api.relay.example.com" || public.Site.BaseURL != "https://api.relay.example.com" || public.Brand.LogoURL != "" {
 		t.Fatalf("fallbacks wrong: %+v", public)
 	}
 }
