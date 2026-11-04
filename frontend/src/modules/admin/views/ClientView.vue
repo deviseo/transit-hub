@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CheckCircle2, Copy, ExternalLink, Link2, Loader2, Megaphone, Palette, Plus, RotateCcw, Save, Sparkles, Trash2, Upload } from 'lucide-vue-next'
+import { RouterLink } from 'vue-router'
+import { CheckCircle2, Copy, ExternalLink, LifeBuoy, Link2, Loader2, Megaphone, Palette, Plus, RotateCcw, Save, Sparkles, Trash2, Upload } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getClientConfig, getClientGroups, resetClientConfigCode, saveClientConfig } from '../api/clientConfig'
@@ -39,6 +40,7 @@ const fromConfig = (config: ClientConfig): ClientConfigUpdate => ({
   notice: config.notice,
   support: config.support.map((link) => ({ ...link })),
   minClientVersion: config.minClientVersion,
+  tickets: { enabled: config.tickets.enabled, categories: [...config.tickets.categories] },
 })
 
 const load = async () => {
@@ -81,8 +83,13 @@ const configUrl = computed(() => {
 
 const link = computed(() => (configUrl.value ? `transitlink://connect?config=${encodeURIComponent(configUrl.value)}` : ''))
 
+// 问题分类在文本框里每行一个：编辑时保留原文（不然回车换行会被马上去掉），保存时再拆分。
+const ticketCategoriesText = ref('')
+watch(form, (value) => { ticketCategoriesText.value = value?.tickets.categories.join('\n') ?? '' })
+
 const save = async () => {
   if (!form.value) return
+  form.value.tickets.categories = ticketCategoriesText.value.split('\n').map((line) => line.trim()).filter(Boolean)
   saving.value = true
   saved.value = false
   saveError.value = ''
@@ -420,6 +427,39 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
               </Button>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="overflow-hidden rounded-2xl border border-border/50 bg-card shadow-sm">
+        <div class="flex items-start justify-between gap-4 border-b border-border/50 bg-surface/30 p-6">
+          <div class="flex items-start gap-3">
+            <div class="rounded-xl bg-emerald-500/10 p-2 text-emerald-500"><LifeBuoy class="h-5 w-5" /></div>
+            <div>
+              <h2 class="text-lg font-semibold text-foreground">{{ t('admin.client.tickets.title') }}</h2>
+              <p class="text-sm text-muted-foreground">{{ t('admin.client.tickets.description') }}</p>
+            </div>
+          </div>
+          <label class="relative mt-1 inline-flex shrink-0 cursor-pointer items-center gap-3">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.client.tickets.enabled') }}</span>
+            <input v-model="form.tickets.enabled" type="checkbox" class="peer sr-only" :aria-label="t('admin.client.tickets.enabled')">
+            <div class="relative h-6 w-11 shrink-0 rounded-full bg-surface-elevated peer-checked:bg-primary peer-focus-visible:ring-2 peer-focus-visible:ring-primary peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-border after:bg-white after:transition-transform after:content-[''] peer-checked:after:translate-x-full peer-checked:after:border-white"></div>
+          </label>
+        </div>
+        <div class="space-y-5 p-6">
+          <div class="grid gap-2">
+            <label for="client-ticket-categories" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.tickets.categories') }}</label>
+            <textarea
+              id="client-ticket-categories"
+              v-model="ticketCategoriesText"
+              rows="5"
+              class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            ></textarea>
+            <p class="text-xs text-muted-foreground">{{ t('admin.client.tickets.categoriesHelp') }}</p>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            {{ t('admin.client.tickets.notifyHelp') }}
+            <RouterLink to="/admin/tickets" class="text-primary hover:underline">{{ t('admin.client.tickets.openTickets') }}</RouterLink>
+          </p>
         </div>
       </section>
     </template>

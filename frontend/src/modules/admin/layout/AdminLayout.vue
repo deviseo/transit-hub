@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound, BadgeDollarSign, TrendingUp, Loader2, MonitorSmartphone } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound, BadgeDollarSign, TrendingUp, Loader2, MonitorSmartphone, LifeBuoy } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
 import { COLLECTION_PAGES, useCollectionWatcher } from '../composables/useCollectionWatcher'
+import { getTicketCounts } from '../api/tickets'
 import NoticeStack from '../components/collections/NoticeStack.vue'
 import { clearAccessToken } from '@/modules/auth/api/auth'
 import { checkSystemUpdate, getSystemVersion } from '../api/system'
@@ -33,6 +34,24 @@ const { currentAccount, noticeKey, loadCurrentAccount } = useAdminAccounts()
 
 // 后台采集提醒：顶部显示「后台采集中」，采集完成或失败时在右下角提醒（见 useCollectionWatcher）。
 const { running: runningCollections } = useCollectionWatcher(computed(() => currentAccount.value?.id ?? null))
+
+// 菜单「工单」上的数字：待回复和用户追问的工单数，每分钟刷新；切换工作区时重新读取。
+const ticketsNeedingReply = ref(0)
+const refreshTicketCounts = async () => {
+  if (!currentAccount.value) {
+    ticketsNeedingReply.value = 0
+    return
+  }
+  try {
+    const counts = await getTicketCounts()
+    ticketsNeedingReply.value = counts.open + counts.pending
+  } catch {
+    // 读不到不影响其他功能。
+  }
+}
+watch(() => currentAccount.value?.id, () => { void refreshTicketCounts() })
+const ticketCountTimer = window.setInterval(() => { void refreshTicketCounts() }, 60_000)
+onBeforeUnmount(() => window.clearInterval(ticketCountTimer))
 const runningCollectionsLabel = computed(() => runningCollections.value
   .map((kind) => t(kind === 'profit' ? 'admin.collections.runningProfit' : 'admin.collections.runningUsers'))
   .join(t('admin.collections.separator')))
@@ -127,7 +146,7 @@ interface MenuChild {
 
 // 菜单项分两种形态：叶子（单一路由入口）和分组（固定顺序的二级菜单集合）。
 type MenuEntry =
-  | { type: 'leaf'; name: string; path: string; icon: Component }
+  | { type: 'leaf'; name: string; path: string; icon: Component; badge?: number }
   | { type: 'group'; id: string; name: string; icon: Component; children: MenuChild[] }
 
 const menuItems = computed<MenuEntry[]>(() => [
@@ -138,6 +157,7 @@ const menuItems = computed<MenuEntry[]>(() => [
   { type: 'leaf', name: t('admin.menu.userActivity'), path: '/admin/user-activity', icon: UsersRound },
   { type: 'leaf', name: t('admin.menu.sales'), path: '/admin/sales', icon: BadgeDollarSign },
   { type: 'leaf', name: t('admin.menu.massEmail'), path: '/admin/mass-email', icon: Mail },
+  { type: 'leaf', name: t('admin.menu.tickets'), path: '/admin/tickets', icon: LifeBuoy, badge: ticketsNeedingReply.value },
   { type: 'leaf', name: t('admin.menu.client'), path: '/admin/client', icon: MonitorSmartphone },
   { type: 'leaf', name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
@@ -241,7 +261,13 @@ watch(
             @click="handleMenuRouteClick"
           >
             <component :is="item.icon" class="w-5 h-5" aria-hidden="true" />
-            {{ item.name }}
+            <span class="flex-1">{{ item.name }}</span>
+            <span
+              v-if="item.badge"
+              class="min-w-[1.25rem] rounded-full px-1.5 text-center text-xs font-semibold tabular-nums"
+              :class="route.path === item.path ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-primary text-primary-foreground'"
+              :aria-label="t('admin.tickets.badge', { count: item.badge })"
+            >{{ item.badge > 99 ? '99+' : item.badge }}</span>
           </router-link>
 
           <div v-else>

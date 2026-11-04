@@ -123,6 +123,7 @@ export default {
       sales: '销售分析',
       profit: '利润分析',
       massEmail: '群发邮件',
+      tickets: '工单',
       client: '客户端',
       signOut: '退出登录'
     },
@@ -1209,6 +1210,51 @@ export default {
         invalidRange: '统计区间无效：开始日期不能晚于结束日期，结束日期不能晚于今天，跨度不超过 366 天。'
       }
     },
+    tickets: {
+      title: '工单',
+      subtitle: 'TransitLink 用户提交的问题。新工单和用户追问会推送到「系统设置 → 策略」里选的工单通知机器人。',
+      refresh: '刷新',
+      loading: '正在加载…',
+      disabledHint: '还没有开启工单：在「客户端」页面打开工单后，用户就能在 TransitLink 里给你提交问题。',
+      openClientPage: '去「客户端」页面',
+      tabs: {
+        all: '全部'
+      },
+      status: {
+        open: '待回复',
+        pending: '用户追问',
+        replied: '已回复',
+        closed: '已关闭'
+      },
+      empty: '还没有工单。',
+      emptyFiltered: '没有这个状态的工单。',
+      unknownUser: '未知用户',
+      page: '第 {page} / {pages} 页',
+      previous: '上一页',
+      next: '下一页',
+      badge: '{count} 个工单待处理',
+      detail: {
+        loading: '正在加载…',
+        status: '状态',
+        close: '关闭',
+        user: '用户',
+        userWithId: '{name}（ID {id}）',
+        email: '邮箱',
+        contact: '联系方式',
+        client: '客户端',
+        you: '客服（你）',
+        closedNote: '工单已关闭；回复后会重新打开。',
+        reply: '回复',
+        replyPlaceholder: '输入回复，Ctrl/⌘ + Enter 发送',
+        send: '发送',
+        attachmentLoadFailed: '图片加载失败',
+        closePreview: '关闭预览'
+      },
+      errors: {
+        network: '网络错误，请检查连接。',
+        request: '请求失败，请稍后再试。'
+      }
+    },
     client: {
       title: '客户端',
       subtitle: '给用户发一个专属链接：用 TransitLink 打开就能接入你的站点，界面换成你的品牌，一键配置时用你推荐的分组和模型。',
@@ -1296,6 +1342,15 @@ export default {
           url: '网页',
           other: '其他'
         }
+      },
+      tickets: {
+        title: '工单',
+        description: '开启后，用户可以在 TransitLink 里给你提交问题，你在「工单」页面回复。',
+        enabled: '开启',
+        categories: '问题分类',
+        categoriesHelp: '每行一个，用户提交时从中选择。最多 20 个，每个不超过 40 个字。',
+        notifyHelp: '新工单和用户追问可以推送到通知机器人：在「系统设置 → 策略」里选择。',
+        openTickets: '查看工单'
       },
       errors: {
         invalid: '有内容格式不对，请检查后再保存。',
@@ -1576,6 +1631,10 @@ export default {
       }
     },
     settings: {
+      ticketNotify: {
+        title: '工单通知',
+        help: '用户在 TransitLink 里新建工单或追问时，推送给选中的机器人；不选就不推送。'
+      },
       dailyReport: {
         title: '经营日报',
         help: '每天在设定的时间，把昨天的营收、成本、毛利、入账、活跃用户和上游余额汇总发给机器人。数据来自仪表盘与用户分析的本地数据，不会访问站点。',
@@ -1857,6 +1916,14 @@ export default {
         network: '系统信息请求失败，请检查网络连接。',
         request: '系统请求失败，请稍后重试。'
       }
+    }
+  },
+  tickets: {
+    errors: {
+      invalid: '内容不合法，请检查后再试。',
+      notFound: '工单不存在或已删除。',
+      noCurrentAccount: '请先选择一个工作区。',
+      request: '请求失败，请稍后再试。'
     }
   }
 }

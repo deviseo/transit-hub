@@ -43,6 +43,8 @@ export type StrategySettings = {
   enableDailyReport?: boolean
   dailyReportTime?: string
   dailyReportBotIds?: string[]
+  // 工单通知：TransitLink 用户新建工单或追问时推送给这些机器人。
+  ticketNotifyBotIds?: string[]
 }
 
 export type DailyReport = {

@@ -8,6 +8,7 @@ import EmailTemplatesPanel from '../components/settings/EmailTemplatesPanel.vue'
 import NotificationTemplateEditor from '../components/settings/NotificationTemplateEditor.vue'
 import OutboundProxyPanel from '../components/settings/OutboundProxyPanel.vue'
 import DailyReportCard from '../components/settings/DailyReportCard.vue'
+import TicketNotifyCard from '../components/settings/TicketNotifyCard.vue'
 import {
   getNotificationChannelSettings,
   getSmtpSettings,
@@ -88,6 +89,7 @@ const multiplierTemplateFormat = ref<NotificationTemplateFormat>('markdown')
 const enableDailyReport = ref(false)
 const dailyReportTime = ref('09:00')
 const dailyReportSelectedBots = ref<string[]>([])
+const ticketNotifySelectedBots = ref<string[]>([])
 
 const normalizeTemplateFormat = (format?: string): NotificationTemplateFormat => (
   format === 'markdown' || format === 'html' ? format : 'text'
@@ -201,6 +203,7 @@ const applyStrategySettings = (settings: StrategySettings) => {
   enableDailyReport.value = settings.enableDailyReport ?? false
   dailyReportTime.value = settings.dailyReportTime || '09:00'
   dailyReportSelectedBots.value = settings.dailyReportBotIds ?? []
+  ticketNotifySelectedBots.value = settings.ticketNotifyBotIds ?? []
 }
 
 const currentStrategySettings = (): StrategySettings => ({
@@ -218,6 +221,7 @@ const currentStrategySettings = (): StrategySettings => ({
   enableDailyReport: enableDailyReport.value,
   dailyReportTime: dailyReportTime.value || '09:00',
   dailyReportBotIds: dailyReportSelectedBots.value,
+  ticketNotifyBotIds: ticketNotifySelectedBots.value,
 })
 
 const loadStrategy = async () => {
@@ -810,6 +814,13 @@ onMounted(async () => {
             v-model:enabled="enableDailyReport"
             v-model:time="dailyReportTime"
             v-model:selected-bots="dailyReportSelectedBots"
+            :all-bots="allBots"
+            :has-bots="hasBots"
+          />
+
+          <!-- Card 5: Ticket notifications -->
+          <TicketNotifyCard
+            v-model:selected-bots="ticketNotifySelectedBots"
             :all-bots="allBots"
             :has-bots="hasBots"
           />

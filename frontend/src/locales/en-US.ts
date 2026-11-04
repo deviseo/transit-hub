@@ -123,6 +123,7 @@ export default {
       sales: 'Sales',
       profit: 'Profit',
       massEmail: 'Mass Email',
+      tickets: 'Tickets',
       client: 'Client',
       signOut: 'Sign Out'
     },
@@ -1209,6 +1210,51 @@ export default {
         invalidRange: 'Invalid period: the start date must not be after the end date, the end date must not be after today, and the period must not exceed 366 days.'
       }
     },
+    tickets: {
+      title: 'Tickets',
+      subtitle: 'Questions from TransitLink users. New tickets and follow-ups are sent to the ticket notification bots chosen in System Settings → Strategy.',
+      refresh: 'Refresh',
+      loading: 'Loading…',
+      disabledHint: "Tickets aren't turned on yet. Turn them on in the Client page and users can send you questions from TransitLink.",
+      openClientPage: 'Open the Client page',
+      tabs: {
+        all: 'All'
+      },
+      status: {
+        open: 'Awaiting reply',
+        pending: 'Follow-up',
+        replied: 'Replied',
+        closed: 'Closed'
+      },
+      empty: 'No tickets yet.',
+      emptyFiltered: 'No tickets with this status.',
+      unknownUser: 'Unknown user',
+      page: 'Page {page} of {pages}',
+      previous: 'Previous',
+      next: 'Next',
+      badge: '{count} tickets need a reply',
+      detail: {
+        loading: 'Loading…',
+        status: 'Status',
+        close: 'Close',
+        user: 'User',
+        userWithId: '{name} (ID {id})',
+        email: 'Email',
+        contact: 'Contact',
+        client: 'Client',
+        you: 'Support (you)',
+        closedNote: 'This ticket is closed. Replying reopens it.',
+        reply: 'Reply',
+        replyPlaceholder: 'Type a reply. Ctrl/⌘ + Enter to send',
+        send: 'Send',
+        attachmentLoadFailed: "Couldn't load the image",
+        closePreview: 'Close preview'
+      },
+      errors: {
+        network: 'Network error. Check your connection.',
+        request: 'Request failed. Please try again later.'
+      }
+    },
     client: {
       title: 'Client',
       subtitle: 'Send your users one link: it opens TransitLink, connects them to your site with your branding, and one-click setup uses the groups and models you recommend.',
@@ -1296,6 +1342,15 @@ export default {
           url: 'Website',
           other: 'Other'
         }
+      },
+      tickets: {
+        title: 'Tickets',
+        description: 'When on, users can send you questions from TransitLink, and you answer them on the Tickets page.',
+        enabled: 'On',
+        categories: 'Categories',
+        categoriesHelp: 'One per line; users pick one when they submit. Up to 20, each at most 40 characters.',
+        notifyHelp: 'New tickets and follow-ups can be sent to your notification bots: choose them in System Settings → Strategy.',
+        openTickets: 'View tickets'
       },
       errors: {
         invalid: 'Something is not in the right format. Please check and save again.',
@@ -1576,6 +1631,10 @@ export default {
       }
     },
     settings: {
+      ticketNotify: {
+        title: 'Ticket notifications',
+        help: 'When a TransitLink user opens a ticket or follows up, notify the selected bots. Select none to turn this off.'
+      },
       dailyReport: {
         title: 'Daily business report',
         help: 'Every day at the set time, send yesterday\'s revenue, cost, gross profit, credits, active users, and upstream balance to your bots. It uses local dashboard and User Analytics data and never contacts your sites.',
@@ -1857,6 +1916,14 @@ export default {
         network: 'System info request failed. Check your network connection.',
         request: 'System request failed. Please try again later.'
       }
+    }
+  },
+  tickets: {
+    errors: {
+      invalid: 'Something is not valid. Please check and try again.',
+      notFound: "This ticket doesn't exist or was deleted.",
+      noCurrentAccount: 'Choose a workspace first.',
+      request: 'Request failed. Please try again later.'
     }
   }
 }

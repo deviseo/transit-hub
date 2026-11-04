@@ -44,7 +44,14 @@ export interface ClientConfig {
   support: ClientSupportLink[]
   /** TransitLink 最低版本（例如 0.2.0），低于它的客户端提示更新；空表示不限制。 */
   minClientVersion: string
+  tickets: ClientTicketSettings
   updatedAt: string | null
+}
+
+/** 工单：开启后 TransitLink 里出现「工单」，categories 是用户能选的问题分类。 */
+export interface ClientTicketSettings {
+  enabled: boolean
+  categories: string[]
 }
 
 export interface ClientConfigUpdate {
@@ -56,6 +63,7 @@ export interface ClientConfigUpdate {
   notice: string
   support: ClientSupportLink[]
   minClientVersion: string
+  tickets: ClientTicketSettings
 }
 
 export interface ClientGroup {
