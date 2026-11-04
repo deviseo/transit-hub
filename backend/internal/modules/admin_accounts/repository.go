@@ -52,12 +52,16 @@ var workspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "my_site_states", SQL: `DELETE FROM my_site_states WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "dashboard_daily_stats", SQL: `DELETE FROM dashboard_daily_stats WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "client_configs", SQL: `DELETE FROM client_configs WHERE user_id = $1 AND admin_account_id = $2`},
+	// 工单：附件、消息先于工单删除。附件文件名在删除前记进清理任务，由清理任务删掉文件。
+	{Name: "ticket_attachments", SQL: `DELETE FROM ticket_attachments WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "ticket_messages", SQL: `DELETE FROM ticket_messages WHERE user_id = $1 AND admin_account_id = $2`},
+	{Name: "tickets", SQL: `DELETE FROM tickets WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "dashboard_balance_filter", SQL: `DELETE FROM dashboard_balance_filter WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "dashboard_pricing", SQL: `DELETE FROM dashboard_pricing WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "upstream_sites", SQL: `DELETE FROM upstream_sites WHERE user_id = $1 AND admin_account_id = $2`},
 }
 
-// retiredWorkspaceDeleteStatements 清理已下线功能（抽奖、排行榜、工单、活动调价、分组健康、分组对接）留下的表。
+// retiredWorkspaceDeleteStatements 清理已下线功能（抽奖、排行榜、嵌入网页的工单配置、活动调价、分组健康、分组对接）留下的表。
 // 这些表不再由代码创建：新安装可能没有，老安装里仍有历史数据，因此删除工作区时只在表存在时执行。
 var retiredWorkspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "lottery_reward_jobs", SQL: `DELETE FROM lottery_reward_jobs WHERE user_id = $1 AND admin_account_id = $2`},
@@ -80,9 +84,6 @@ var retiredWorkspaceDeleteStatements = []workspaceDeleteStatement{
 	{Name: "connection_health_states", SQL: `DELETE FROM connection_health_states WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "connection_health_events", SQL: `DELETE FROM connection_health_events WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "connection_health_policies", SQL: `DELETE FROM connection_health_policies WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "ticket_attachments", SQL: `DELETE FROM ticket_attachments WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "ticket_messages", SQL: `DELETE FROM ticket_messages WHERE user_id = $1 AND admin_account_id = $2`},
-	{Name: "tickets", SQL: `DELETE FROM tickets WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "ticket_embed_configs", SQL: `DELETE FROM ticket_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "leaderboard_embed_configs", SQL: `DELETE FROM leaderboard_embed_configs WHERE user_id = $1 AND admin_account_id = $2`},
 	{Name: "real_connections", SQL: `DELETE FROM real_connections WHERE user_id = $1 AND workspace_admin_account_id = $2`},
@@ -113,6 +114,9 @@ var legacyWorkspaceTables = []workspaceTableDescriptor{
 	{Name: "profit_sync_states", WorkspaceColumn: "admin_account_id"},
 	{Name: "profit_price_changes", WorkspaceColumn: "admin_account_id"},
 	{Name: "client_configs", WorkspaceColumn: "admin_account_id"},
+	{Name: "ticket_attachments", WorkspaceColumn: "admin_account_id"},
+	{Name: "ticket_messages", WorkspaceColumn: "admin_account_id"},
+	{Name: "tickets", WorkspaceColumn: "admin_account_id"},
 }
 
 type Repository struct {
@@ -343,7 +347,11 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 	if err != nil {
 		return nil, err
 	}
-	if err := insertCleanupJob(ctx, tx, cleanupJobID, userID, accountID, upstreamSiteIDs); err != nil {
+	attachmentPaths, err := collectStrings(ctx, tx, `SELECT storage_path FROM ticket_attachments WHERE user_id = $1 AND admin_account_id = $2 ORDER BY storage_path ASC`, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := insertCleanupJob(ctx, tx, cleanupJobID, userID, accountID, upstreamSiteIDs, attachmentPaths); err != nil {
 		return nil, err
 	}
 
@@ -392,19 +400,27 @@ func (r *Repository) DeleteWorkspace(ctx context.Context, userID string, account
 		WasCurrent:            wasCurrent,
 		CurrentAdminAccountID: nextCurrentID,
 		UpstreamSiteIDs:       upstreamSiteIDs,
+		AttachmentPaths:       attachmentPaths,
 	}, nil
 }
 
-// insertCleanupJob 记录工作区删除后的外部清理任务。attachment_paths 列属于已下线的工单附件清理，保持默认值不再写入。
-func insertCleanupJob(ctx context.Context, tx pgx.Tx, id string, userID string, adminAccountID string, upstreamSiteIDs []string) error {
+// insertCleanupJob 记录工作区删除后的外部清理任务：上游站点的缓存、工单附件文件。
+func insertCleanupJob(ctx context.Context, tx pgx.Tx, id string, userID string, adminAccountID string, upstreamSiteIDs []string, attachmentPaths []string) error {
 	upstreamJSON, err := json.Marshal(upstreamSiteIDs)
 	if err != nil {
 		return err
 	}
+	if attachmentPaths == nil {
+		attachmentPaths = []string{}
+	}
+	attachmentJSON, err := json.Marshal(attachmentPaths)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO workspace_cleanup_jobs (id, user_id, admin_account_id, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at)
-		VALUES ($1, $2, $3, $4::jsonb, 0, now(), '', now(), now())
-	`, id, userID, adminAccountID, string(upstreamJSON))
+		INSERT INTO workspace_cleanup_jobs (id, user_id, admin_account_id, upstream_site_ids, attachment_paths, attempts, next_attempt_at, last_error, created_at, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, 0, now(), '', now(), now())
+	`, id, userID, adminAccountID, string(upstreamJSON), string(attachmentJSON))
 	return err
 }
 
@@ -422,7 +438,7 @@ func (r *Repository) ClaimDueCleanupJobs(ctx context.Context, limit int) ([]Clea
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, user_id, admin_account_id, upstream_site_ids, attempts, next_attempt_at, last_error, created_at, updated_at
+		RETURNING id, user_id, admin_account_id, upstream_site_ids, attachment_paths, attempts, next_attempt_at, last_error, created_at, updated_at
 	`, limit)
 	if err != nil {
 		return nil, err
@@ -453,12 +469,13 @@ func (r *Repository) MarkCleanupJobRetry(ctx context.Context, id string, attempt
 
 func scanCleanupJob(row pgx.Row) (CleanupJob, error) {
 	var job CleanupJob
-	var upstreamJSON []byte
-	err := row.Scan(&job.ID, &job.UserID, &job.AdminAccountID, &upstreamJSON, &job.Attempts, &job.NextAttemptAt, &job.LastError, &job.CreatedAt, &job.UpdatedAt)
+	var upstreamJSON, attachmentJSON []byte
+	err := row.Scan(&job.ID, &job.UserID, &job.AdminAccountID, &upstreamJSON, &attachmentJSON, &job.Attempts, &job.NextAttemptAt, &job.LastError, &job.CreatedAt, &job.UpdatedAt)
 	if err != nil {
 		return CleanupJob{}, err
 	}
 	_ = json.Unmarshal(upstreamJSON, &job.UpstreamSiteIDs)
+	_ = json.Unmarshal(attachmentJSON, &job.AttachmentPaths)
 	return job, nil
 }
 

@@ -54,6 +54,7 @@ type DeleteResult struct {
 	WasCurrent            bool
 	CurrentAdminAccountID string
 	UpstreamSiteIDs       []string
+	AttachmentPaths       []string
 }
 
 type CleanupJob struct {
@@ -61,6 +62,7 @@ type CleanupJob struct {
 	UserID          string
 	AdminAccountID  string
 	UpstreamSiteIDs []string
+	AttachmentPaths []string
 	Attempts        int
 	NextAttemptAt   time.Time
 	LastError       string
@@ -72,6 +74,8 @@ type WorkspaceCleanupPayload struct {
 	UserID          string
 	AdminAccountID  string
 	UpstreamSiteIDs []string
+	// AttachmentPaths 是工作区工单附件的文件名（数据目录 ticket-uploads 里），清理时删除文件。
+	AttachmentPaths []string
 }
 
 type requestError string

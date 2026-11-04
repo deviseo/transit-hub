@@ -20,17 +20,18 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 const selectColumns = `user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name, brand_logo, brand_color,
-	welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support, min_client_version, updated_at`
+	welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support, min_client_version,
+	tickets_enabled, ticket_categories, updated_at`
 
 func scanConfig(row pgx.Row) (*Config, error) {
 	var config Config
-	var support []byte
+	var support, categories []byte
 	var updatedAt time.Time
 	err := row.Scan(&config.UserID, &config.AdminAccountID, &config.Code, &config.Enabled, &config.HubURL, &config.SiteURL,
 		&config.Brand.Name, &config.Brand.Logo, &config.Brand.Color, &config.Brand.Welcome,
 		&config.Recommend.ClaudeCode.Group, &config.Recommend.ClaudeCode.Model,
 		&config.Recommend.Codex.Group, &config.Recommend.Codex.Model,
-		&config.Notice, &config.NoticeUpdatedAt, &support, &config.MinClientVersion, &updatedAt)
+		&config.Notice, &config.NoticeUpdatedAt, &support, &config.MinClientVersion, &config.TicketsEnabled, &categories, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -39,6 +40,11 @@ func scanConfig(row pgx.Row) (*Config, error) {
 	}
 	if len(support) > 0 {
 		if err := json.Unmarshal(support, &config.Support); err != nil {
+			return nil, err
+		}
+	}
+	if len(categories) > 0 {
+		if err := json.Unmarshal(categories, &config.TicketCategories); err != nil {
 			return nil, err
 		}
 	}
@@ -63,19 +69,28 @@ func (r *Repository) Save(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
+	categories := config.TicketCategories
+	if categories == nil {
+		categories = DefaultTicketCategories
+	}
+	categoriesJSON, err := json.Marshal(categories)
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(ctx, `INSERT INTO client_configs (user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name,
 		brand_logo, brand_color, welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support,
-		min_client_version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now())
+		min_client_version, tickets_enabled, ticket_categories, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, now(), now())
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET code = EXCLUDED.code, enabled = EXCLUDED.enabled,
 			hub_url = EXCLUDED.hub_url, site_url = EXCLUDED.site_url, brand_name = EXCLUDED.brand_name,
 			brand_logo = EXCLUDED.brand_logo, brand_color = EXCLUDED.brand_color, welcome = EXCLUDED.welcome,
 			claude_group = EXCLUDED.claude_group, claude_model = EXCLUDED.claude_model, codex_group = EXCLUDED.codex_group,
 			codex_model = EXCLUDED.codex_model, notice = EXCLUDED.notice, notice_updated_at = EXCLUDED.notice_updated_at,
-			support = EXCLUDED.support, min_client_version = EXCLUDED.min_client_version, updated_at = now()`,
+			support = EXCLUDED.support, min_client_version = EXCLUDED.min_client_version,
+			tickets_enabled = EXCLUDED.tickets_enabled, ticket_categories = EXCLUDED.ticket_categories, updated_at = now()`,
 		config.UserID, config.AdminAccountID, config.Code, config.Enabled, config.HubURL, config.SiteURL, config.Brand.Name,
 		config.Brand.Logo, config.Brand.Color, config.Brand.Welcome, config.Recommend.ClaudeCode.Group,
 		config.Recommend.ClaudeCode.Model, config.Recommend.Codex.Group, config.Recommend.Codex.Model, config.Notice,
-		config.NoticeUpdatedAt, support, config.MinClientVersion)
+		config.NoticeUpdatedAt, support, config.MinClientVersion, config.TicketsEnabled, string(categoriesJSON))
 	return err
 }

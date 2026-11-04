@@ -201,6 +201,7 @@ func TestValidation(t *testing.T) {
 		"long notice":     {UpdateRequest{Notice: strings.Repeat("字", 2001)}, ErrorInvalid},
 		"bad version":     {UpdateRequest{MinClientVersion: "latest"}, ErrorInvalid},
 		"short version":   {UpdateRequest{MinClientVersion: "0.2"}, ErrorInvalid},
+		"long category":   {UpdateRequest{Tickets: TicketSettings{Categories: []string{strings.Repeat("类", 41)}}}, ErrorInvalid},
 	}
 	for name, tc := range cases {
 		_, err := normalize(tc.req)
@@ -246,5 +247,37 @@ func TestMinimumClientVersionIsPublished(t *testing.T) {
 	view, _ = service.Update(ctx, ws, UpdateRequest{Enabled: true})
 	if public, _ := service.Public(ctx, view.Code); public.Client.MinVersion != "" {
 		t.Fatalf("empty means no requirement: %+v", public.Client)
+	}
+}
+
+func TestTicketSettings(t *testing.T) {
+	service, _ := newTestService()
+	ctx := context.Background()
+	view, err := service.Update(ctx, ws, UpdateRequest{Enabled: true, Tickets: TicketSettings{Enabled: true, Categories: []string{" 售后 ", "售后", "", "合作"}}})
+	if err != nil || !view.Tickets.Enabled || strings.Join(view.Tickets.Categories, ",") != "售后,合作" {
+		t.Fatalf("categories are trimmed and deduplicated: %+v %v", view.Tickets, err)
+	}
+	public, _ := service.Public(ctx, view.Code)
+	if !public.Tickets.Enabled {
+		t.Fatalf("public config tells the client: %+v", public.Tickets)
+	}
+	// 没填分类时用默认分类；关掉工单后公开配置里也是关的。
+	view, _ = service.Update(ctx, ws, UpdateRequest{Enabled: true})
+	if view.Tickets.Enabled || strings.Join(view.Tickets.Categories, ",") != strings.Join(DefaultTicketCategories, ",") {
+		t.Fatalf("defaults: %+v", view.Tickets)
+	}
+	if public, _ := service.Public(ctx, view.Code); public.Tickets.Enabled {
+		t.Fatal("tickets are off")
+	}
+	if config, err := service.ByCode(ctx, view.Code); err != nil || config == nil || config.Workspace != ws {
+		t.Fatalf("by code: %+v %v", config, err)
+	}
+	if many := make([]string, 21); true {
+		for i := range many {
+			many[i] = strings.Repeat("类", i+1)
+		}
+		if _, err := service.Update(ctx, ws, UpdateRequest{Tickets: TicketSettings{Categories: many}}); err == nil || err.Error() != ErrorInvalid {
+			t.Fatalf("at most 20 categories, got %v", err)
+		}
 	}
 }

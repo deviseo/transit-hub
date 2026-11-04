@@ -28,6 +28,9 @@ func TestWorkspaceDeleteStatementsCoverAllWorkspaceTables(t *testing.T) {
 		"my_site_states",
 		"dashboard_daily_stats",
 		"client_configs",
+		"ticket_attachments",
+		"ticket_messages",
+		"tickets",
 		"dashboard_balance_filter",
 		"dashboard_pricing",
 		"upstream_sites",
@@ -58,9 +61,6 @@ func TestRetiredWorkspaceDeleteStatementsCoverRemovedFeatureTables(t *testing.T)
 		"connection_health_states",
 		"connection_health_events",
 		"connection_health_policies",
-		"ticket_attachments",
-		"ticket_messages",
-		"tickets",
 		"ticket_embed_configs",
 		"leaderboard_embed_configs",
 		"real_connections",
@@ -146,8 +146,8 @@ func TestWorkspaceDeleteStatementsDeleteChildrenBeforeParents(t *testing.T) {
 	}
 
 	assertBefore(order, "mass_email_batch_items", "mass_email_batches")
-	assertBefore(retiredOrder, "ticket_attachments", "ticket_messages")
-	assertBefore(retiredOrder, "ticket_messages", "tickets")
+	assertBefore(order, "ticket_attachments", "ticket_messages")
+	assertBefore(order, "ticket_messages", "tickets")
 	assertBefore(retiredOrder, "group_rate_campaign_items", "group_rate_campaigns")
 	assertBefore(retiredOrder, "connection_health_group_policy_assignments", "connection_health_policies")
 	assertBefore(retiredOrder, "connection_health_policy_assignments", "connection_health_policies")

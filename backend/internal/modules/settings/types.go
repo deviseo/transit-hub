@@ -59,6 +59,8 @@ type StrategySettings struct {
 	EnableDailyReport bool     `json:"enableDailyReport"`
 	DailyReportTime   string   `json:"dailyReportTime"`
 	DailyReportBotIDs []string `json:"dailyReportBotIds"`
+	// 工单：TransitLink 用户新建工单或追问时，推送给 TicketNotifyBotIDs（为空时不推送）。
+	TicketNotifyBotIDs []string `json:"ticketNotifyBotIds"`
 }
 
 // DefaultDailyReportTime 是经营日报的默认发送时间（北京时间）。

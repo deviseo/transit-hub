@@ -7,6 +7,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"transithub/backend/internal/modules/sales"
 	"transithub/backend/internal/modules/settings"
 	"transithub/backend/internal/modules/system"
+	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/modules/user_activity"
 	"transithub/backend/internal/shared/authctx"
@@ -191,6 +193,28 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		clientGroups{sites: mySitesService, platform: platformService},
 	)
 	client_config.RegisterRoutes(server.mux, clientConfigService)
+
+	// 工单：TransitLink 用户用自己在站点上的登录凭证换工单会话（站点地址来自「客户端」配置），
+	// 站长在「工单」页面回复；新工单和用户追问推送到策略里选的工单通知机器人。图片存在数据目录里。
+	ticketSessions := tickets.NewSessionStore(redisClient)
+	var ticketFiles tickets.Files
+	ticketStorage, err := tickets.NewAttachmentStorage(filepath.Join(cfg.DataDir, "ticket-uploads"))
+	if err != nil {
+		log.Printf("[tickets] image uploads are disabled: %v", err)
+		ticketStorage = nil
+	} else {
+		ticketFiles = ticketStorage
+	}
+	ticketsService := tickets.NewService(
+		tickets.NewRepository(db),
+		ticketSessions,
+		tickets.NewSiteVerifier(outboundProxy.NewClient),
+		ticketPortals{configs: clientConfigService, sites: clientSites{accounts: adminAccountsService}},
+		clientSites{accounts: adminAccountsService},
+		ticketFiles,
+		ticketNotifier{strategies: settingsService, notifier: settingsService, names: workspaceNames{accounts: adminAccountsService}},
+	)
+	tickets.RegisterRoutes(server.mux, ticketsService)
 	reportBuilder.SetPriceChanges(profitService)
 
 	// 所有 workspace 表 schema 完成后再补 legacy 归属；随后才启动 restore、worker 和 scheduler，
@@ -255,6 +279,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	adminAccountsService.SetWorkspaceCleanup(workspaceCleanup{
 		dashboardSessions: dashboardSessionStore,
 		upstreamSites:     upstreamService,
+		tickets:           ticketCleanup{sessions: ticketSessions, files: ticketStorage},
 	})
 	adminAccountsService.StartCleanupWorker(context.Background(), time.Minute)
 	dashboardService.StartRefresher(context.Background())
@@ -450,6 +475,11 @@ type upstreamSiteCleaner interface {
 type workspaceCleanup struct {
 	dashboardSessions dashboardSessionCleaner
 	upstreamSites     upstreamSiteCleaner
+	tickets           ticketCleaner
+}
+
+type ticketCleaner interface {
+	Cleanup(ctx context.Context, userID string, adminAccountID string, attachmentPaths []string) error
 }
 
 func (c workspaceCleanup) CleanupDeletedWorkspace(ctx context.Context, payload admin_accounts.WorkspaceCleanupPayload) error {
@@ -464,7 +494,128 @@ func (c workspaceCleanup) CleanupDeletedWorkspace(ctx context.Context, payload a
 			errs = append(errs, fmt.Errorf("upstream site cleanup: %w", err))
 		}
 	}
+	if c.tickets != nil {
+		if err := c.tickets.Cleanup(ctx, payload.UserID, payload.AdminAccountID, payload.AttachmentPaths); err != nil {
+			errs = append(errs, fmt.Errorf("ticket cleanup: %w", err))
+		}
+	}
 	return errors.Join(errs...)
+}
+
+// ticketCleanup 删除已删除工作区的工单会话和图片文件（数据库里的工单行在删除工作区时已经删掉）。
+type ticketCleanup struct {
+	sessions *tickets.SessionStore
+	files    *tickets.AttachmentStorage
+}
+
+func (c ticketCleanup) Cleanup(ctx context.Context, userID string, adminAccountID string, attachmentPaths []string) error {
+	var errs []error
+	if c.sessions != nil {
+		if err := c.sessions.DeleteWorkspace(ctx, tickets.Workspace{UserID: userID, AdminAccountID: adminAccountID}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if c.files != nil {
+		for _, name := range attachmentPaths {
+			if err := c.files.Delete(name); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ticketPortals 把「客户端」配置和工作区的站点交给工单模块：专属链接对应哪个工作区、站点地址（用户访问的地址，
+// 没设置时用工作区的站点地址）、有没有开工单、问题分类。
+type ticketPortals struct {
+	configs *client_config.Service
+	sites   clientSites
+}
+
+func (p ticketPortals) Lookup(ctx context.Context, code string) (*tickets.Portal, error) {
+	config, err := p.configs.ByCode(ctx, code)
+	if err != nil || config == nil {
+		return nil, err
+	}
+	site, err := p.sites.Site(ctx, config.UserID, config.AdminAccountID)
+	if err != nil {
+		// 工作区已经删除。
+		return nil, nil
+	}
+	baseURL := config.SiteURL
+	if baseURL == "" {
+		baseURL = site.BaseURL
+	}
+	return &tickets.Portal{
+		Workspace:  tickets.Workspace{UserID: config.UserID, AdminAccountID: config.AdminAccountID},
+		Platform:   site.Platform,
+		BaseURL:    baseURL,
+		Enabled:    config.Enabled && config.TicketsEnabled,
+		Categories: config.TicketCategories,
+	}, nil
+}
+
+func (p ticketPortals) Settings(ctx context.Context, ws tickets.Workspace) (bool, []string, error) {
+	config, err := p.configs.ForWorkspace(ctx, client_config.Workspace{UserID: ws.UserID, AdminAccountID: ws.AdminAccountID})
+	if err != nil || config == nil {
+		return false, nil, err
+	}
+	return config.Enabled && config.TicketsEnabled, config.TicketCategories, nil
+}
+
+// ticketNotifier 把新工单和用户追问推送到工作区在策略里选的工单通知机器人（没选时不推送）。
+type ticketNotifier struct {
+	strategies alertStrategyReader
+	notifier   alertNotifier
+	names      workspaceNames
+}
+
+func (n ticketNotifier) TicketCreated(ctx context.Context, ticket tickets.Ticket, message tickets.Message) {
+	n.send(ctx, ticket, formatTicketNotice("🎫 新工单", n.names.WorkspaceName(ctx, ticket.UserID, ticket.AdminAccountID), ticket, message))
+}
+
+func (n ticketNotifier) CustomerReplied(ctx context.Context, ticket tickets.Ticket, message tickets.Message) {
+	n.send(ctx, ticket, formatTicketNotice("💬 工单有新回复", n.names.WorkspaceName(ctx, ticket.UserID, ticket.AdminAccountID), ticket, message))
+}
+
+func (n ticketNotifier) send(ctx context.Context, ticket tickets.Ticket, text string) {
+	strategy, err := n.strategies.GetStrategyForWorkspace(ctx, ticket.UserID, ticket.AdminAccountID)
+	if err != nil {
+		log.Printf("[tickets] load strategy failed admin_account_id=%s err=%v", ticket.AdminAccountID, err)
+		return
+	}
+	if len(strategy.TicketNotifyBotIDs) == 0 {
+		return
+	}
+	n.notifier.SendFormattedToWorkspaceBots(ctx, ticket.UserID, ticket.AdminAccountID, strategy.TicketNotifyBotIDs, text, settings.NotificationTemplateFormatText)
+}
+
+// formatTicketNotice 生成工单通知（纯文本，各种机器人都能显示）。
+func formatTicketNotice(title string, siteName string, ticket tickets.Ticket, message tickets.Message) string {
+	user := ticket.User.Username
+	if user == "" {
+		user = ticket.User.Email
+	}
+	if ticket.User.ID != "" {
+		user += "（ID " + ticket.User.ID + "）"
+	}
+	body := []rune(strings.TrimSpace(message.Body))
+	if len(body) > 200 {
+		body = append(body[:200], []rune("…")...)
+	}
+	lines := []string{title}
+	if siteName != "" {
+		lines = append(lines, "🏷️ 站点："+siteName)
+	}
+	lines = append(lines, "📝 标题："+ticket.Title, "📂 分类："+ticket.Category, "👤 用户："+user)
+	if len(body) > 0 {
+		lines = append(lines, "💬 内容："+string(body))
+	}
+	if count := len(message.Attachments); count > 0 {
+		lines = append(lines, fmt.Sprintf("🖼️ 附图 %d 张", count))
+	}
+	lines = append(lines, "请到 TransitHub 的「工单」页面处理。")
+	return strings.Join(lines, "\n")
 }
 
 func (w groupRateSnapshotWriter) SaveSiteSnapshot(ctx context.Context, userID string, adminAccountID string, siteID string, siteName string, sitePlatform upstream.Platform, groups []upstream.SnapshotGroup) error {
@@ -522,6 +673,7 @@ var protectedPathPrefixes = []string{
 	"/api/reports",
 	"/api/profit",
 	"/api/client-config",
+	"/api/tickets",
 }
 
 func (s *Server) protectedPath(path string) bool {

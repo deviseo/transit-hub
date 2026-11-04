@@ -78,6 +78,8 @@ func TestRepositorySavesAndFindsConfigs(t *testing.T) {
 		NoticeUpdatedAt:  &notice,
 		Support:          []SupportLink{{Type: "telegram", Label: "TG", Value: "https://t.me/x"}},
 		MinClientVersion: "0.2.0",
+		TicketsEnabled:   true,
+		TicketCategories: []string{"售后", "合作"},
 	}
 	if err := repo.Save(ctx, config); err != nil {
 		t.Fatal(err)
@@ -88,7 +90,7 @@ func TestRepositorySavesAndFindsConfigs(t *testing.T) {
 	}
 	if got.Workspace != ws || got.Brand.Name != "极速中转" || got.Recommend.Codex.Model != "gpt-6.1-sol" ||
 		len(got.Support) != 1 || got.Support[0].Value != "https://t.me/x" || !got.NoticeUpdatedAt.Equal(notice) || got.UpdatedAt == nil ||
-		got.MinClientVersion != "0.2.0" {
+		got.MinClientVersion != "0.2.0" || !got.TicketsEnabled || strings.Join(got.TicketCategories, ",") != "售后,合作" {
 		t.Fatalf("round trip: %+v", got)
 	}
 

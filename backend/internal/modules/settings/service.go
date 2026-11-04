@@ -105,6 +105,7 @@ func DefaultStrategySettings() StrategySettings {
 		MultiplierTemplateFormat: NotificationTemplateFormatText,
 		DailyReportTime:          DefaultDailyReportTime,
 		DailyReportBotIDs:        []string{},
+		TicketNotifyBotIDs:       []string{},
 	}
 }
 
@@ -335,6 +336,9 @@ func normalizeStrategySettings(settings StrategySettings) StrategySettings {
 	settings.DailyReportTime = strings.TrimSpace(settings.DailyReportTime)
 	if settings.DailyReportBotIDs == nil {
 		settings.DailyReportBotIDs = []string{}
+	}
+	if settings.TicketNotifyBotIDs == nil {
+		settings.TicketNotifyBotIDs = []string{}
 	}
 	return settings
 }

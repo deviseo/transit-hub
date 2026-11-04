@@ -75,7 +75,16 @@ type Config struct {
 	Support         []SupportLink
 	// MinClientVersion：TransitLink 的最低版本（例如 0.2.0），低于它的客户端提示更新；空表示不限制。
 	MinClientVersion string
+	// 工单：开启后 TransitLink 里出现「工单」；TicketCategories 是用户能选的问题分类。
+	TicketsEnabled   bool
+	TicketCategories []string
 	UpdatedAt        *time.Time
+}
+
+// TicketSettings 是「客户端」页面里的工单设置。
+type TicketSettings struct {
+	Enabled    bool     `json:"enabled"`
+	Categories []string `json:"categories"`
 }
 
 // UpdateRequest 是保存配置的请求。
@@ -88,24 +97,26 @@ type UpdateRequest struct {
 	Notice    string        `json:"notice"`
 	Support   []SupportLink `json:"support"`
 	// MinClientVersion 例如 "0.2.0" 或 "v0.2.0"；空表示不限制。
-	MinClientVersion string `json:"minClientVersion"`
+	MinClientVersion string         `json:"minClientVersion"`
+	Tickets          TicketSettings `json:"tickets"`
 }
 
 // AdminView 是「客户端」页面看到的配置，带上当前站点的信息。
 type AdminView struct {
-	Enabled          bool          `json:"enabled"`
-	Code             string        `json:"code"`
-	ConfigPath       string        `json:"configPath"`
-	HubURL           string        `json:"hubUrl"`
-	SiteURL          string        `json:"siteUrl"`
-	Platform         string        `json:"platform"`
-	Brand            Brand         `json:"brand"`
-	Recommend        Recommend     `json:"recommend"`
-	Notice           string        `json:"notice"`
-	NoticeUpdatedAt  *time.Time    `json:"noticeUpdatedAt"`
-	Support          []SupportLink `json:"support"`
-	MinClientVersion string        `json:"minClientVersion"`
-	UpdatedAt        *time.Time    `json:"updatedAt"`
+	Enabled          bool           `json:"enabled"`
+	Code             string         `json:"code"`
+	ConfigPath       string         `json:"configPath"`
+	HubURL           string         `json:"hubUrl"`
+	SiteURL          string         `json:"siteUrl"`
+	Platform         string         `json:"platform"`
+	Brand            Brand          `json:"brand"`
+	Recommend        Recommend      `json:"recommend"`
+	Notice           string         `json:"notice"`
+	NoticeUpdatedAt  *time.Time     `json:"noticeUpdatedAt"`
+	Support          []SupportLink  `json:"support"`
+	MinClientVersion string         `json:"minClientVersion"`
+	Tickets          TicketSettings `json:"tickets"`
+	UpdatedAt        *time.Time     `json:"updatedAt"`
 }
 
 // Group 是推荐分组下拉框里的一项（站点自己的用户分组）。
@@ -125,6 +136,12 @@ type PublicConfig struct {
 	Notice    PublicNotice  `json:"notice"`
 	Support   []SupportLink `json:"support"`
 	Client    PublicClient  `json:"client"`
+	Tickets   PublicTickets `json:"tickets"`
+}
+
+// PublicTickets 告诉客户端有没有工单（分类在换取工单会话时返回）。
+type PublicTickets struct {
+	Enabled bool `json:"enabled"`
 }
 
 // PublicClient 是对客户端本身的要求。

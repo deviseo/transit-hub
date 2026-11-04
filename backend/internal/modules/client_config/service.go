@@ -139,6 +139,7 @@ func (s *Service) view(ctx context.Context, config Config) (AdminView, error) {
 		NoticeUpdatedAt:  config.NoticeUpdatedAt,
 		Support:          config.Support,
 		MinClientVersion: config.MinClientVersion,
+		Tickets:          TicketSettings{Enabled: config.TicketsEnabled, Categories: categoriesOrDefault(config.TicketCategories)},
 		UpdatedAt:        config.UpdatedAt,
 	}
 	if view.Support == nil {
@@ -178,6 +179,7 @@ func (s *Service) Public(ctx context.Context, code string) (PublicConfig, error)
 		Notice:    PublicNotice{Content: config.Notice, UpdatedAt: config.NoticeUpdatedAt},
 		Support:   support,
 		Client:    PublicClient{MinVersion: config.MinClientVersion},
+		Tickets:   PublicTickets{Enabled: config.TicketsEnabled},
 	}, nil
 }
 
@@ -290,7 +292,55 @@ func normalize(req UpdateRequest) (Config, error) {
 		return Config{}, invalid
 	}
 	config.MinClientVersion = version
+	config.TicketsEnabled = req.Tickets.Enabled
+	if config.TicketCategories, ok = normalizeCategories(req.Tickets.Categories); !ok {
+		return Config{}, invalid
+	}
 	return config, nil
+}
+
+// DefaultTicketCategories 是工单的默认问题分类（和迁移 000026 的默认值一致）。
+var DefaultTicketCategories = []string{"通用问题", "余额/计费", "接口调用", "账号/登录"}
+
+// normalizeCategories 去掉空白和重复的分类；最多 20 个、每个最多 40 个字；一个都没有时用默认分类。
+func normalizeCategories(values []string) ([]string, bool) {
+	categories := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		if utf8.RuneCountInString(value) > 40 {
+			return nil, false
+		}
+		seen[value] = true
+		categories = append(categories, value)
+	}
+	if len(categories) > 20 {
+		return nil, false
+	}
+	if len(categories) == 0 {
+		categories = append([]string(nil), DefaultTicketCategories...)
+	}
+	return categories, true
+}
+
+// ByCode 按专属链接代码读取配置（工单入口用）；没有时返回 nil。
+func (s *Service) ByCode(ctx context.Context, code string) (*Config, error) {
+	return s.store.GetByCode(ctx, code)
+}
+
+// ForWorkspace 读取工作区的配置（工单用）；没有保存过时返回 nil。
+func (s *Service) ForWorkspace(ctx context.Context, ws Workspace) (*Config, error) {
+	return s.store.Get(ctx, ws)
+}
+
+func categoriesOrDefault(categories []string) []string {
+	if len(categories) == 0 {
+		return append([]string(nil), DefaultTicketCategories...)
+	}
+	return categories
 }
 
 // clientVersionPattern：TransitLink 的版本号，例如 0.2.0。
