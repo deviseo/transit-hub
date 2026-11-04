@@ -110,7 +110,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
-# - 镜像 tag（默认使用 deviseo/transithub:v1.0.2）
+# - 镜像 tag（默认使用 deviseo/transithub:v1.1.0）
 # - 替换所有 change-this-* 占位值
 # - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -135,7 +135,7 @@ http://YOUR_SERVER_IP:10621
 ```text
 data/postgres
 data/redis
-data/app        # 在线更新的版本和凭据加密的密钥
+data/app        # 在线更新的版本、凭据加密的密钥和工单图片
 ```
 
 `SMTP_ENCRYPTION_KEY` 是可选环境变量，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。缺失该变量不会阻止应用启动，也不影响任何非 SMTP 功能。生成方式：
@@ -176,6 +176,9 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 「客户端」页面会在 `/api/client/v1/sites/<代码>` 发布一份只读配置，供 TransitLink 桌面客户端读取。用户的电脑需要能访问到它，所以请把 `/api/client/` 公开出去（例如通过反向代理）；后台和其他 `/api/` 路径可以继续只在内网访问。在该页面把「TransitHub 对外地址」填成公网 URL，再把生成的 `transitlink://connect?config=...` 链接发给用户。
 
+- **工单**：在同一页面打开后，用户可以在 TransitLink 里给你提交问题，你在「工单」页面回复。换取工单会话前，TransitHub 会用用户自己的登录去你的站点核实身份，只有你的用户能提交。工单接口也在 `/api/client/` 下。新工单推送给哪些机器人，在「系统设置 → 策略」里选。
+- **TransitLink 最低版本**：低于这个版本的客户端会提示用户更新。
+
 ### 开发依赖服务
 
 本地开发只启动 PostgreSQL 和 Redis：
@@ -191,7 +194,7 @@ docker compose -f deploy/docker-compose.yml up -d
 由于 Dockerfile 放在 `deploy/`，但构建上下文需要使用仓库根目录，请使用：
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.2 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.1.0 .
 ```
 
 ### 发布包
@@ -199,10 +202,10 @@ docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.2 .
 在线更新安装的是 GitHub Release 里附带的更新包，用下面的命令构建：
 
 ```bash
-scripts/build-release.sh v1.0.2
+scripts/build-release.sh v1.1.0
 ```
 
-它会在 `dist/release/v1.0.2/` 生成 `transithub_v1.0.2_linux_amd64.tar.gz`、`transithub_v1.0.2_linux_arm64.tar.gz` 和 `checksums.txt`，三个文件都要上传到 Release。版本号必须和 `backend/internal/config/config.go` 里的 `defaultAppVersion` 一致，服务端靠它确认新版本已经启动。
+它会在 `dist/release/v1.1.0/` 生成 `transithub_v1.1.0_linux_amd64.tar.gz`、`transithub_v1.1.0_linux_arm64.tar.gz` 和 `checksums.txt`，三个文件都要上传到 Release。版本号必须和 `backend/internal/config/config.go` 里的 `defaultAppVersion` 一致，服务端靠它确认新版本已经启动。
 
 ## 本地开发
 

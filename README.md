@@ -111,7 +111,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
-# - image tag (defaults to deviseo/transithub:v1.0.2)
+# - image tag (defaults to deviseo/transithub:v1.1.0)
 # - replace every change-this-* placeholder
 # - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -136,7 +136,7 @@ Persistent data is stored under the repository root `data/` directory by default
 ```text
 data/postgres
 data/redis
-data/app        # online updates and the credential encryption key
+data/app        # online updates, the credential encryption key and ticket images
 ```
 
 `SMTP_ENCRYPTION_KEY` is an optional environment variable, only required if you want to save an SMTP password or send test emails from **System Settings > Email Settings**. Its absence does not prevent the application from starting and does not affect any non-SMTP feature. Generate a value with:
@@ -177,6 +177,9 @@ Saved credentials are encrypted at rest: your site's admin session, upstream sit
 
 The **Client** page publishes a read-only config at `/api/client/v1/sites/<code>` for the TransitLink desktop client. Your users' computers must be able to reach it, so expose `/api/client/` publicly (for example through your reverse proxy); the admin console and the other `/api/` paths can stay private. Set **Public TransitHub address** on that page to the public URL, then share the generated `transitlink://connect?config=...` link with your users.
 
+- **Tickets**: turn them on in the same page and TransitLink users can send you questions, which you answer on the **Tickets** page. Before opening a ticket session, TransitHub checks the user's own login against your site, so only your users can file tickets. The ticket API also lives under `/api/client/`. Choose the bots that hear about new tickets in **System Settings > Strategy**.
+- **Minimum TransitLink version**: older clients show a banner asking their users to update.
+
 ### Development Services
 
 For local development dependencies only:
@@ -192,7 +195,7 @@ This starts PostgreSQL and Redis on local ports `5432` and `6379`.
 Because the Dockerfile is stored in `deploy/` but expects the repository root as build context, build with:
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.2 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.1.0 .
 ```
 
 ### Release Packages
@@ -200,10 +203,10 @@ docker build -f deploy/Dockerfile -t deviseo/transithub:v1.0.2 .
 Online updates install the packages attached to a GitHub Release. Build them with:
 
 ```bash
-scripts/build-release.sh v1.0.2
+scripts/build-release.sh v1.1.0
 ```
 
-This writes `transithub_v1.0.2_linux_amd64.tar.gz`, `transithub_v1.0.2_linux_arm64.tar.gz` and `checksums.txt` to `dist/release/v1.0.2/`; upload all three to the release. The version must match `defaultAppVersion` in `backend/internal/config/config.go`, because the server uses it to confirm that the new version started.
+This writes `transithub_v1.1.0_linux_amd64.tar.gz`, `transithub_v1.1.0_linux_arm64.tar.gz` and `checksums.txt` to `dist/release/v1.1.0/`; upload all three to the release. The version must match `defaultAppVersion` in `backend/internal/config/config.go`, because the server uses it to confirm that the new version started.
 
 ## Local Development
 
