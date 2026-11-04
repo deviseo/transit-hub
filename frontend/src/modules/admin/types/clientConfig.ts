@@ -42,6 +42,8 @@ export interface ClientConfig {
   notice: string
   noticeUpdatedAt: string | null
   support: ClientSupportLink[]
+  /** TransitLink 最低版本（例如 0.2.0），低于它的客户端提示更新；空表示不限制。 */
+  minClientVersion: string
   updatedAt: string | null
 }
 
@@ -53,6 +55,7 @@ export interface ClientConfigUpdate {
   recommend: ClientRecommend
   notice: string
   support: ClientSupportLink[]
+  minClientVersion: string
 }
 
 export interface ClientGroup {

@@ -73,7 +73,9 @@ type Config struct {
 	Notice          string
 	NoticeUpdatedAt *time.Time
 	Support         []SupportLink
-	UpdatedAt       *time.Time
+	// MinClientVersion：TransitLink 的最低版本（例如 0.2.0），低于它的客户端提示更新；空表示不限制。
+	MinClientVersion string
+	UpdatedAt        *time.Time
 }
 
 // UpdateRequest 是保存配置的请求。
@@ -85,22 +87,25 @@ type UpdateRequest struct {
 	Recommend Recommend     `json:"recommend"`
 	Notice    string        `json:"notice"`
 	Support   []SupportLink `json:"support"`
+	// MinClientVersion 例如 "0.2.0" 或 "v0.2.0"；空表示不限制。
+	MinClientVersion string `json:"minClientVersion"`
 }
 
 // AdminView 是「客户端」页面看到的配置，带上当前站点的信息。
 type AdminView struct {
-	Enabled         bool          `json:"enabled"`
-	Code            string        `json:"code"`
-	ConfigPath      string        `json:"configPath"`
-	HubURL          string        `json:"hubUrl"`
-	SiteURL         string        `json:"siteUrl"`
-	Platform        string        `json:"platform"`
-	Brand           Brand         `json:"brand"`
-	Recommend       Recommend     `json:"recommend"`
-	Notice          string        `json:"notice"`
-	NoticeUpdatedAt *time.Time    `json:"noticeUpdatedAt"`
-	Support         []SupportLink `json:"support"`
-	UpdatedAt       *time.Time    `json:"updatedAt"`
+	Enabled          bool          `json:"enabled"`
+	Code             string        `json:"code"`
+	ConfigPath       string        `json:"configPath"`
+	HubURL           string        `json:"hubUrl"`
+	SiteURL          string        `json:"siteUrl"`
+	Platform         string        `json:"platform"`
+	Brand            Brand         `json:"brand"`
+	Recommend        Recommend     `json:"recommend"`
+	Notice           string        `json:"notice"`
+	NoticeUpdatedAt  *time.Time    `json:"noticeUpdatedAt"`
+	Support          []SupportLink `json:"support"`
+	MinClientVersion string        `json:"minClientVersion"`
+	UpdatedAt        *time.Time    `json:"updatedAt"`
 }
 
 // Group 是推荐分组下拉框里的一项（站点自己的用户分组）。
@@ -119,6 +124,13 @@ type PublicConfig struct {
 	Recommend Recommend     `json:"recommend"`
 	Notice    PublicNotice  `json:"notice"`
 	Support   []SupportLink `json:"support"`
+	Client    PublicClient  `json:"client"`
+}
+
+// PublicClient 是对客户端本身的要求。
+type PublicClient struct {
+	// MinVersion：低于这个版本的 TransitLink 提示用户更新；空表示不限制。
+	MinVersion string `json:"minVersion"`
 }
 
 type PublicSite struct {

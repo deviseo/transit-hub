@@ -199,6 +199,8 @@ func TestValidation(t *testing.T) {
 		"bad support":     {UpdateRequest{Support: []SupportLink{{Type: "fax", Label: "传真", Value: "123"}}}, ErrorInvalid},
 		"support no link": {UpdateRequest{Support: []SupportLink{{Type: "qq", Label: "QQ 群"}}}, ErrorInvalid},
 		"long notice":     {UpdateRequest{Notice: strings.Repeat("字", 2001)}, ErrorInvalid},
+		"bad version":     {UpdateRequest{MinClientVersion: "latest"}, ErrorInvalid},
+		"short version":   {UpdateRequest{MinClientVersion: "0.2"}, ErrorInvalid},
 	}
 	for name, tc := range cases {
 		_, err := normalize(tc.req)
@@ -226,5 +228,23 @@ func TestRandomCodesAreValid(t *testing.T) {
 			t.Fatalf("bad or repeated code %q", code)
 		}
 		seen[code] = true
+	}
+}
+
+func TestMinimumClientVersionIsPublished(t *testing.T) {
+	service, _ := newTestService()
+	ctx := context.Background()
+	view, err := service.Update(ctx, ws, UpdateRequest{Enabled: true, MinClientVersion: " v0.2.0 "})
+	if err != nil || view.MinClientVersion != "0.2.0" {
+		t.Fatalf("expected the version without the v prefix: %+v %v", view, err)
+	}
+	public, err := service.Public(ctx, view.Code)
+	if err != nil || public.Client.MinVersion != "0.2.0" {
+		t.Fatalf("public config: %+v %v", public.Client, err)
+	}
+	// 清空表示不限制。
+	view, _ = service.Update(ctx, ws, UpdateRequest{Enabled: true})
+	if public, _ := service.Public(ctx, view.Code); public.Client.MinVersion != "" {
+		t.Fatalf("empty means no requirement: %+v", public.Client)
 	}
 }

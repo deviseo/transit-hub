@@ -20,7 +20,7 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 const selectColumns = `user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name, brand_logo, brand_color,
-	welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support, updated_at`
+	welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support, min_client_version, updated_at`
 
 func scanConfig(row pgx.Row) (*Config, error) {
 	var config Config
@@ -30,7 +30,7 @@ func scanConfig(row pgx.Row) (*Config, error) {
 		&config.Brand.Name, &config.Brand.Logo, &config.Brand.Color, &config.Brand.Welcome,
 		&config.Recommend.ClaudeCode.Group, &config.Recommend.ClaudeCode.Model,
 		&config.Recommend.Codex.Group, &config.Recommend.Codex.Model,
-		&config.Notice, &config.NoticeUpdatedAt, &support, &updatedAt)
+		&config.Notice, &config.NoticeUpdatedAt, &support, &config.MinClientVersion, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -65,17 +65,17 @@ func (r *Repository) Save(ctx context.Context, config Config) error {
 	}
 	_, err = r.db.Exec(ctx, `INSERT INTO client_configs (user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name,
 		brand_logo, brand_color, welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support,
-		created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now(), now())
+		min_client_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, now(), now())
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET code = EXCLUDED.code, enabled = EXCLUDED.enabled,
 			hub_url = EXCLUDED.hub_url, site_url = EXCLUDED.site_url, brand_name = EXCLUDED.brand_name,
 			brand_logo = EXCLUDED.brand_logo, brand_color = EXCLUDED.brand_color, welcome = EXCLUDED.welcome,
 			claude_group = EXCLUDED.claude_group, claude_model = EXCLUDED.claude_model, codex_group = EXCLUDED.codex_group,
 			codex_model = EXCLUDED.codex_model, notice = EXCLUDED.notice, notice_updated_at = EXCLUDED.notice_updated_at,
-			support = EXCLUDED.support, updated_at = now()`,
+			support = EXCLUDED.support, min_client_version = EXCLUDED.min_client_version, updated_at = now()`,
 		config.UserID, config.AdminAccountID, config.Code, config.Enabled, config.HubURL, config.SiteURL, config.Brand.Name,
 		config.Brand.Logo, config.Brand.Color, config.Brand.Welcome, config.Recommend.ClaudeCode.Group,
 		config.Recommend.ClaudeCode.Model, config.Recommend.Codex.Group, config.Recommend.Codex.Model, config.Notice,
-		config.NoticeUpdatedAt, support)
+		config.NoticeUpdatedAt, support, config.MinClientVersion)
 	return err
 }

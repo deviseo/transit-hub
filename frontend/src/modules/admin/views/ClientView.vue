@@ -38,6 +38,7 @@ const fromConfig = (config: ClientConfig): ClientConfigUpdate => ({
   recommend: { claudeCode: { ...config.recommend.claudeCode }, codex: { ...config.recommend.codex } },
   notice: config.notice,
   support: config.support.map((link) => ({ ...link })),
+  minClientVersion: config.minClientVersion,
 })
 
 const load = async () => {
@@ -224,6 +225,14 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
               <label for="client-site-url" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.link.siteUrl') }}</label>
               <Input id="client-site-url" v-model="form.siteUrl" placeholder="https://api.example.com" class="h-9 text-sm" />
               <p class="text-xs text-muted-foreground">{{ t('admin.client.link.siteUrlHelp') }}</p>
+            </div>
+            <div class="grid gap-2">
+              <label for="client-min-version" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.link.minVersion') }}</label>
+              <Input id="client-min-version" v-model="form.minClientVersion" :placeholder="t('admin.client.link.minVersionPlaceholder')" maxlength="20" class="h-9 text-sm" />
+              <p class="text-xs text-muted-foreground">
+                {{ t('admin.client.link.minVersionHelp') }}
+                <a href="https://github.com/deviseo/transitlink/releases" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">{{ t('admin.client.link.versions') }}</a>
+              </p>
             </div>
           </div>
 

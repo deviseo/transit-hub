@@ -128,17 +128,18 @@ func (s *Service) view(ctx context.Context, config Config) (AdminView, error) {
 		return AdminView{}, err
 	}
 	view := AdminView{
-		Enabled:         config.Enabled,
-		Code:            config.Code,
-		HubURL:          config.HubURL,
-		SiteURL:         config.SiteURL,
-		Platform:        site.Platform,
-		Brand:           config.Brand,
-		Recommend:       config.Recommend,
-		Notice:          config.Notice,
-		NoticeUpdatedAt: config.NoticeUpdatedAt,
-		Support:         config.Support,
-		UpdatedAt:       config.UpdatedAt,
+		Enabled:          config.Enabled,
+		Code:             config.Code,
+		HubURL:           config.HubURL,
+		SiteURL:          config.SiteURL,
+		Platform:         site.Platform,
+		Brand:            config.Brand,
+		Recommend:        config.Recommend,
+		Notice:           config.Notice,
+		NoticeUpdatedAt:  config.NoticeUpdatedAt,
+		Support:          config.Support,
+		MinClientVersion: config.MinClientVersion,
+		UpdatedAt:        config.UpdatedAt,
 	}
 	if view.Support == nil {
 		view.Support = []SupportLink{}
@@ -176,6 +177,7 @@ func (s *Service) Public(ctx context.Context, code string) (PublicConfig, error)
 		Recommend: config.Recommend,
 		Notice:    PublicNotice{Content: config.Notice, UpdatedAt: config.NoticeUpdatedAt},
 		Support:   support,
+		Client:    PublicClient{MinVersion: config.MinClientVersion},
 	}, nil
 }
 
@@ -283,8 +285,16 @@ func normalize(req UpdateRequest) (Config, error) {
 	if len(config.Support) > maxSupportLinks {
 		return Config{}, invalid
 	}
+	version := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(req.MinClientVersion), "v"), "V")
+	if version != "" && !clientVersionPattern.MatchString(version) {
+		return Config{}, invalid
+	}
+	config.MinClientVersion = version
 	return config, nil
 }
+
+// clientVersionPattern：TransitLink 的版本号，例如 0.2.0。
+var clientVersionPattern = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$`)
 
 // normalizeURL 校验 http(s) 地址。keepPath 为真时保留路径（TransitHub 可能部署在子路径下），
 // 否则只留协议、主机和端口（站点地址）。

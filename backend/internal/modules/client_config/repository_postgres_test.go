@@ -68,15 +68,16 @@ func TestRepositorySavesAndFindsConfigs(t *testing.T) {
 	}
 	notice := time.Date(2026, 11, 4, 8, 0, 0, 0, time.UTC)
 	config := Config{
-		Workspace:       ws,
-		Code:            "abcdefghij",
-		Enabled:         true,
-		HubURL:          "https://hub.example.com",
-		Brand:           Brand{Name: "极速中转", Color: "#2563eb", Logo: "https://cdn.example.com/logo.png"},
-		Recommend:       Recommend{Codex: ToolRecommend{Group: "codex", Model: "gpt-6.1-sol"}},
-		Notice:          "维护",
-		NoticeUpdatedAt: &notice,
-		Support:         []SupportLink{{Type: "telegram", Label: "TG", Value: "https://t.me/x"}},
+		Workspace:        ws,
+		Code:             "abcdefghij",
+		Enabled:          true,
+		HubURL:           "https://hub.example.com",
+		Brand:            Brand{Name: "极速中转", Color: "#2563eb", Logo: "https://cdn.example.com/logo.png"},
+		Recommend:        Recommend{Codex: ToolRecommend{Group: "codex", Model: "gpt-6.1-sol"}},
+		Notice:           "维护",
+		NoticeUpdatedAt:  &notice,
+		Support:          []SupportLink{{Type: "telegram", Label: "TG", Value: "https://t.me/x"}},
+		MinClientVersion: "0.2.0",
 	}
 	if err := repo.Save(ctx, config); err != nil {
 		t.Fatal(err)
@@ -86,7 +87,8 @@ func TestRepositorySavesAndFindsConfigs(t *testing.T) {
 		t.Fatalf("by code: %v %+v", err, got)
 	}
 	if got.Workspace != ws || got.Brand.Name != "极速中转" || got.Recommend.Codex.Model != "gpt-6.1-sol" ||
-		len(got.Support) != 1 || got.Support[0].Value != "https://t.me/x" || !got.NoticeUpdatedAt.Equal(notice) || got.UpdatedAt == nil {
+		len(got.Support) != 1 || got.Support[0].Value != "https://t.me/x" || !got.NoticeUpdatedAt.Equal(notice) || got.UpdatedAt == nil ||
+		got.MinClientVersion != "0.2.0" {
 		t.Fatalf("round trip: %+v", got)
 	}
 
