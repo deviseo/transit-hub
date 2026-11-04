@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"transithub/backend/internal/selfupdate"
+	"transithub/backend/internal/shared/datadir"
 )
 
 const (
@@ -80,6 +81,10 @@ type UpdateCheckResponse struct {
 	CanUpdate bool `json:"canUpdate"`
 	// Reason 说明不能在线更新的原因：notAdmin、unsupported、noPackage。
 	Reason string `json:"reason,omitempty"`
+	// Persistent：数据目录是持久卷（在线更新的版本和凭据密钥重建容器后还在）。
+	Persistent bool `json:"persistent"`
+	// CredentialsEncrypted：保存的登录凭据是加密的。
+	CredentialsEncrypted bool `json:"credentialsEncrypted"`
 }
 
 // ApplyUpdateResponse 是 POST /api/system/update 的响应：已开始在后台更新到这个版本。
@@ -213,6 +218,9 @@ func (s *Service) CheckUpdate(ctx context.Context, userID string, force bool) (U
 		PublishedAt: release.PublishedAt,
 		ReleaseURL:  release.HTMLURL,
 		CheckedAt:   checkedAt,
+
+		Persistent:           datadir.Persistent(s.cfg.DataDir),
+		CredentialsEncrypted: s.credentialsEncrypted,
 	}
 	if result.HasUpdate {
 		result.Reason = s.updateBlocker(ctx, userID, release)

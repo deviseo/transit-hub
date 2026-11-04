@@ -1339,6 +1339,10 @@ export default {
         reverted: '新版本没能启动，服务已自动退回 {version}。请查看服务器日志（docker compose logs app）找原因，或者用下面的 Docker 方法更新。',
         reload: '刷新页面'
       },
+      deployment: {
+        notPersistent: '数据目录没有挂载持久卷：在线更新装的新版本和凭据加密的密钥都保存在这里，重新创建容器后会丢失。请在 docker-compose.prod.yml 的 app 服务里加上 ../data/app:/app/data，然后重新创建容器。',
+        notEncrypted: '保存的登录凭据（站点会话、机器人密钥、代理密码）目前没有加密。挂载上面的数据目录，或者设置环境变量 CREDENTIAL_ENCRYPTION_KEY 后重启，就会自动加密。'
+      },
       reasons: {
         notAdmin: '只有系统管理员可以在线更新。',
         unsupported: '这台服务器不支持在线更新（需要在 Linux 服务器上运行，并且数据目录可写）。',

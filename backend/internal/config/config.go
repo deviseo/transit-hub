@@ -39,6 +39,10 @@ type Config struct {
 	// SMTP 密码加密密钥：base64 编码的 32 字节 AES-256-GCM key，由 settings 模块解析和校验。
 	// 应用启动时是可选项，缺失不影响启动；这里只原样读取环境变量原值，不做任何解析或校验。
 	SMTPEncryptionKey string
+
+	// 登录凭据（站点会话、上游登录状态、机器人密钥、代理密码）的加密密钥：base64 编码的 32 字节。
+	// 可选：不设置时用数据目录里自动生成的 credential.key（数据目录需要是持久卷）。由 secretbox 解析。
+	CredentialEncryptionKey string
 }
 
 func Load() Config {
@@ -65,6 +69,8 @@ func Load() Config {
 		AppVersion: defaultAppVersion,
 
 		SMTPEncryptionKey: os.Getenv("SMTP_ENCRYPTION_KEY"),
+
+		CredentialEncryptionKey: os.Getenv("CREDENTIAL_ENCRYPTION_KEY"),
 	}
 }
 

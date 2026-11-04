@@ -135,7 +135,7 @@ http://YOUR_SERVER_IP:10621
 ```text
 data/postgres
 data/redis
-data/app        # 在线更新安装的新版本
+data/app        # 在线更新的版本和凭据加密的密钥
 ```
 
 `SMTP_ENCRYPTION_KEY` 是可选环境变量，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。缺失该变量不会阻止应用启动，也不影响任何非 SMTP 功能。生成方式：
@@ -162,6 +162,15 @@ openssl rand -base64 32
 docker compose -f deploy/docker-compose.prod.yml pull
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
+
+### 凭据加密
+
+保存的登录凭据都是加密存储的：你自己站点的管理员会话、上游站点的登录状态（cookie、token、Admin Key）、通知机器人的密钥，以及出站代理地址。只拿到数据库或备份，看不到这些凭据。
+
+- 密钥在第一次启动时自动生成，保存在 `data/app/credential.key`（也就是 `../data/app:/app/data` 这个挂载里）。想自己管理密钥，可以设置环境变量 `CREDENTIAL_ENCRYPTION_KEY`（base64 编码的 32 字节，`openssl rand -base64 32` 生成），它优先于密钥文件。
+- 备份 `data/postgres` 时要连同 `data/app/credential.key` 一起备份。没有密钥，保存的凭据就读不出来，只能重新登录站点、重新填写机器人和代理。
+- 数据目录不是持久卷时，TransitHub 继续不加密保存（否则重建容器后密钥丢失），并在版本号弹窗里提示，直到挂载好为止。
+- 旧版本保存的凭据会在启动约一分钟后自动改成加密保存。v1.0.2 之前的版本读不懂加密后的凭据，所以不要再降级到 v1.0.2 之前。
 
 ### TransitLink 客户端配置
 

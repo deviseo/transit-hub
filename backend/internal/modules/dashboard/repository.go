@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/redis/go-redis/v9"
+
+	"transithub/backend/internal/shared/secretbox"
 )
 
 // Redis key 约定：
@@ -18,9 +20,10 @@ const (
 	activeSetKey     = "dashboard:admin:active"
 )
 
-// Repository 封装仪表盘 admin 会话在 Redis 中的读写。
+// Repository 封装仪表盘 admin 会话在 Redis 中的读写。会话加密保存（Redis 会把数据持久化到磁盘）。
 type Repository struct {
-	client *redis.Client
+	client  *redis.Client
+	secrets *secretbox.Box
 }
 
 type ActiveSessionRef struct {
@@ -30,6 +33,16 @@ type ActiveSessionRef struct {
 
 func NewRepository(client *redis.Client) *Repository {
 	return &Repository{client: client}
+}
+
+// SetSecretBox 设置加密会话用的密钥（nil 表示不加密）。要在读写之前设置。
+func (r *Repository) SetSecretBox(box *secretbox.Box) {
+	r.secrets = box
+}
+
+// sessionAAD 把密文绑定到所属用户。
+func sessionAAD(userID string) string {
+	return "dashboard_session/" + userID
 }
 
 func sessionKey(userID string, adminAccountID string) string {
@@ -49,8 +62,14 @@ func (r *Repository) Get(ctx context.Context, userID string, adminAccountID stri
 		}
 		return nil, err
 	}
+	plain, err := r.secrets.Open(raw, sessionAAD(userID))
+	if err != nil {
+		// 读不出来（例如密钥丢了）：当作没有会话，需要重新登录。
+		secretbox.LogUnreadable(sessionAAD(userID)+"/"+adminAccountID+" (redis)", err)
+		return nil, nil
+	}
 	var session AdminSession
-	if err := json.Unmarshal([]byte(raw), &session); err != nil {
+	if err := json.Unmarshal(plain, &session); err != nil {
 		return nil, err
 	}
 	return &session, nil
@@ -59,7 +78,11 @@ func (r *Repository) Get(ctx context.Context, userID string, adminAccountID stri
 // Save 写入会话并把 userID 登记到活跃集合。
 // 会话长期有效（依赖后台刷新维持令牌），因此不设置 TTL。
 func (r *Repository) Save(ctx context.Context, userID string, adminAccountID string, session AdminSession) error {
-	payload, err := json.Marshal(session)
+	plain, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	payload, err := r.secrets.Seal(plain, sessionAAD(userID))
 	if err != nil {
 		return err
 	}
@@ -94,4 +117,48 @@ func (r *Repository) ActiveSessions(ctx context.Context) ([]ActiveSessionRef, er
 		refs = append(refs, ActiveSessionRef{UserID: parts[0], AdminAccountID: parts[1]})
 	}
 	return refs, nil
+}
+
+// EncryptLegacySessions 把加密之前保存的明文会话改成加密保存，返回改了几个。
+// 用 WATCH 保证期间被刷新过的会话不会被旧值覆盖（那个会话下次保存时会加密）。
+func (r *Repository) EncryptLegacySessions(ctx context.Context) (int, error) {
+	if r.secrets == nil {
+		return 0, nil
+	}
+	refs, err := r.ActiveSessions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	changed := 0
+	for _, ref := range refs {
+		key := sessionKey(ref.UserID, ref.AdminAccountID)
+		err := r.client.Watch(ctx, func(tx *redis.Tx) error {
+			raw, err := tx.Get(ctx, key).Result()
+			if errors.Is(err, redis.Nil) {
+				return nil
+			}
+			if err != nil || secretbox.IsSealed(raw) {
+				return err
+			}
+			sealed, err := r.secrets.Seal([]byte(raw), sessionAAD(ref.UserID))
+			if err != nil {
+				return err
+			}
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, key, sealed, 0)
+				return nil
+			})
+			if err == nil {
+				changed++
+			}
+			return err
+		}, key)
+		if errors.Is(err, redis.TxFailedErr) {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+	}
+	return changed, nil
 }

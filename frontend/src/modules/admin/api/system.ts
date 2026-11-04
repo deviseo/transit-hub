@@ -72,6 +72,10 @@ export interface SystemUpdateCheck {
   /** 可以在线更新（有新版本、是系统管理员、部署环境支持、Release 里有更新包）。 */
   canUpdate: boolean
   reason?: SystemUpdateBlocker
+  /** 数据目录是持久卷（在线更新的版本和凭据密钥重建容器后还在）。 */
+  persistent: boolean
+  /** 保存的登录凭据是加密的。 */
+  credentialsEncrypted: boolean
 }
 
 /** 检查更新；force 为真时不用服务端缓存（服务端默认缓存 10 分钟）。 */

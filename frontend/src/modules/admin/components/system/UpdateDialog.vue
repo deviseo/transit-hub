@@ -200,6 +200,15 @@ onBeforeUnmount(() => {
         <p v-if="error" class="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive" role="alert">{{ t(error) }}</p>
 
         <template v-if="result">
+          <div v-if="!result.persistent || !result.credentialsEncrypted" class="grid gap-2 rounded-lg bg-amber-500/10 p-3 text-amber-800 dark:text-amber-300" role="alert">
+            <p v-if="!result.persistent" class="flex items-start gap-2">
+              <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />{{ t('admin.update.deployment.notPersistent') }}
+            </p>
+            <p v-if="!result.credentialsEncrypted" class="flex items-start gap-2">
+              <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />{{ t('admin.update.deployment.notEncrypted') }}
+            </p>
+          </div>
+
           <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
             <dt class="text-muted-foreground">{{ t('admin.update.current') }}</dt>
             <dd class="font-medium text-foreground">{{ result.current }}</dd>

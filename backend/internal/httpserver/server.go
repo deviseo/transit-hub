@@ -31,8 +31,10 @@ import (
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/modules/user_activity"
 	"transithub/backend/internal/shared/authctx"
+	"transithub/backend/internal/shared/datadir"
 	"transithub/backend/internal/shared/httpjson"
 	"transithub/backend/internal/shared/outbound"
+	"transithub/backend/internal/shared/secretbox"
 )
 
 const (
@@ -55,6 +57,9 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 
 	health.RegisterRoutes(server.mux)
+	// 登录凭据加密保存：要在任何模块读写凭据之前取得密钥。
+	credentialBox := loadCredentialKey(cfg)
+
 	authService := auth.NewService(auth.NewRepository(db))
 	server.authService = authService
 	if err := authService.EnsureSchema(context.Background()); err != nil {
@@ -71,6 +76,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	// 已整体移除。不要以「加登录校验」的方式恢复它——任何已注册用户仍可借此枚举其他租户邮箱。
 	adminAccountsService := admin_accounts.NewService(admin_accounts.NewRepository(db))
 	upstreamRepository := upstream.NewRepository(db)
+	upstreamRepository.SetSecretBox(credentialBox)
 	if err := upstreamRepository.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
@@ -85,7 +91,10 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	// 保持旧部署行为不变。
 	outboundProxy := outbound.NewController()
 	systemService := system.NewService(cfg)
-	systemService.SetOutboundProxy(system.NewRepository(db), outboundProxy, systemAdminChecker{auth: authService, adminEmail: cfg.AdminEmail})
+	systemRepository := system.NewRepository(db)
+	systemRepository.SetSecretBox(credentialBox)
+	systemService.SetCredentialsEncrypted(credentialBox != nil)
+	systemService.SetOutboundProxy(systemRepository, outboundProxy, systemAdminChecker{auth: authService, adminEmail: cfg.AdminEmail})
 	if err := systemService.LoadOutboundProxy(context.Background()); err != nil {
 		log.Printf("[outbound-proxy] load saved settings failed, falling back to environment variables: %v", err)
 	}
@@ -97,12 +106,16 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	upstreamService.SetAdminAccountResolver(adminAccountsService)
 	upstream.RegisterRoutes(server.mux, upstreamService, adminAccountsService)
 	// 「我的站点」管理员会话：仪表盘登录后写入，仪表盘指标、用户分析、利润分析和群发邮件读取（必要时刷新令牌）。
-	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService)
+	mySitesRepository := my_sites.NewRepository(db)
+	mySitesRepository.SetSecretBox(credentialBox)
+	mySitesService := my_sites.NewService(mySitesRepository, platformService)
 	if err := mySitesService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
 
-	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
+	settingsRepository := settings.NewRepository(db)
+	settingsRepository.SetSecretBox(credentialBox)
+	settingsService := settings.NewService(http.DefaultClient, settingsRepository)
 	settingsService.SetAdminAccountResolver(adminAccountsService)
 	if err := settingsService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
@@ -223,6 +236,19 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	// 仪表盘 admin 登录门禁：复用 sub2api 平台客户端（platformService），会话存于 Redis，
 	// 并启动后台协程对临期令牌做自动刷新。
 	dashboardSessionStore := dashboard.NewRepository(redisClient)
+	dashboardSessionStore.SetSecretBox(credentialBox)
+	if credentialBox != nil {
+		// 启动一分钟后（在线更新的新版本已经确认启动成功）把加密之前保存的明文凭据改成加密保存。
+		time.AfterFunc(legacyCredentialDelay, func() {
+			encryptLegacyCredentials(context.Background(), []legacyCredentials{
+				{"site admin sessions", mySitesRepository.EncryptLegacySessions},
+				{"upstream sessions", upstreamRepository.EncryptLegacySessions},
+				{"dashboard sessions", dashboardSessionStore.EncryptLegacySessions},
+				{"notification channels", settingsRepository.EncryptLegacyNotificationChannels},
+				{"outbound proxy", systemRepository.EncryptLegacyOutboundProxy},
+			})
+		})
+	}
 	dashboardService := dashboard.NewService(dashboardSessionStore, platformService)
 	dashboardService.SetAdminAccountService(adminAccountsService)
 	dashboardService.SetMySiteSync(mySitesService)
@@ -843,4 +869,49 @@ func formatMultiplierChange(siteName, groupName string, oldRate, newRate float64
 		}
 	}
 	return message
+}
+
+// legacyCredentialDelay：启动后等这么久再加密旧的明文凭据（在线更新时新版本这时已经确认启动成功，
+// 万一新版本第一次启动就失败、退回旧版本，旧版本也不会遇到读不懂的密文）。
+const legacyCredentialDelay = time.Minute
+
+// loadCredentialKey 取得凭据加密密钥。设置了 CREDENTIAL_ENCRYPTION_KEY 就用它；否则用数据目录里的
+// credential.key（没有就生成）。数据目录不是持久卷时不生成密钥，继续明文保存：否则重建容器后密钥丢失，
+// 已保存的登录、机器人和代理配置会一下子全部读不出来。
+func loadCredentialKey(cfg config.Config) *secretbox.Box {
+	if strings.TrimSpace(cfg.CredentialEncryptionKey) == "" && !datadir.Persistent(cfg.DataDir) {
+		log.Printf("[credentials] WARNING: credentials are stored WITHOUT encryption: %s is not a persistent volume, "+
+			"so a generated key would be lost when the container is recreated. Mount it (../data/app:/app/data) or set %s.",
+			cfg.DataDir, secretbox.KeyEnv)
+		return nil
+	}
+	box, source, err := secretbox.Load(cfg.CredentialEncryptionKey, cfg.DataDir)
+	if err != nil {
+		panic(err)
+	}
+	if box == nil {
+		log.Printf("[credentials] WARNING: credentials are stored WITHOUT encryption: %s", source)
+		return nil
+	}
+	log.Printf("[credentials] credentials are encrypted with key %s (%s)", box.ID(), source)
+	return box
+}
+
+type legacyCredentials struct {
+	name    string
+	encrypt func(context.Context) (int, error)
+}
+
+// encryptLegacyCredentials 依次把各模块里还是明文的凭据改成加密保存；某一项失败只记日志，下次启动再试。
+func encryptLegacyCredentials(ctx context.Context, steps []legacyCredentials) {
+	for _, step := range steps {
+		changed, err := step.encrypt(ctx)
+		if err != nil {
+			log.Printf("[credentials] encrypt saved %s: %v", step.name, err)
+			continue
+		}
+		if changed > 0 {
+			log.Printf("[credentials] encrypted %d saved %s", changed, step.name)
+		}
+	}
 }

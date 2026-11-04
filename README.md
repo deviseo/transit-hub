@@ -136,7 +136,7 @@ Persistent data is stored under the repository root `data/` directory by default
 ```text
 data/postgres
 data/redis
-data/app        # versions installed by online updates
+data/app        # online updates and the credential encryption key
 ```
 
 `SMTP_ENCRYPTION_KEY` is an optional environment variable, only required if you want to save an SMTP password or send test emails from **System Settings > Email Settings**. Its absence does not prevent the application from starting and does not affect any non-SMTP feature. Generate a value with:
@@ -163,6 +163,15 @@ Click the version number in the admin console's top bar to check for updates.
 docker compose -f deploy/docker-compose.prod.yml pull
 docker compose -f deploy/docker-compose.prod.yml up -d
 ```
+
+### Credential Encryption
+
+Saved credentials are encrypted at rest: your site's admin session, upstream site logins (cookies, tokens, Admin Keys), notification bot secrets and the outbound proxy URL. A database dump or backup alone doesn't reveal them.
+
+- The key is generated on first start as `data/app/credential.key`, inside the `../data/app:/app/data` volume. To manage it yourself, set `CREDENTIAL_ENCRYPTION_KEY` to a base64-encoded 32-byte value (`openssl rand -base64 32`); it takes precedence over the file.
+- Back up `data/app/credential.key` together with `data/postgres`. Without the key, saved credentials can't be read: you'd have to log in to your sites again and re-enter bot and proxy settings.
+- If the data directory isn't a persistent volume, TransitHub keeps storing credentials unencrypted, because a generated key would be lost when the container is recreated. The version dialog shows a warning until it's fixed.
+- Credentials saved by earlier versions are encrypted automatically about a minute after startup. Versions before v1.0.2 can't read encrypted credentials, so don't downgrade below v1.0.2.
 
 ### TransitLink Client Config
 

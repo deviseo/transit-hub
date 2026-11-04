@@ -10,6 +10,8 @@ type Service struct {
 	cfg config.Config
 
 	updates updateChecker
+	// credentialsEncrypted：保存的登录凭据是否加密（检查更新时一并提示部署问题）。
+	credentialsEncrypted bool
 
 	proxyStore      OutboundProxyStore
 	proxyController *outbound.Controller
@@ -26,4 +28,9 @@ func (s *Service) Version() VersionResponse {
 	return VersionResponse{
 		Version: s.cfg.AppVersion,
 	}
+}
+
+// SetCredentialsEncrypted 记录保存的登录凭据是否加密（启动时取得密钥后设置）。
+func (s *Service) SetCredentialsEncrypted(encrypted bool) {
+	s.credentialsEncrypted = encrypted
 }

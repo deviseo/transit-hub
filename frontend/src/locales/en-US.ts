@@ -1339,6 +1339,10 @@ export default {
         reverted: "The new version didn't start, so the server went back to {version}. Check the server logs (docker compose logs app) for the cause, or update with Docker as shown below.",
         reload: 'Reload page'
       },
+      deployment: {
+        notPersistent: "The data directory isn't a persistent volume. Online updates and the credential encryption key are stored there and are lost when the container is recreated. Add ../data/app:/app/data to the app service in docker-compose.prod.yml, then recreate the container.",
+        notEncrypted: 'Saved credentials (site sessions, bot secrets, proxy passwords) are not encrypted. Mount the data directory or set CREDENTIAL_ENCRYPTION_KEY, then restart, and they are encrypted automatically.'
+      },
       reasons: {
         notAdmin: 'Only the system admin can update online.',
         unsupported: "This server can't update online (it needs to run on Linux with a writable data folder).",
