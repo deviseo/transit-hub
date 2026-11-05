@@ -110,7 +110,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # 先编辑 deploy/docker-compose.prod.yml：
-# - 镜像 tag（默认使用 deviseo/transithub:v1.1.2）
+# - 镜像 tag（默认使用 deviseo/transithub:v1.2.0）
 # - 替换所有 change-this-* 占位值
 # - DATABASE_URL 和 POSTGRES_PASSWORD 中的数据库密码
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -195,7 +195,7 @@ docker compose -f deploy/docker-compose.yml up -d
 由于 Dockerfile 放在 `deploy/`，但构建上下文需要使用仓库根目录，请使用：
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v1.1.2 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.2.0 .
 ```
 
 ### 发布包
@@ -203,10 +203,10 @@ docker build -f deploy/Dockerfile -t deviseo/transithub:v1.1.2 .
 在线更新安装的是 GitHub Release 里附带的更新包，用下面的命令构建：
 
 ```bash
-scripts/build-release.sh v1.1.2
+scripts/build-release.sh v1.2.0
 ```
 
-它会在 `dist/release/v1.1.2/` 生成 `transithub_v1.1.2_linux_amd64.tar.gz`、`transithub_v1.1.2_linux_arm64.tar.gz` 和 `checksums.txt`，三个文件都要上传到 Release。版本号必须和 `backend/internal/config/config.go` 里的 `defaultAppVersion` 一致，服务端靠它确认新版本已经启动。
+它会在 `dist/release/v1.2.0/` 生成 `transithub_v1.2.0_linux_amd64.tar.gz`、`transithub_v1.2.0_linux_arm64.tar.gz` 和 `checksums.txt`，三个文件都要上传到 Release。版本号必须和 `backend/internal/config/config.go` 里的 `defaultAppVersion` 一致，服务端靠它确认新版本已经启动。
 
 ## 本地开发
 
