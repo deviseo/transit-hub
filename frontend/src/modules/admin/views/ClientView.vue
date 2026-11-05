@@ -268,6 +268,7 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
                 </Button>
               </div>
               <p v-if="!loaded.enabled" class="text-xs text-amber-600 dark:text-amber-400">{{ t('admin.client.link.disabledNote') }}</p>
+              <p v-if="loaded.linkSameDomain === false" class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{{ t('admin.client.link.otherDomain') }}</p>
               <p class="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                 {{ t('admin.client.link.configUrl') }}：<span class="break-all font-mono">{{ configUrl }}</span>
                 <a v-if="loaded.enabled" :href="configUrl" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-primary hover:underline">

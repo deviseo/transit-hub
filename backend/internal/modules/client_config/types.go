@@ -117,6 +117,9 @@ type AdminView struct {
 	MinClientVersion string         `json:"minClientVersion"`
 	Tickets          TicketSettings `json:"tickets"`
 	UpdatedAt        *time.Time     `json:"updatedAt"`
+	// LinkSameDomain：TransitHub 对外地址和用户访问的站点地址在同一个域名下。不在的话，用户第一次打开
+	// 专属链接时 TransitLink 会提醒他确认链接是站长发的。还没填对外地址时为 true（不用提示）。
+	LinkSameDomain bool `json:"linkSameDomain"`
 }
 
 // Group 是推荐分组下拉框里的一项（站点自己的用户分组）。

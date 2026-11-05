@@ -116,6 +116,9 @@ func TestSaveGeneratesCodeAndPublishes(t *testing.T) {
 	if view.HubURL != "https://hub.example.com/transit" || view.Brand.Name != "极速中转" || view.Brand.Color != "#2563eb" {
 		t.Fatalf("values not normalized: %+v", view)
 	}
+	if !view.LinkSameDomain {
+		t.Fatalf("hub.example.com and relay.example.com share a domain: %+v", view)
+	}
 	if len(view.Support) != 1 || view.NoticeUpdatedAt == nil {
 		t.Fatalf("support or notice time wrong: %+v", view)
 	}
@@ -157,6 +160,25 @@ func TestSaveGeneratesCodeAndPublishes(t *testing.T) {
 	public, _ = service.Public(ctx, "abcdefghij")
 	if public.Brand.Name != "" || public.Site.Name != "api.relay.example.com" || public.Site.BaseURL != "https://api.relay.example.com" || public.Brand.LogoURL != "" {
 		t.Fatalf("fallbacks wrong: %+v", public)
+	}
+}
+
+func TestLinkOnAnotherDomainIsFlagged(t *testing.T) {
+	service, _ := newTestService()
+	ctx := context.Background()
+	view, err := service.Update(ctx, ws, UpdateRequest{Enabled: true, HubURL: "https://hub.other.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.LinkSameDomain {
+		t.Fatalf("hub.other.com is not on the site's domain: %+v", view)
+	}
+	view, err = service.Update(ctx, ws, UpdateRequest{Enabled: true, HubURL: "https://hub.other.com", SiteURL: "https://api.other.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.LinkSameDomain {
+		t.Fatalf("the site address users visit decides the domain: %+v", view)
 	}
 }
 

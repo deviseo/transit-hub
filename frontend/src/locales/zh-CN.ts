@@ -1279,6 +1279,7 @@ export default {
         link: '专属链接',
         unsaved: '保存一次就会生成链接。',
         needHubUrl: '填好 TransitHub 对外地址后就会生成链接。',
+        otherDomain: 'TransitHub 对外地址和站点地址不在同一个域名下：用户第一次打开专属链接时，TransitLink 会提醒他确认链接是站长发的。把 TransitHub 放在站点的同一个域名下（例如 hub.你的域名），用户就不会看到这个提醒。',
         disabledNote: '还没开启，链接暂时打不开。',
         copy: '复制',
         copied: '已复制',

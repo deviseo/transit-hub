@@ -1279,6 +1279,7 @@ export default {
         link: 'Site link',
         unsaved: 'Save once to create the link.',
         needHubUrl: 'The link appears once you fill in the public TransitHub address.',
+        otherDomain: "TransitHub's public address and the site address are on different domains, so the first time users open the link, TransitLink asks them to make sure it came from you. Put TransitHub on the site's domain (for example hub.your-domain) and they won't see this.",
         disabledNote: 'Not turned on yet, so the link does not work.',
         copy: 'Copy',
         copied: 'Copied',

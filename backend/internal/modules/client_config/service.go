@@ -142,6 +142,11 @@ func (s *Service) view(ctx context.Context, config Config) (AdminView, error) {
 		Tickets:          TicketSettings{Enabled: config.TicketsEnabled, Categories: categoriesOrDefault(config.TicketCategories)},
 		UpdatedAt:        config.UpdatedAt,
 	}
+	siteURL := config.SiteURL
+	if siteURL == "" {
+		siteURL = site.BaseURL
+	}
+	view.LinkSameDomain = config.HubURL == "" || sameOwner(siteURL, config.HubURL)
 	if view.Support == nil {
 		view.Support = []SupportLink{}
 	}

@@ -46,6 +46,8 @@ export interface ClientConfig {
   minClientVersion: string
   tickets: ClientTicketSettings
   updatedAt: string | null
+  /** TransitHub 对外地址和站点地址在同一个域名下；不在的话，用户第一次打开链接会看到确认提示。 */
+  linkSameDomain: boolean
 }
 
 /** 工单：开启后 TransitLink 里出现「工单」，categories 是用户能选的问题分类。 */
