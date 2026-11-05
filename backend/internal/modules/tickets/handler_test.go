@@ -106,6 +106,10 @@ func TestTicketRoutesEndToEnd(t *testing.T) {
 		response.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(response.Header().Get("Content-Disposition"), "screen.png") {
 		t.Fatalf("attachment: %d %v", response.Code, response.Header())
 	}
+	response = c.do(authorized(httptest.NewRequest(http.MethodGet, "/api/client/v1/tickets/attachments/"+attachmentID+"?size=thumb", nil)))
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("thumbnail: %d %v", response.Code, response.Header())
+	}
 
 	// JSON 回复、不存在的工单、太大的图片
 	response = c.do(authorized(httptest.NewRequest(http.MethodPost, "/api/client/v1/tickets/"+created.ID+"/messages", jsonBody(t, ReplyRequest{Body: "补充"}))))
@@ -146,6 +150,10 @@ func TestTicketRoutesEndToEnd(t *testing.T) {
 	}
 	if response := c.do(admin(httptest.NewRequest(http.MethodGet, "/api/tickets/attachments/"+attachmentID, nil))); response.Code != http.StatusOK {
 		t.Fatalf("admin attachment: %d", response.Code)
+	}
+	if response := c.do(admin(httptest.NewRequest(http.MethodGet, "/api/tickets/attachments/"+attachmentID+"?size=thumb", nil))); response.Code != http.StatusOK ||
+		response.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("admin thumbnail: %d %v", response.Code, response.Header())
 	}
 	if response := c.do(httptest.NewRequest(http.MethodGet, "/api/tickets", nil)); response.Code != http.StatusUnauthorized {
 		t.Fatalf("admin routes need a login: %d", response.Code)

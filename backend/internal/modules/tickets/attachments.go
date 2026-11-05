@@ -1,17 +1,41 @@
 package tickets
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"image"
+	"image/draw"
+	_ "image/gif" // 注册解码器：缩略图要解码 GIF、JPEG、PNG、WebP
+	"image/jpeg"
+	_ "image/png"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	xdraw "golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 // maxImageBytes：单张图片最大 5 MB。
 const maxImageBytes = 5 << 20
+
+const (
+	// thumbnailSide：缩略图最长边的像素。对话里的缩略图最大 128×80（两倍屏 256×160），留些余量。
+	thumbnailSide = 480
+	// thumbnailSuffix：缩略图和原图放在一起，文件名是原图的文件名加上它。
+	thumbnailSuffix = ".thumb.jpg"
+	// maxThumbnailPixels：超过这么多像素的图片不做缩略图（解码太占内存），直接用原图。
+	maxThumbnailPixels = 40_000_000
+)
+
+// errNoThumbnail：这张图片做不了缩略图，用原图。
+var errNoThumbnail = errors.New("no thumbnail for this image")
+
+// thumbnailSlots 限制同时生成缩略图的数量（解码大图很占内存）。
+var thumbnailSlots = make(chan struct{}, 2)
 
 // imageExtensions 是允许的图片类型（按文件内容判断）和保存时用的扩展名。
 var imageExtensions = map[string]string{
@@ -61,14 +85,82 @@ func (s *AttachmentStorage) Read(name string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// Delete 删除一张图片；已经不在了也算成功。
+// Thumbnail 返回图片的缩略图（JPEG，最长边 thumbnailSide）。第一次请求时生成，存成原图文件名加
+// thumbnailSuffix，之后直接读。做不了缩略图（图片太大、文件损坏）时返回错误，调用方改用原图。
+func (s *AttachmentStorage) Thumbnail(name string) ([]byte, error) {
+	path, err := s.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	thumbPath := path + thumbnailSuffix
+	if data, err := os.ReadFile(thumbPath); err == nil {
+		return data, nil
+	}
+	thumbnailSlots <- struct{}{}
+	defer func() { <-thumbnailSlots }()
+	// 排队的时候，别的请求可能已经生成好了。
+	if data, err := os.ReadFile(thumbPath); err == nil {
+		return data, nil
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := makeThumbnail(original)
+	if err != nil {
+		return nil, err
+	}
+	// 先写临时文件再改名：同时来的请求不会读到写了一半的文件。存不下也不影响这次返回。
+	if temp, err := os.CreateTemp(s.baseDir, ".thumb-*"); err == nil {
+		_, writeErr := temp.Write(data)
+		closeErr := temp.Close()
+		if writeErr != nil || closeErr != nil || os.Rename(temp.Name(), thumbPath) != nil {
+			_ = os.Remove(temp.Name())
+		}
+	}
+	return data, nil
+}
+
+// makeThumbnail 把图片缩小到最长边 thumbnailSide（小图不放大），转成 JPEG；透明的地方铺白色。
+// GIF 只取第一帧。先读尺寸，太大的图片不解码。
+func makeThumbnail(original []byte) ([]byte, error) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(original))
+	if err != nil {
+		return nil, err
+	}
+	if config.Width <= 0 || config.Height <= 0 || config.Width*config.Height > maxThumbnailPixels {
+		return nil, errNoThumbnail
+	}
+	source, _, err := image.Decode(bytes.NewReader(original))
+	if err != nil {
+		return nil, err
+	}
+	bounds := source.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if longest := max(width, height); longest > thumbnailSide {
+		width = max(1, width*thumbnailSide/longest)
+		height = max(1, height*thumbnailSide/longest)
+	}
+	target := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(target, target.Bounds(), image.White, image.Point{}, draw.Src)
+	xdraw.BiLinear.Scale(target, target.Bounds(), source, bounds, draw.Over, nil)
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, target, &jpeg.Options{Quality: 80}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// Delete 删除一张图片和它的缩略图；已经不在了也算成功。
 func (s *AttachmentStorage) Delete(name string) error {
 	path, err := s.resolve(name)
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	for _, file := range []string{path, path + thumbnailSuffix} {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }

@@ -258,6 +258,15 @@ func (f *memoryFiles) Read(name string) ([]byte, error) {
 	return data, nil
 }
 
+func (f *memoryFiles) Thumbnail(name string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.files[name]; !ok {
+		return nil, errors.New("missing")
+	}
+	return []byte("thumbnail of " + name), nil
+}
+
 func (f *memoryFiles) Delete(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -563,15 +572,23 @@ func TestImageAttachments(t *testing.T) {
 	if len(attachments) != 1 || attachments[0].ContentType != "image/png" || attachments[0].OriginalName != "screen.png" {
 		t.Fatalf("attachment metadata: %+v", attachments)
 	}
-	got, data, err := env.service.AttachmentMine(ctx, session, attachments[0].ID)
+	got, data, err := env.service.AttachmentMine(ctx, session, attachments[0].ID, false)
 	if err != nil || !bytes.Equal(data, picture) || got.ContentType != "image/png" {
 		t.Fatalf("download: %v", err)
 	}
-	if _, _, err := env.service.AdminAttachment(ctx, "owner-1", attachments[0].ID); err != nil {
+	// 缩略图是 JPEG；附件本身的类型不变。
+	thumb, thumbData, err := env.service.AttachmentMine(ctx, session, attachments[0].ID, true)
+	if err != nil || thumb.ContentType != "image/jpeg" || !strings.HasPrefix(string(thumbData), "thumbnail of ") || attachments[0].ContentType != "image/png" {
+		t.Fatalf("thumbnail: %+v %q %v", thumb, thumbData, err)
+	}
+	if _, _, err := env.service.AdminAttachment(ctx, "owner-1", attachments[0].ID, false); err != nil {
 		t.Fatalf("admin download: %v", err)
 	}
+	if got, _, err := env.service.AdminAttachment(ctx, "owner-1", attachments[0].ID, true); err != nil || got.ContentType != "image/jpeg" {
+		t.Fatalf("admin thumbnail: %+v %v", got, err)
+	}
 	bob := env.login(t, SiteUser{ID: "7", Username: "bob"})
-	if _, _, err := env.service.AttachmentMine(ctx, bob, attachments[0].ID); errorKey(err) != ErrorNotFound {
+	if _, _, err := env.service.AttachmentMine(ctx, bob, attachments[0].ID, true); errorKey(err) != ErrorNotFound {
 		t.Fatalf("other users cannot download, got %v", err)
 	}
 

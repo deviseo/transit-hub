@@ -84,8 +84,9 @@ export const replyTicket = async (id: string, body: string): Promise<AdminTicket
 export const setTicketStatus = async (id: string, status: TicketStatus): Promise<AdminTicketDetail> =>
   requestJson<AdminTicketDetail>(`/tickets/${encodeURIComponent(id)}/status`, { method: 'PUT', ...jsonBody({ status }) })
 
-/** 下载附件图片（需要登录，不能直接用图片地址）。 */
-export const fetchTicketAttachment = async (id: string): Promise<Blob> => {
-  const response = await send(`/tickets/attachments/${encodeURIComponent(id)}`, { headers: { Accept: 'image/*' } })
+/** 下载附件图片（需要登录，不能直接用图片地址）。thumb 时下载缩略图（小的 JPEG）。 */
+export const fetchTicketAttachment = async (id: string, thumb = false): Promise<Blob> => {
+  const query = thumb ? '?size=thumb' : ''
+  const response = await send(`/tickets/attachments/${encodeURIComponent(id)}${query}`, { headers: { Accept: 'image/*' } })
   return response.blob()
 }

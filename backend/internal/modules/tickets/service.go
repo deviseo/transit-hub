@@ -53,6 +53,8 @@ type Workspaces interface {
 type Files interface {
 	Save(contentType string, data []byte) (string, error)
 	Read(name string) ([]byte, error)
+	// Thumbnail 返回缩略图（JPEG）；做不了时返回错误，改用原图。
+	Thumbnail(name string) ([]byte, error)
 	Delete(name string) error
 }
 
@@ -260,7 +262,7 @@ func (s *Service) CloseMine(ctx context.Context, session *ClientSession, id stri
 }
 
 // AttachmentMine 返回用户自己工单里的一张图片。
-func (s *Service) AttachmentMine(ctx context.Context, session *ClientSession, attachmentID string) (*Attachment, []byte, error) {
+func (s *Service) AttachmentMine(ctx context.Context, session *ClientSession, attachmentID string, thumb bool) (*Attachment, []byte, error) {
 	attachment, err := s.store.GetAttachment(ctx, session.Workspace, attachmentID)
 	if err != nil {
 		return nil, nil, err
@@ -271,7 +273,7 @@ func (s *Service) AttachmentMine(ctx context.Context, session *ClientSession, at
 	if _, err := s.ownTicket(ctx, session, attachment.TicketID); err != nil {
 		return nil, nil, err
 	}
-	return s.readAttachment(attachment)
+	return s.readAttachment(attachment, thumb)
 }
 
 func (s *Service) ownTicket(ctx context.Context, session *ClientSession, id string) (*Ticket, error) {
@@ -417,7 +419,7 @@ func (s *Service) AdminSetStatus(ctx context.Context, userID string, id string, 
 }
 
 // AdminAttachment 返回当前工作区工单里的一张图片。
-func (s *Service) AdminAttachment(ctx context.Context, userID string, attachmentID string) (*Attachment, []byte, error) {
+func (s *Service) AdminAttachment(ctx context.Context, userID string, attachmentID string, thumb bool) (*Attachment, []byte, error) {
 	ws, err := s.adminWorkspace(ctx, userID)
 	if err != nil {
 		return nil, nil, err
@@ -429,7 +431,7 @@ func (s *Service) AdminAttachment(ctx context.Context, userID string, attachment
 	if attachment == nil {
 		return nil, nil, requestError(ErrorNotFound)
 	}
-	return s.readAttachment(attachment)
+	return s.readAttachment(attachment, thumb)
 }
 
 // ---- 公共 ----
@@ -473,9 +475,17 @@ func (s *Service) discard(message Message) {
 	}
 }
 
-func (s *Service) readAttachment(attachment *Attachment) (*Attachment, []byte, error) {
+// readAttachment 读取图片。thumb 时给缩略图（JPEG），做不了缩略图就给原图。
+func (s *Service) readAttachment(attachment *Attachment, thumb bool) (*Attachment, []byte, error) {
 	if s.files == nil {
 		return nil, nil, requestError(ErrorNotFound)
+	}
+	if thumb {
+		if data, err := s.files.Thumbnail(attachment.StoragePath); err == nil {
+			small := *attachment
+			small.ContentType = "image/jpeg"
+			return &small, data, nil
+		}
 	}
 	data, err := s.files.Read(attachment.StoragePath)
 	if err != nil {

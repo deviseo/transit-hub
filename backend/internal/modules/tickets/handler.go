@@ -132,7 +132,7 @@ func (h *Handler) attachmentMine(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	attachment, data, err := h.service.AttachmentMine(r.Context(), session, r.PathValue("attachmentID"))
+	attachment, data, err := h.service.AttachmentMine(r.Context(), session, r.PathValue("attachmentID"), wantsThumbnail(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -216,7 +216,7 @@ func (h *Handler) adminAttachment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	attachment, data, err := h.service.AdminAttachment(r.Context(), userID, r.PathValue("attachmentID"))
+	attachment, data, err := h.service.AdminAttachment(r.Context(), userID, r.PathValue("attachmentID"), wantsThumbnail(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -276,11 +276,17 @@ func readForm(w http.ResponseWriter, r *http.Request, target any, fromForm func(
 }
 
 // writeAttachment 返回图片（类型是保存时按内容判断出的，禁止浏览器另行猜测）。
+// wantsThumbnail：图片地址带 ?size=thumb 时给缩略图（对话里的小图），否则给原图。
+func wantsThumbnail(r *http.Request) bool {
+	return r.URL.Query().Get("size") == "thumb"
+}
+
+// writeAttachment 写图片。附件不会被修改，浏览器可以缓存一天。
 func writeAttachment(w http.ResponseWriter, attachment *Attachment, data []byte) {
 	header := w.Header()
 	header.Set("Content-Type", attachment.ContentType)
 	header.Set("Content-Length", strconv.Itoa(len(data)))
-	header.Set("Cache-Control", "private, max-age=300")
+	header.Set("Cache-Control", "private, max-age=86400")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	if disposition := mime.FormatMediaType("inline", map[string]string{"filename": attachment.OriginalName}); disposition != "" {
