@@ -50,9 +50,19 @@ type ToolRecommend struct {
 	Model string `json:"model"`
 }
 
+// Recommend 是各工具的推荐设置。JSON 键和 TransitLink 里工具的 ID 一致；旧版 TransitLink 不认识的键会忽略。
 type Recommend struct {
-	ClaudeCode ToolRecommend `json:"claudeCode"`
-	Codex      ToolRecommend `json:"codex"`
+	ClaudeCode      ToolRecommend `json:"claudeCode"`
+	Codex           ToolRecommend `json:"codex"`
+	GeminiCli       ToolRecommend `json:"geminiCli"`
+	GrokBuild       ToolRecommend `json:"grokBuild"`
+	OpenCode        ToolRecommend `json:"opencode"`
+	DeepseekHarness ToolRecommend `json:"deepseekHarness"`
+}
+
+// fields 按固定顺序列出每个工具的推荐设置（存库、校验都按这个顺序）。
+func (r *Recommend) fields() []*ToolRecommend {
+	return []*ToolRecommend{&r.ClaudeCode, &r.Codex, &r.GeminiCli, &r.GrokBuild, &r.OpenCode, &r.DeepseekHarness}
 }
 
 type SupportLink struct {

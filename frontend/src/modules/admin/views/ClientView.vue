@@ -6,7 +6,7 @@ import { CheckCircle2, Copy, ExternalLink, LifeBuoy, Link2, Loader2, Megaphone, 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getClientConfig, getClientGroups, resetClientConfigCode, saveClientConfig } from '../api/clientConfig'
-import type { ClientConfig, ClientConfigUpdate, ClientGroup, ClientSupportLink, ClientSupportType } from '../types/clientConfig'
+import { CLIENT_TOOLS, type ClientConfig, type ClientConfigUpdate, type ClientGroup, type ClientRecommend, type ClientSupportLink, type ClientSupportType } from '../types/clientConfig'
 
 const { t } = useI18n()
 
@@ -36,7 +36,10 @@ const fromConfig = (config: ClientConfig): ClientConfigUpdate => ({
   hubUrl: config.hubUrl,
   siteUrl: config.siteUrl,
   brand: { ...config.brand },
-  recommend: { claudeCode: { ...config.recommend.claudeCode }, codex: { ...config.recommend.codex } },
+  // 旧版本后端没有新工具的推荐：补成空的（不指定）。
+  recommend: Object.fromEntries(
+    CLIENT_TOOLS.map((tool) => [tool, { group: config.recommend[tool]?.group ?? '', model: config.recommend[tool]?.model ?? '' }])
+  ) as ClientRecommend,
   notice: config.notice,
   support: config.support.map((link) => ({ ...link })),
   minClientVersion: config.minClientVersion,
@@ -358,7 +361,7 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
           <p v-if="groupsError" class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
             {{ t('admin.client.recommend.groupsFailed', { error: t(groupsError) }) }}
           </p>
-          <div v-for="tool in (['claudeCode', 'codex'] as const)" :key="tool" class="grid gap-3 rounded-xl border border-border/50 p-4 md:grid-cols-[140px_1fr_1fr] md:items-center">
+          <div v-for="tool in CLIENT_TOOLS" :key="tool" class="grid gap-3 rounded-xl border border-border/50 p-4 md:grid-cols-[140px_1fr_1fr] md:items-center">
             <span class="text-sm font-semibold text-foreground">{{ t(`admin.client.recommend.${tool}`) }}</span>
             <div class="grid gap-1.5">
               <label :for="`client-${tool}-group`" class="text-xs font-medium text-muted-foreground">{{ t('admin.client.recommend.group') }}</label>
@@ -379,7 +382,7 @@ watch(() => form.value?.brand.logo, () => { logoError.value = '' })
               <Input
                 :id="`client-${tool}-model`"
                 v-model="form.recommend[tool].model"
-                :placeholder="t(tool === 'claudeCode' ? 'admin.client.recommend.claudeModelPlaceholder' : 'admin.client.recommend.codexModelPlaceholder')"
+                :placeholder="t(`admin.client.recommend.modelPlaceholder.${tool}`)"
                 maxlength="100"
                 class="h-9 font-mono text-sm"
               />

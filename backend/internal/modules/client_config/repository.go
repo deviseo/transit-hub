@@ -20,18 +20,22 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 }
 
 const selectColumns = `user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name, brand_logo, brand_color,
-	welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support, min_client_version,
+	welcome, claude_group, claude_model, codex_group, codex_model, gemini_group, gemini_model, grok_group, grok_model,
+	opencode_group, opencode_model, dsh_group, dsh_model, notice, notice_updated_at, support, min_client_version,
 	tickets_enabled, ticket_categories, updated_at`
 
 func scanConfig(row pgx.Row) (*Config, error) {
 	var config Config
 	var support, categories []byte
 	var updatedAt time.Time
-	err := row.Scan(&config.UserID, &config.AdminAccountID, &config.Code, &config.Enabled, &config.HubURL, &config.SiteURL,
-		&config.Brand.Name, &config.Brand.Logo, &config.Brand.Color, &config.Brand.Welcome,
-		&config.Recommend.ClaudeCode.Group, &config.Recommend.ClaudeCode.Model,
-		&config.Recommend.Codex.Group, &config.Recommend.Codex.Model,
-		&config.Notice, &config.NoticeUpdatedAt, &support, &config.MinClientVersion, &config.TicketsEnabled, &categories, &updatedAt)
+	targets := []any{&config.UserID, &config.AdminAccountID, &config.Code, &config.Enabled, &config.HubURL, &config.SiteURL,
+		&config.Brand.Name, &config.Brand.Logo, &config.Brand.Color, &config.Brand.Welcome}
+	for _, tool := range config.Recommend.fields() {
+		targets = append(targets, &tool.Group, &tool.Model)
+	}
+	targets = append(targets, &config.Notice, &config.NoticeUpdatedAt, &support, &config.MinClientVersion,
+		&config.TicketsEnabled, &categories, &updatedAt)
+	err := row.Scan(targets...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -77,20 +81,29 @@ func (r *Repository) Save(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
+	args := []any{config.UserID, config.AdminAccountID, config.Code, config.Enabled, config.HubURL, config.SiteURL,
+		config.Brand.Name, config.Brand.Logo, config.Brand.Color, config.Brand.Welcome}
+	for _, tool := range config.Recommend.fields() {
+		args = append(args, tool.Group, tool.Model)
+	}
+	args = append(args, config.Notice, config.NoticeUpdatedAt, support, config.MinClientVersion, config.TicketsEnabled,
+		string(categoriesJSON))
 	_, err = r.db.Exec(ctx, `INSERT INTO client_configs (user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name,
-		brand_logo, brand_color, welcome, claude_group, claude_model, codex_group, codex_model, notice, notice_updated_at, support,
+		brand_logo, brand_color, welcome, claude_group, claude_model, codex_group, codex_model, gemini_group, gemini_model,
+		grok_group, grok_model, opencode_group, opencode_model, dsh_group, dsh_model, notice, notice_updated_at, support,
 		min_client_version, tickets_enabled, ticket_categories, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, now(), now())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+			$25, $26, $27, $28::jsonb, now(), now())
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET code = EXCLUDED.code, enabled = EXCLUDED.enabled,
 			hub_url = EXCLUDED.hub_url, site_url = EXCLUDED.site_url, brand_name = EXCLUDED.brand_name,
 			brand_logo = EXCLUDED.brand_logo, brand_color = EXCLUDED.brand_color, welcome = EXCLUDED.welcome,
 			claude_group = EXCLUDED.claude_group, claude_model = EXCLUDED.claude_model, codex_group = EXCLUDED.codex_group,
-			codex_model = EXCLUDED.codex_model, notice = EXCLUDED.notice, notice_updated_at = EXCLUDED.notice_updated_at,
+			codex_model = EXCLUDED.codex_model, gemini_group = EXCLUDED.gemini_group, gemini_model = EXCLUDED.gemini_model,
+			grok_group = EXCLUDED.grok_group, grok_model = EXCLUDED.grok_model, opencode_group = EXCLUDED.opencode_group,
+			opencode_model = EXCLUDED.opencode_model, dsh_group = EXCLUDED.dsh_group, dsh_model = EXCLUDED.dsh_model,
+			notice = EXCLUDED.notice, notice_updated_at = EXCLUDED.notice_updated_at,
 			support = EXCLUDED.support, min_client_version = EXCLUDED.min_client_version,
 			tickets_enabled = EXCLUDED.tickets_enabled, ticket_categories = EXCLUDED.ticket_categories, updated_at = now()`,
-		config.UserID, config.AdminAccountID, config.Code, config.Enabled, config.HubURL, config.SiteURL, config.Brand.Name,
-		config.Brand.Logo, config.Brand.Color, config.Brand.Welcome, config.Recommend.ClaudeCode.Group,
-		config.Recommend.ClaudeCode.Model, config.Recommend.Codex.Group, config.Recommend.Codex.Model, config.Notice,
-		config.NoticeUpdatedAt, support, config.MinClientVersion, config.TicketsEnabled, string(categoriesJSON))
+		args...)
 	return err
 }

@@ -260,16 +260,14 @@ func normalize(req UpdateRequest) (Config, error) {
 	if config.Brand.Logo, err = normalizeLogo(req.Brand.Logo); err != nil {
 		return Config{}, err
 	}
-	for _, field := range []struct {
-		value  string
-		target *string
-	}{
-		{req.Recommend.ClaudeCode.Group, &config.Recommend.ClaudeCode.Group},
-		{req.Recommend.ClaudeCode.Model, &config.Recommend.ClaudeCode.Model},
-		{req.Recommend.Codex.Group, &config.Recommend.Codex.Group},
-		{req.Recommend.Codex.Model, &config.Recommend.Codex.Model},
-	} {
-		if *field.target, ok = trimmed(field.value, 100); !ok {
+	wanted := req.Recommend
+	sources := wanted.fields()
+	for index, tool := range config.Recommend.fields() {
+		source := sources[index]
+		if tool.Group, ok = trimmed(source.Group, 100); !ok {
+			return Config{}, invalid
+		}
+		if tool.Model, ok = trimmed(source.Model, 100); !ok {
 			return Config{}, invalid
 		}
 	}
