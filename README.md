@@ -86,7 +86,7 @@ The project is built as a Go backend with a Vue 3 admin frontend, backed by Post
 - **Group multiplier tracking** - A read-only list of upstream group multipliers with search, filters, changes, and history.
 - **User activity analytics** - Sync your own sub2api/new-api users and daily usage to find inactive or declining users, compare periods, and track top-ups, spend, and user balances.
 - **Mass email** - Email selected users or an activity segment, with an unsubscribe link and a per-workspace suppression list.
-- **TransitLink client** - Publish a site link for the TransitLink desktop client with your branding, recommended groups and models, notice, and support contacts. Users open the link to connect and set up Claude Code, Codex, Gemini CLI, Grok Build, OpenCode and DeepSeek Harness in one click.
+- **TransitLink client** - Publish a site link for the TransitLink desktop client with your branding, recommended groups and models, notice, and support contacts. Users open the link to connect and set up Claude Code, Codex, Gemini CLI, Grok Build, OpenCode, DeepSeek Harness, Pi, Oh My Pi, Kimi Code, MiniMax Code and OpenClaw in one click.
 - **Notification channels** - Configure DingTalk, Feishu, and Telegram bots for balance warnings and multiplier changes.
 - **System settings** - Manage refresh intervals, notification strategy, and runtime display settings.
 
@@ -177,7 +177,7 @@ Saved credentials are encrypted at rest: your site's admin session, upstream sit
 
 The **Client** page publishes a read-only config at `/api/client/v1/sites/<code>` for the TransitLink desktop client. Your users' computers must be able to reach it, so expose `/api/client/` publicly (for example through your reverse proxy); the admin console and the other `/api/` paths can stay private. Set **Public TransitHub address** on that page to the public URL, then share the generated `transitlink://connect?config=...` link with your users.
 
-- **Recommended setup**: set a recommended group and model for each of Claude Code, Codex, Gemini CLI, Grok Build, OpenCode and DeepSeek Harness. One-click setup uses them by default and users can change them (the last four need TransitLink 0.5.0 or later).
+- **Recommended setup**: set a recommended group and model for each tool TransitLink can set up: Claude Code, Codex, Gemini CLI, Grok Build, OpenCode, DeepSeek Harness, Pi, Oh My Pi, Kimi Code, MiniMax Code and OpenClaw. One-click setup uses them by default and users can change them. Gemini CLI through DeepSeek Harness need TransitLink 0.5.0 or later; Pi through OpenClaw need 0.6.0 or later.
 - **Tickets**: turn them on in the same page and TransitLink users can send you questions, which you answer on the **Tickets** page. Before opening a ticket session, TransitHub checks the user's own login against your site, so only your users can file tickets. The ticket API also lives under `/api/client/`. Choose the bots that hear about new tickets in **System Settings > Strategy**.
 - **Minimum TransitLink version**: older clients show a banner asking their users to update.
 

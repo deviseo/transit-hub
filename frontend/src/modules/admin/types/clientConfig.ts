@@ -15,8 +15,23 @@ export interface ClientToolRecommend {
   model: string
 }
 
-/** TransitLink 支持的工具（「客户端」页面推荐设置的顺序）。键和 TransitLink 里工具的 ID 一致。 */
-export const CLIENT_TOOLS = ['claudeCode', 'codex', 'geminiCli', 'grokBuild', 'opencode', 'deepseekHarness'] as const
+/**
+ * TransitLink 能一键配置的工具（「客户端」页面推荐设置的顺序）。键和 TransitLink 里工具的 ID 一致。
+ * Antigravity CLI 只能用 Google 账号登录，没法一键配置，所以不在这里。
+ */
+export const CLIENT_TOOLS = [
+  'claudeCode',
+  'codex',
+  'geminiCli',
+  'grokBuild',
+  'opencode',
+  'deepseekHarness',
+  'pi',
+  'ohMyPi',
+  'kimiCode',
+  'minimaxCode',
+  'openclaw'
+] as const
 
 export type ClientTool = (typeof CLIENT_TOOLS)[number]
 

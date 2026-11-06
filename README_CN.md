@@ -176,7 +176,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d
 
 「客户端」页面会在 `/api/client/v1/sites/<代码>` 发布一份只读配置，供 TransitLink 桌面客户端读取。用户的电脑需要能访问到它，所以请把 `/api/client/` 公开出去（例如通过反向代理）；后台和其他 `/api/` 路径可以继续只在内网访问。在该页面把「TransitHub 对外地址」填成公网 URL，再把生成的 `transitlink://connect?config=...` 链接发给用户。
 
-- **推荐配置**：给 Claude Code、Codex、Gemini CLI、Grok Build、OpenCode、DeepSeek Harness 分别设置推荐的分组和模型，用户一键配置时默认用它们，也可以自己改（后四个工具要 TransitLink 0.5.0 或更高版本才会读取）。
+- **推荐配置**：给 TransitLink 能一键配置的每个工具（Claude Code、Codex、Gemini CLI、Grok Build、OpenCode、DeepSeek Harness、Pi、Oh My Pi、Kimi Code、MiniMax Code、OpenClaw）分别设置推荐的分组和模型，用户一键配置时默认用它们，也可以自己改。Gemini CLI 到 DeepSeek Harness 要 TransitLink 0.5.0 或更高版本才会读取，Pi 到 OpenClaw 要 0.6.0 或更高版本。
 - **工单**：在同一页面打开后，用户可以在 TransitLink 里给你提交问题，你在「工单」页面回复。换取工单会话前，TransitHub 会用用户自己的登录去你的站点核实身份，只有你的用户能提交。工单接口也在 `/api/client/` 下。新工单推送给哪些机器人，在「系统设置 → 策略」里选。
 - **TransitLink 最低版本**：低于这个版本的客户端会提示用户更新。
 

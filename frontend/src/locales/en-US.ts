@@ -1309,13 +1309,18 @@ export default {
       },
       recommend: {
         title: 'Recommended setup',
-        description: 'One-click setup uses these groups and models by default. Users can still change them. The newer tools need TransitLink 0.5.0 or later.',
+        description: 'One-click setup uses these groups and models by default. Users can still change them. Newer tools need a newer TransitLink: Gemini CLI, Grok Build, OpenCode and DeepSeek Harness need 0.5.0; Pi, Oh My Pi, Kimi Code, MiniMax Code and OpenClaw need 0.6.0.',
         claudeCode: 'Claude Code',
         codex: 'Codex',
         geminiCli: 'Gemini CLI',
         grokBuild: 'Grok Build',
         opencode: 'OpenCode',
         deepseekHarness: 'DeepSeek Harness',
+        pi: 'Pi',
+        ohMyPi: 'Oh My Pi',
+        kimiCode: 'Kimi Code',
+        minimaxCode: 'MiniMax Code',
+        openclaw: 'OpenClaw',
         group: 'Group',
         model: 'Model',
         groupAuto: 'Not set (the client picks by group name)',
@@ -1327,7 +1332,12 @@ export default {
           geminiCli: 'Not set (a Gemini Pro model)',
           grokBuild: 'Not set (the newest Grok model)',
           opencode: 'Not set (Claude Sonnet first, then GPT)',
-          deepseekHarness: 'Not set (DeepSeek models first)'
+          deepseekHarness: 'Not set (DeepSeek models first)',
+          pi: 'Not set (Claude Sonnet first, then GPT)',
+          ohMyPi: 'Not set (Claude Sonnet first, then GPT)',
+          kimiCode: 'Not set (Kimi models first)',
+          minimaxCode: 'Not set (MiniMax models first)',
+          openclaw: 'Not set (Claude Sonnet first, then GPT)'
         },
         groupsLoading: "Loading the site's groups…",
         groupsFailed: "Couldn't load the site's groups: {error}. You can type the group instead."

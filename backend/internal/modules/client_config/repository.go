@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,10 +21,36 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-const selectColumns = `user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name, brand_logo, brand_color,
-	welcome, claude_group, claude_model, codex_group, codex_model, gemini_group, gemini_model, grok_group, grok_model,
-	opencode_group, opencode_model, dsh_group, dsh_model, notice, notice_updated_at, support, min_client_version,
-	tickets_enabled, ticket_categories, updated_at`
+// saveColumns 是存库的列，顺序和 scanConfig、Save 的参数一致；推荐设置的列按 recommendColumns 生成。
+var saveColumns = func() []string {
+	columns := []string{"user_id", "admin_account_id", "code", "enabled", "hub_url", "site_url", "brand_name",
+		"brand_logo", "brand_color", "welcome"}
+	for _, prefix := range recommendColumns {
+		columns = append(columns, prefix+"_group", prefix+"_model")
+	}
+	return append(columns, "notice", "notice_updated_at", "support", "min_client_version", "tickets_enabled",
+		"ticket_categories")
+}()
+
+var selectColumns = strings.Join(saveColumns, ", ") + ", updated_at"
+
+// upsertSQL 插入一行；同一个工作区已有时，除归属外的列全部更新。
+var upsertSQL = func() string {
+	placeholders := make([]string, len(saveColumns))
+	updates := make([]string, 0, len(saveColumns))
+	for index, column := range saveColumns {
+		placeholders[index] = fmt.Sprintf("$%d", index+1)
+		if column == "ticket_categories" {
+			placeholders[index] += "::jsonb"
+		}
+		if column != "user_id" && column != "admin_account_id" {
+			updates = append(updates, column+" = EXCLUDED."+column)
+		}
+	}
+	return `INSERT INTO client_configs (` + strings.Join(saveColumns, ", ") + `, created_at, updated_at)
+		VALUES (` + strings.Join(placeholders, ", ") + `, now(), now())
+		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET ` + strings.Join(updates, ", ") + `, updated_at = now()`
+}()
 
 func scanConfig(row pgx.Row) (*Config, error) {
 	var config Config
@@ -88,22 +116,6 @@ func (r *Repository) Save(ctx context.Context, config Config) error {
 	}
 	args = append(args, config.Notice, config.NoticeUpdatedAt, support, config.MinClientVersion, config.TicketsEnabled,
 		string(categoriesJSON))
-	_, err = r.db.Exec(ctx, `INSERT INTO client_configs (user_id, admin_account_id, code, enabled, hub_url, site_url, brand_name,
-		brand_logo, brand_color, welcome, claude_group, claude_model, codex_group, codex_model, gemini_group, gemini_model,
-		grok_group, grok_model, opencode_group, opencode_model, dsh_group, dsh_model, notice, notice_updated_at, support,
-		min_client_version, tickets_enabled, ticket_categories, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-			$25, $26, $27, $28::jsonb, now(), now())
-		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET code = EXCLUDED.code, enabled = EXCLUDED.enabled,
-			hub_url = EXCLUDED.hub_url, site_url = EXCLUDED.site_url, brand_name = EXCLUDED.brand_name,
-			brand_logo = EXCLUDED.brand_logo, brand_color = EXCLUDED.brand_color, welcome = EXCLUDED.welcome,
-			claude_group = EXCLUDED.claude_group, claude_model = EXCLUDED.claude_model, codex_group = EXCLUDED.codex_group,
-			codex_model = EXCLUDED.codex_model, gemini_group = EXCLUDED.gemini_group, gemini_model = EXCLUDED.gemini_model,
-			grok_group = EXCLUDED.grok_group, grok_model = EXCLUDED.grok_model, opencode_group = EXCLUDED.opencode_group,
-			opencode_model = EXCLUDED.opencode_model, dsh_group = EXCLUDED.dsh_group, dsh_model = EXCLUDED.dsh_model,
-			notice = EXCLUDED.notice, notice_updated_at = EXCLUDED.notice_updated_at,
-			support = EXCLUDED.support, min_client_version = EXCLUDED.min_client_version,
-			tickets_enabled = EXCLUDED.tickets_enabled, ticket_categories = EXCLUDED.ticket_categories, updated_at = now()`,
-		args...)
+	_, err = r.db.Exec(ctx, upsertSQL, args...)
 	return err
 }

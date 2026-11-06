@@ -1309,13 +1309,18 @@ export default {
       },
       recommend: {
         title: '推荐配置',
-        description: '用户一键配置时默认用这里的分组和模型，用户也可以自己改。新工具要 TransitLink 0.5.0 或更高版本才会读取。',
+        description: '用户一键配置时默认用这里的分组和模型，用户也可以自己改。后加的工具要较新的 TransitLink 才会读取：Gemini CLI、Grok Build、OpenCode、DeepSeek Harness 要 0.5.0，Pi、Oh My Pi、Kimi Code、MiniMax Code、OpenClaw 要 0.6.0。',
         claudeCode: 'Claude Code',
         codex: 'Codex',
         geminiCli: 'Gemini CLI',
         grokBuild: 'Grok Build',
         opencode: 'OpenCode',
         deepseekHarness: 'DeepSeek Harness',
+        pi: 'Pi',
+        ohMyPi: 'Oh My Pi',
+        kimiCode: 'Kimi Code',
+        minimaxCode: 'MiniMax Code',
+        openclaw: 'OpenClaw',
         group: '分组',
         model: '模型',
         groupAuto: '不指定（客户端按分组名自动推荐）',
@@ -1327,7 +1332,12 @@ export default {
           geminiCli: '不指定（自动选 Gemini Pro 模型）',
           grokBuild: '不指定（自动选最新的 Grok 模型）',
           opencode: '不指定（优先 Claude Sonnet，其次 GPT）',
-          deepseekHarness: '不指定（优先 DeepSeek 模型）'
+          deepseekHarness: '不指定（优先 DeepSeek 模型）',
+          pi: '不指定（优先 Claude Sonnet，其次 GPT）',
+          ohMyPi: '不指定（优先 Claude Sonnet，其次 GPT）',
+          kimiCode: '不指定（优先 Kimi 模型）',
+          minimaxCode: '不指定（优先 MiniMax 模型）',
+          openclaw: '不指定（优先 Claude Sonnet，其次 GPT）'
         },
         groupsLoading: '正在读取站点分组…',
         groupsFailed: '读取站点分组失败：{error}。可以直接填分组。'

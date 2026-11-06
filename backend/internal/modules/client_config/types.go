@@ -51,6 +51,7 @@ type ToolRecommend struct {
 }
 
 // Recommend 是各工具的推荐设置。JSON 键和 TransitLink 里工具的 ID 一致；旧版 TransitLink 不认识的键会忽略。
+// Antigravity CLI 只能用 Google 账号登录，TransitLink 没法一键配置，所以没有推荐设置。
 type Recommend struct {
 	ClaudeCode      ToolRecommend `json:"claudeCode"`
 	Codex           ToolRecommend `json:"codex"`
@@ -58,12 +59,22 @@ type Recommend struct {
 	GrokBuild       ToolRecommend `json:"grokBuild"`
 	OpenCode        ToolRecommend `json:"opencode"`
 	DeepseekHarness ToolRecommend `json:"deepseekHarness"`
+	Pi              ToolRecommend `json:"pi"`
+	OhMyPi          ToolRecommend `json:"ohMyPi"`
+	KimiCode        ToolRecommend `json:"kimiCode"`
+	MinimaxCode     ToolRecommend `json:"minimaxCode"`
+	OpenClaw        ToolRecommend `json:"openclaw"`
 }
 
 // fields 按固定顺序列出每个工具的推荐设置（存库、校验都按这个顺序）。
 func (r *Recommend) fields() []*ToolRecommend {
-	return []*ToolRecommend{&r.ClaudeCode, &r.Codex, &r.GeminiCli, &r.GrokBuild, &r.OpenCode, &r.DeepseekHarness}
+	return []*ToolRecommend{&r.ClaudeCode, &r.Codex, &r.GeminiCli, &r.GrokBuild, &r.OpenCode, &r.DeepseekHarness,
+		&r.Pi, &r.OhMyPi, &r.KimiCode, &r.MinimaxCode, &r.OpenClaw}
 }
+
+// recommendColumns 是每个工具在 client_configs 里的列名前缀（<前缀>_group、<前缀>_model），顺序和 fields 一致。
+var recommendColumns = []string{"claude", "codex", "gemini", "grok", "opencode", "dsh", "pi", "omp", "kimi", "minimax",
+	"openclaw"}
 
 type SupportLink struct {
 	Type  string `json:"type"`

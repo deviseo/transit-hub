@@ -77,6 +77,8 @@ func TestRepositorySavesAndFindsConfigs(t *testing.T) {
 			Codex:           ToolRecommend{Group: "codex", Model: "gpt-6.1-sol"},
 			GrokBuild:       ToolRecommend{Group: "grok"},
 			DeepseekHarness: ToolRecommend{Group: "deepseek", Model: "deepseek-v4"},
+			KimiCode:        ToolRecommend{Group: "kimi", Model: "kimi-k2.6"},
+			OpenClaw:        ToolRecommend{Group: "claude", Model: "claude-sonnet-5-5"},
 		},
 		Notice:           "维护",
 		NoticeUpdatedAt:  &notice,

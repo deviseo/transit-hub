@@ -105,6 +105,7 @@ func TestSaveGeneratesCodeAndPublishes(t *testing.T) {
 			Codex:           ToolRecommend{Group: "codex", Model: "gpt-6.1-sol"},
 			GeminiCli:       ToolRecommend{Group: " gemini ", Model: "gemini-3.1-pro-preview"},
 			DeepseekHarness: ToolRecommend{Group: "deepseek", Model: " deepseek-v4 "},
+			MinimaxCode:     ToolRecommend{Group: " minimax ", Model: "MiniMax-M3"},
 		},
 		Notice:  "本周六维护",
 		Support: []SupportLink{{Type: "telegram", Label: "TG 群", Value: "https://t.me/x"}, {Type: "qq", Label: "", Value: ""}},
@@ -140,7 +141,8 @@ func TestSaveGeneratesCodeAndPublishes(t *testing.T) {
 	}
 	// 新工具的推荐也去掉首尾空白后发给客户端；没设的留空。
 	if public.Recommend.GeminiCli.Group != "gemini" || public.Recommend.DeepseekHarness.Model != "deepseek-v4" ||
-		public.Recommend.OpenCode != (ToolRecommend{}) {
+		public.Recommend.MinimaxCode != (ToolRecommend{Group: "minimax", Model: "MiniMax-M3"}) ||
+		public.Recommend.OpenCode != (ToolRecommend{}) || public.Recommend.Pi != (ToolRecommend{}) {
 		t.Fatalf("new tools' recommend wrong: %+v", public.Recommend)
 	}
 	contentType, data, err := service.Logo(ctx, "abcdefghij")
@@ -229,6 +231,7 @@ func TestValidation(t *testing.T) {
 		"support no link": {UpdateRequest{Support: []SupportLink{{Type: "qq", Label: "QQ 群"}}}, ErrorInvalid},
 		"long notice":     {UpdateRequest{Notice: strings.Repeat("字", 2001)}, ErrorInvalid},
 		"long model":      {UpdateRequest{Recommend: Recommend{OpenCode: ToolRecommend{Model: strings.Repeat("m", 101)}}}, ErrorInvalid},
+		"long group":      {UpdateRequest{Recommend: Recommend{OhMyPi: ToolRecommend{Group: strings.Repeat("g", 101)}}}, ErrorInvalid},
 		"bad version":     {UpdateRequest{MinClientVersion: "latest"}, ErrorInvalid},
 		"short version":   {UpdateRequest{MinClientVersion: "0.2"}, ErrorInvalid},
 		"long category":   {UpdateRequest{Tickets: TicketSettings{Categories: []string{strings.Repeat("类", 41)}}}, ErrorInvalid},
