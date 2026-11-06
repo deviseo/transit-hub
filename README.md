@@ -111,7 +111,7 @@ git clone https://github.com/deviseo/transit-hub.git transit-hub
 cd transit-hub
 
 # Edit deploy/docker-compose.prod.yml first:
-# - image tag (defaults to deviseo/transithub:v1.2.0)
+# - image tag (defaults to deviseo/transithub:v1.3.0)
 # - replace every change-this-* placeholder
 # - database password in both DATABASE_URL and POSTGRES_PASSWORD
 # - ADMIN_EMAIL / ADMIN_PASSWORD
@@ -196,7 +196,7 @@ This starts PostgreSQL and Redis on local ports `5432` and `6379`.
 Because the Dockerfile is stored in `deploy/` but expects the repository root as build context, build with:
 
 ```bash
-docker build -f deploy/Dockerfile -t deviseo/transithub:v1.2.0 .
+docker build -f deploy/Dockerfile -t deviseo/transithub:v1.3.0 .
 ```
 
 ### Release Packages
@@ -204,10 +204,10 @@ docker build -f deploy/Dockerfile -t deviseo/transithub:v1.2.0 .
 Online updates install the packages attached to a GitHub Release. Build them with:
 
 ```bash
-scripts/build-release.sh v1.2.0
+scripts/build-release.sh v1.3.0
 ```
 
-This writes `transithub_v1.2.0_linux_amd64.tar.gz`, `transithub_v1.2.0_linux_arm64.tar.gz` and `checksums.txt` to `dist/release/v1.2.0/`; upload all three to the release. The version must match `defaultAppVersion` in `backend/internal/config/config.go`, because the server uses it to confirm that the new version started.
+This writes `transithub_v1.3.0_linux_amd64.tar.gz`, `transithub_v1.3.0_linux_arm64.tar.gz` and `checksums.txt` to `dist/release/v1.3.0/`; upload all three to the release. The version must match `defaultAppVersion` in `backend/internal/config/config.go`, because the server uses it to confirm that the new version started.
 
 ## Local Development
 
