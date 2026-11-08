@@ -3,6 +3,7 @@ package sales
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -20,7 +21,42 @@ type fakeStore struct {
 	usage      []dailyValueRow
 	amounts    []float64
 	payers     []PayerRow
+	excluded   []string
 	totalCalls []string
+}
+
+func (f *fakeStore) ExcludedChannels(ctx context.Context, ws Workspace) ([]string, error) {
+	return append([]string{}, f.excluded...), nil
+}
+
+// fakeExclusions 记下服务层交给仓储的排除、恢复和设置。
+type fakeExclusions struct {
+	channels []string
+	excluded []EntryKey
+	restored []EntryKey
+	found    int
+	filter   entryFilter
+	rows     []EntryRow
+}
+
+func (f *fakeExclusions) SetExcludedChannels(ctx context.Context, ws Workspace, channels []string) error {
+	f.channels = channels
+	return nil
+}
+
+func (f *fakeExclusions) Entries(ctx context.Context, ws Workspace, filter entryFilter) ([]EntryRow, int, error) {
+	f.filter = filter
+	return append([]EntryRow(nil), f.rows...), len(f.rows), nil
+}
+
+func (f *fakeExclusions) ExcludeEntries(ctx context.Context, ws Workspace, keys []EntryKey) (int, error) {
+	f.excluded = append(f.excluded, keys...)
+	return f.found, nil
+}
+
+func (f *fakeExclusions) RestoreEntries(ctx context.Context, ws Workspace, keys []EntryKey) (int, error) {
+	f.restored = append(f.restored, keys...)
+	return len(keys), nil
 }
 
 func rangeKey(from, to time.Time) string { return formatDay(from) + "|" + formatDay(to) }
@@ -258,3 +294,99 @@ func TestDistributionAndConcentrationEdgeCases(t *testing.T) {
 }
 
 func floatPtr(value float64) *float64 { return &value }
+
+func TestSummaryMarksExcludedChannelsAndTotalsWhatWasLeftOut(t *testing.T) {
+	store := &fakeStore{
+		synced: true,
+		state:  syncState{Platform: "sub2api", RechargeFrom: dayPtr("2026-01-01"), RechargeTo: dayPtr("2026-11-03")},
+		channels: []ChannelTotal{
+			{Channel: "payment", Amount: 80, Events: 3, Users: 2, ExcludedAmount: 10, ExcludedEntries: 1},
+			{Channel: "admin_add", Amount: 15, Events: 1, Users: 1},
+			{Channel: "admin_deduct", Amount: -5, Events: 1, Users: 1},
+		},
+		excluded: []string{"admin_add"},
+	}
+	service := serviceAt(store, fixedPrice(2), testNow)
+	response, err := service.Summary(context.Background(), Workspace{UserID: "u", AdminAccountID: "a"}, RangeQuery{Days: 7})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	payment, adminAdd, deduct := response.Channels[0], response.Channels[1], response.Channels[2]
+	if payment.Excluded || payment.Amount != 160 || payment.ExcludedAmount != 20 {
+		t.Fatalf("payment stays counted with its excluded entry converted: %+v", payment)
+	}
+	if !adminAdd.Excluded || adminAdd.Amount != 30 {
+		t.Fatalf("admin additions are not counted as a whole: %+v", adminAdd)
+	}
+	if deduct.Excluded {
+		t.Fatalf("deductions are never marked: %+v", deduct)
+	}
+	want := ExclusionSummary{Channels: []string{"admin_add"}, Entries: 1, Amount: 50}
+	if fmt.Sprint(response.Exclusions) != fmt.Sprint(want) {
+		t.Fatalf("exclusions = %+v, want %+v", response.Exclusions, want)
+	}
+}
+
+func TestExcludedChannelsAreValidatedAndSorted(t *testing.T) {
+	exclusions := &fakeExclusions{}
+	service := &Service{store: &fakeStore{}, exclusions: exclusions, now: func() time.Time { return testNow }}
+	ws := Workspace{UserID: "u", AdminAccountID: "a"}
+	saved, err := service.SetExcludedChannels(context.Background(), ws, []string{"redeem", " admin_add ", "redeem"})
+	if err != nil || fmt.Sprint(saved) != "[admin_add redeem]" || fmt.Sprint(exclusions.channels) != "[admin_add redeem]" {
+		t.Fatalf("saved = %v (%v), stored %v", saved, err, exclusions.channels)
+	}
+	if _, err := service.SetExcludedChannels(context.Background(), ws, []string{"admin_deduct"}); err == nil || err.Error() != ErrorInvalidChannel {
+		t.Fatalf("deductions can't be excluded: %v", err)
+	}
+	if saved, err := service.SetExcludedChannels(context.Background(), ws, nil); err != nil || len(saved) != 0 {
+		t.Fatalf("clearing: %v %v", saved, err)
+	}
+}
+
+func TestExcludeChecksEntriesAndReportsMissingOnes(t *testing.T) {
+	exclusions := &fakeExclusions{found: 1}
+	service := &Service{store: &fakeStore{}, exclusions: exclusions, now: func() time.Time { return testNow }}
+	ws := Workspace{UserID: "u", AdminAccountID: "a"}
+	key := EntryKey{SiteUserID: " 4 ", Day: "2026-10-31", Channel: "admin_add"}
+	if count, err := service.Exclude(context.Background(), ws, []EntryKey{key}); err != nil || count != 1 {
+		t.Fatalf("exclude: %d %v", count, err)
+	}
+	if got := exclusions.excluded[0]; got.SiteUserID != "4" || formatDay(got.day) != "2026-10-31" {
+		t.Fatalf("key not cleaned: %+v", got)
+	}
+	for _, bad := range [][]EntryKey{
+		nil,
+		{{SiteUserID: "", Day: "2026-10-31", Channel: "admin_add"}},
+		{{SiteUserID: "4", Day: "31/10", Channel: "admin_add"}},
+		{{SiteUserID: "4", Day: "2026-10-31", Channel: "admin_deduct"}},
+		make([]EntryKey, maxEntryKeys+1),
+	} {
+		if _, err := service.Exclude(context.Background(), ws, bad); err == nil || err.Error() != ErrorInvalidEntry {
+			t.Fatalf("keys %+v must be rejected: %v", bad, err)
+		}
+	}
+	exclusions.found = 0
+	if _, err := service.Exclude(context.Background(), ws, []EntryKey{key}); err == nil || err.Error() != ErrorEntryNotFound {
+		t.Fatalf("a row that is gone must be reported: %v", err)
+	}
+}
+
+func TestEntriesConvertMoneyAndPage(t *testing.T) {
+	exclusions := &fakeExclusions{rows: []EntryRow{{SiteUserID: "4", Day: "2026-10-31", Channel: "admin_add", Amount: 15, Events: 1, ExcludedAmount: 15, ExcludedEvents: 1}}}
+	service := &Service{store: &fakeStore{excluded: []string{"redeem"}}, exclusions: exclusions, prices: fixedPrice(2), now: func() time.Time { return testNow }}
+	response, err := service.Entries(context.Background(), Workspace{UserID: "u", AdminAccountID: "a"},
+		EntryQuery{From: "2026-10-27", To: "2026-11-02", Channel: "admin_add", Search: "  dave ", Page: 3})
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if response.Items[0].Amount != 30 || response.Items[0].ExcludedAmount != 30 || response.Page != 3 || fmt.Sprint(response.ExcludedChannels) != "[redeem]" {
+		t.Fatalf("unexpected response: %+v", response)
+	}
+	if exclusions.filter.Search != "dave" || exclusions.filter.Offset != 2*entriesPageSize || exclusions.filter.Limit != entriesPageSize {
+		t.Fatalf("unexpected filter: %+v", exclusions.filter)
+	}
+	if _, err := service.Entries(context.Background(), Workspace{UserID: "u", AdminAccountID: "a"},
+		EntryQuery{From: "2026-10-27", To: "2026-11-02", Channel: "admin_deduct"}); err == nil || err.Error() != ErrorInvalidChannel {
+		t.Fatalf("deductions are not listed: %v", err)
+	}
+}

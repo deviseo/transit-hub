@@ -249,7 +249,8 @@ func (b *Builder) salesSection(ctx context.Context, userID, adminAccountID, date
 	lines := []string{title, line}
 	parts := make([]string, 0)
 	for _, channel := range summary.Channels {
-		if channel.Amount <= 0 {
+		// 站长选择不计入的渠道不列出来（入账合计里也没有它）。
+		if channel.Amount <= 0 || channel.Excluded {
 			continue
 		}
 		name := channelNames[channel.Channel]

@@ -85,6 +85,7 @@ The project is built as a Go backend with a Vue 3 admin frontend, backed by Post
 - **Dashboard metrics** - View live and historical operation data, including balances, costs, trends, group usage, and upstream drilldowns.
 - **Group multiplier tracking** - A read-only list of upstream group multipliers with search, filters, changes, and history.
 - **User activity analytics** - Sync your own sub2api/new-api users and daily usage to find inactive or declining users, compare periods, and track top-ups, spend, and user balances.
+- **Sales analysis** - Credits by channel, paying and repeat users, conversion, concentration and the top payers, with a period-over-period comparison. Leave out credits that are not sales, one entry at a time or a whole channel such as admin top-ups.
 - **Mass email** - Email selected users or an activity segment, with an unsubscribe link and a per-workspace suppression list.
 - **Leads** - Keep email addresses of potential users with their source, add them one at a time or import a batch, and email them through the same queue with unsubscribe links, an ad label in the subject and a 24-hour sending limit.
 - **TransitLink client** - Publish a site link for the TransitLink desktop client with your branding, recommended groups and models, notice, and support contacts. Users open the link to connect and set up Claude Code, Codex, Gemini CLI, Grok Build, OpenCode, DeepSeek Harness, Pi, Oh My Pi, Kimi Code, MiniMax Code and OpenClaw in one click.

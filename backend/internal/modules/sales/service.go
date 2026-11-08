@@ -22,6 +22,15 @@ type store interface {
 	DailyConsumption(ctx context.Context, ws Workspace, from, to time.Time) ([]dailyValueRow, error)
 	PayerAmounts(ctx context.Context, ws Workspace, from, to time.Time) ([]float64, error)
 	TopPayers(ctx context.Context, ws Workspace, from, to time.Time, limit int) ([]PayerRow, error)
+	ExcludedChannels(ctx context.Context, ws Workspace) ([]string, error)
+}
+
+// exclusionStore 读写用户选择不计入的入账（只有 Repository 实现，服务层测试里不需要）。
+type exclusionStore interface {
+	SetExcludedChannels(ctx context.Context, ws Workspace, channels []string) error
+	Entries(ctx context.Context, ws Workspace, filter entryFilter) ([]EntryRow, int, error)
+	ExcludeEntries(ctx context.Context, ws Workspace, keys []EntryKey) (int, error)
+	RestoreEntries(ctx context.Context, ws Workspace, keys []EntryKey) (int, error)
 }
 
 // PriceProvider 返回工作区「我的站点售价」（站点余额 1 个单位卖多少元），与仪表盘营收换算一致。
@@ -34,16 +43,18 @@ type AccountResolver interface {
 	RequireCurrentID(ctx context.Context, userID string) (string, error)
 }
 
-// Service 基于「用户活跃分析」已同步到本地的数据计算销售指标，不访问站点。
+// Service 基于「用户活跃分析」已同步到本地的数据计算销售指标，不访问站点。用户可以选择某些入账不计入
+// （单条明细或整个渠道），只影响这里的统计，不改站点数据。
 type Service struct {
-	store    store
-	prices   PriceProvider
-	accounts AccountResolver
-	now      func() time.Time
+	store      store
+	exclusions exclusionStore
+	prices     PriceProvider
+	accounts   AccountResolver
+	now        func() time.Time
 }
 
 func NewService(repository *Repository, prices PriceProvider, accounts AccountResolver) *Service {
-	return &Service{store: repository, prices: prices, accounts: accounts, now: time.Now}
+	return &Service{store: repository, exclusions: repository, prices: prices, accounts: accounts, now: time.Now}
 }
 
 // CurrentWorkspace 返回用户当前选中的工作区。
@@ -205,8 +216,21 @@ func (s *Service) Summary(ctx context.Context, ws Workspace, query RangeQuery) (
 	if err != nil {
 		return SummaryResponse{}, err
 	}
+	excludedChannels, err := s.store.ExcludedChannels(ctx, ws)
+	if err != nil {
+		return SummaryResponse{}, err
+	}
+	response.Exclusions = ExclusionSummary{Channels: excludedChannels}
 	for i := range channels {
 		channels[i].Amount *= price
+		channels[i].ExcludedAmount *= price
+		if channels[i].Amount > 0 && containsChannel(excludedChannels, channels[i].Channel) {
+			channels[i].Excluded = true
+			response.Exclusions.Amount += channels[i].Amount
+			continue
+		}
+		response.Exclusions.Amount += channels[i].ExcludedAmount
+		response.Exclusions.Entries += channels[i].ExcludedEntries
 	}
 	response.Channels = channels
 
@@ -374,6 +398,115 @@ func distribution(amounts []float64) []DistributionBucket {
 		buckets[index].Amount += amount
 	}
 	return buckets
+}
+
+func containsChannel(channels []string, channel string) bool {
+	for _, known := range channels {
+		if known == channel {
+			return true
+		}
+	}
+	return false
+}
+
+// SetExcludedChannels 设置整个不计入的渠道（只能是正向入账的渠道），返回保存后的列表。
+func (s *Service) SetExcludedChannels(ctx context.Context, ws Workspace, channels []string) ([]string, error) {
+	saved := make([]string, 0, len(channels))
+	for _, channel := range channels {
+		channel = strings.TrimSpace(channel)
+		if !countable(channel) {
+			return nil, requestError(ErrorInvalidChannel)
+		}
+		if !containsChannel(saved, channel) {
+			saved = append(saved, channel)
+		}
+	}
+	sort.Strings(saved)
+	if err := s.exclusions.SetExcludedChannels(ctx, ws, saved); err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
+// Entries 列出区间内的入账明细（金额换算成人民币），可以按渠道、用户筛选，或者只看不计入的。
+func (s *Service) Entries(ctx context.Context, ws Workspace, query EntryQuery) (EntriesResponse, error) {
+	today := calendarDay(s.now())
+	from, to, err := resolveRange(RangeQuery{From: query.From, To: query.To}, today)
+	if err != nil {
+		return EntriesResponse{}, err
+	}
+	channel := strings.TrimSpace(query.Channel)
+	if channel != "" && !countable(channel) {
+		return EntriesResponse{}, requestError(ErrorInvalidChannel)
+	}
+	search := strings.TrimSpace(query.Search)
+	if len([]rune(search)) > 100 {
+		search = string([]rune(search)[:100])
+	}
+	page := query.Page
+	if page < 1 {
+		page = 1
+	}
+	items, total, err := s.exclusions.Entries(ctx, ws, entryFilter{
+		From: from, To: to, Channel: channel, Search: search, ExcludedOnly: query.ExcludedOnly,
+		Limit: entriesPageSize, Offset: (page - 1) * entriesPageSize,
+	})
+	if err != nil {
+		return EntriesResponse{}, err
+	}
+	excludedChannels, err := s.store.ExcludedChannels(ctx, ws)
+	if err != nil {
+		return EntriesResponse{}, err
+	}
+	price := s.unitPrice(ctx, ws)
+	for i := range items {
+		items[i].Amount *= price
+		items[i].ExcludedAmount *= price
+	}
+	return EntriesResponse{Items: items, Total: total, Page: page, PageSize: entriesPageSize, ExcludedChannels: excludedChannels}, nil
+}
+
+// checkKeys 校验要排除或恢复的明细。
+func checkKeys(keys []EntryKey) ([]EntryKey, error) {
+	if len(keys) == 0 || len(keys) > maxEntryKeys {
+		return nil, requestError(ErrorInvalidEntry)
+	}
+	checked := make([]EntryKey, 0, len(keys))
+	for _, key := range keys {
+		key.SiteUserID = strings.TrimSpace(key.SiteUserID)
+		day, ok := parseDay(key.Day)
+		if key.SiteUserID == "" || len(key.SiteUserID) > 100 || !ok || !countable(key.Channel) {
+			return nil, requestError(ErrorInvalidEntry)
+		}
+		key.day = day
+		checked = append(checked, key)
+	}
+	return checked, nil
+}
+
+// Exclude 把这些明细记为不计入（按现在的金额）。一条都没找到时报错（例如数据已经重新同步）。
+func (s *Service) Exclude(ctx context.Context, ws Workspace, keys []EntryKey) (int, error) {
+	checked, err := checkKeys(keys)
+	if err != nil {
+		return 0, err
+	}
+	count, err := s.exclusions.ExcludeEntries(ctx, ws, checked)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, requestError(ErrorEntryNotFound)
+	}
+	return count, nil
+}
+
+// Restore 把这些明细重新计入。
+func (s *Service) Restore(ctx context.Context, ws Workspace, keys []EntryKey) (int, error) {
+	checked, err := checkKeys(keys)
+	if err != nil {
+		return 0, err
+	}
+	return s.exclusions.RestoreEntries(ctx, ws, checked)
 }
 
 // IsRequestError 判断是否为可直接返回给前端的业务错误。

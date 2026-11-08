@@ -1273,7 +1273,9 @@ export default {
         goUserActivity: '去用户分析同步数据',
         showTable: '表格',
         showChart: '图表',
-        viewDetail: '查看 {name} 的详情'
+        viewDetail: '查看 {name} 的详情',
+        manageExcluded: '管理',
+        entries: '入账明细'
       },
       empty: {
         title: '还没有可分析的数据',
@@ -1297,7 +1299,8 @@ export default {
         consumptionNone: '所选区间没有消耗',
         balanceChange: '资金沉淀',
         balanceChangeHint: '期末用户余额 {value}',
-        balanceUnknown: '缺少期初或期末的余额快照'
+        balanceUnknown: '缺少期初或期末的余额快照',
+        excluded: '另有 {amount} 设为不计入'
       },
       trend: {
         title: '每日入账与消耗',
@@ -1311,7 +1314,12 @@ export default {
       },
       channels: {
         title: '入账渠道',
-        subtitle: '扣减（管理员扣款、余额减少）单独列出，不计入入账合计',
+        subtitle: '取消勾选的渠道不算销售；点渠道名可以逐笔选择不计入。扣减（管理员扣款、余额减少）单独列出，不计入入账合计',
+        counted: '计入',
+        countThis: '计入「{channel}」',
+        viewEntries: '查看「{channel}」的明细，逐笔选择计不计入',
+        excludedPart: '其中 {amount} 不计入',
+        excludedChannel: '整个渠道不计入',
         channel: '渠道',
         amount: '金额',
         share: '占入账',
@@ -1321,6 +1329,31 @@ export default {
         notCounted: '不计入',
         empty: '所选区间没有入账记录。',
         recordsNote: '在线充值来自站点支付订单；兑换码可能是售卡也可能是赠送；邀请返利转入不是现金收入。'
+      },
+      entries: {
+        title: '入账明细',
+        subtitle: '{range} · 设为「不计入」的入账不算进销售分析和每日报告，只影响这里的统计，不会改站点上的数据。',
+        close: '关闭',
+        channel: '渠道',
+        allChannels: '全部渠道',
+        search: '搜索用户邮箱、用户名或 ID',
+        excludedOnly: '只看不计入的',
+        channelExcluded: '「{channel}」整个渠道都设为不计入了，下面的明细不管怎么选都不计入。要计入的话，在入账渠道里重新勾选它。',
+        empty: '没有符合条件的入账。',
+        emptyExcluded: '还没有设为不计入的入账。',
+        day: '日期',
+        user: '用户',
+        amount: '金额',
+        action: '操作',
+        events: '{count} 笔',
+        partly: '其中 {amount} 不计入',
+        notCounted: '不计入',
+        exclude: '不计入',
+        excludeRest: '全部不计入',
+        restore: '恢复',
+        pageInfo: '第 {page} / {pages} 页 · 共 {total} 条',
+        previous: '上一页',
+        next: '下一页'
       },
       conversion: {
         title: '转化、复购与集中度',
@@ -1352,7 +1385,10 @@ export default {
       errors: {
         network: '网络请求失败，请检查网络后重试。',
         request: '销售分析数据加载失败，请稍后重试。',
-        invalidRange: '统计区间无效：开始日期不能晚于结束日期，结束日期不能晚于今天，跨度不超过 366 天。'
+        invalidRange: '统计区间无效：开始日期不能晚于结束日期，结束日期不能晚于今天，跨度不超过 366 天。',
+        invalidEntry: '这条入账不对，请刷新后再试。',
+        invalidChannel: '这个渠道不能设为不计入。',
+        entryNotFound: '没找到这条入账（数据可能刚重新同步过），请刷新后再试。'
       }
     },
     tickets: {

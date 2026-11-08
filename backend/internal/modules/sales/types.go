@@ -7,6 +7,9 @@ const (
 	ErrorNoCurrentAccount = "admin.adminAccounts.errors.noCurrentAccount"
 	ErrorInvalidRange     = "admin.sales.errors.invalidRange"
 	ErrorRequest          = "admin.sales.errors.request"
+	ErrorInvalidEntry     = "admin.sales.errors.invalidEntry"
+	ErrorInvalidChannel   = "admin.sales.errors.invalidChannel"
+	ErrorEntryNotFound    = "admin.sales.errors.entryNotFound"
 )
 
 const (
@@ -28,6 +31,25 @@ const (
 	ChannelAffiliate   = "affiliate"
 	ChannelCredit      = "credit"
 	ChannelDebit       = "debit"
+)
+
+// countableChannels 是可以选择不计入的渠道（正向入账）。扣减本来就不计入入账合计。
+var countableChannels = []string{ChannelPayment, ChannelRedeem, ChannelAdminAdd, ChannelAffiliate, ChannelCredit}
+
+func countable(channel string) bool {
+	for _, known := range countableChannels {
+		if known == channel {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// entriesPageSize 是入账明细每页多少条。
+	entriesPageSize = 50
+	// maxEntryKeys 是一次最多排除或恢复多少条明细。
+	maxEntryKeys = 200
 )
 
 // Workspace 是数据隔离单元（TransitHub 用户 + 当前 admin 工作区）。
@@ -84,12 +106,69 @@ type PeriodTotals struct {
 	BalanceEnd   *float64 `json:"balanceEnd"`
 }
 
-// ChannelTotal 是一个入账渠道在区间内的合计（金额带符号）。
+// ChannelTotal 是一个入账渠道在区间内的合计（金额带符号，已减去不计入的明细）。
 type ChannelTotal struct {
 	Channel string  `json:"channel"`
 	Amount  float64 `json:"amount"`
 	Events  int     `json:"events"`
 	Users   int     `json:"users"`
+	// Excluded：整个渠道都不计入（Amount 是重新计入时会加上的金额）。
+	Excluded bool `json:"excluded,omitempty"`
+	// ExcludedAmount / ExcludedEntries 是这个渠道里选择不计入的明细（金额、条数）。
+	ExcludedAmount  float64 `json:"excludedAmount,omitempty"`
+	ExcludedEntries int     `json:"excludedEntries,omitempty"`
+}
+
+// ExclusionSummary 说明区间内有多少入账没有计入（上面的数字已经去掉了这些）。
+type ExclusionSummary struct {
+	// Channels 是整个不计入的渠道。
+	Channels []string `json:"channels"`
+	// Entries 是计入的渠道里单独排除的明细条数。
+	Entries int `json:"entries"`
+	// Amount 是没有计入的金额合计（单独排除的明细加上整个不计入的渠道）。
+	Amount float64 `json:"amount"`
+}
+
+// EntryKey 指向一条入账明细（「用户 × 天 × 渠道」）。
+type EntryKey struct {
+	SiteUserID string `json:"siteUserId"`
+	Day        string `json:"day"`
+	Channel    string `json:"channel"`
+	day        time.Time
+}
+
+// EntryQuery 是入账明细的查询条件。
+type EntryQuery struct {
+	From         string
+	To           string
+	Channel      string
+	Search       string
+	ExcludedOnly bool
+	Page         int
+}
+
+// EntryRow 是一条入账明细（金额已换算成人民币）。
+type EntryRow struct {
+	SiteUserID string  `json:"siteUserId"`
+	Email      string  `json:"email"`
+	Username   string  `json:"username"`
+	Day        string  `json:"day"`
+	Channel    string  `json:"channel"`
+	Amount     float64 `json:"amount"`
+	Events     int     `json:"events"`
+	// ExcludedAmount / ExcludedEvents 是不计入的部分；整条都不计入时等于 Amount / Events，0 表示计入。
+	ExcludedAmount float64 `json:"excludedAmount"`
+	ExcludedEvents int     `json:"excludedEvents"`
+}
+
+// EntriesResponse 是入账明细的一页。
+type EntriesResponse struct {
+	Items    []EntryRow `json:"items"`
+	Total    int        `json:"total"`
+	Page     int        `json:"page"`
+	PageSize int        `json:"pageSize"`
+	// ExcludedChannels 是整个不计入的渠道（这些渠道的明细不管排不排除都不计入）。
+	ExcludedChannels []string `json:"excludedChannels"`
 }
 
 // DailyPoint 是每日序列；数据未覆盖的日期对应字段为 nil（图表断开，而不是显示为 0）。
@@ -143,6 +222,7 @@ type SummaryResponse struct {
 	Concentration Concentration        `json:"concentration"`
 	Distribution  []DistributionBucket `json:"distribution"`
 	TopPayers     []PayerRow           `json:"topPayers"`
+	Exclusions    ExclusionSummary     `json:"exclusions"`
 }
 
 type requestError string

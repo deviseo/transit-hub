@@ -2,13 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
-import { AlertCircle, BadgeDollarSign, Database, Info, Loader2, RefreshCw, Table2 } from 'lucide-vue-next'
+import { AlertCircle, BadgeDollarSign, Database, Info, ListFilter, Loader2, RefreshCw, Table2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import DeltaBadge from '../components/user-activity/DeltaBadge.vue'
+import SalesEntriesDrawer from '../components/sales/SalesEntriesDrawer.vue'
 import SalesTrendChart from '../components/sales/SalesTrendChart.vue'
 import SitePricingModal from '../components/dashboard/SitePricingModal.vue'
 import UserActivityDetailDrawer from '../components/user-activity/UserActivityDetailDrawer.vue'
-import { getSalesSummary } from '../api/sales'
+import { getSalesSummary, setSalesExcludedChannels } from '../api/sales'
 import { useUserActivityFormat } from '../composables/useUserActivityFormat'
 import { formatCny } from '../utils/dashboard'
 import type { SalesChannelTotal, SalesDistributionBucket, SalesRangeQuery, SalesSummary } from '../types/sales'
@@ -24,6 +25,8 @@ const { formatCount, formatPercent, formatDay, formatShortDay, formatRange, form
 const presets: Array<7 | 30 | 90> = [7, 30, 90]
 // 渠道的固定顺序（也是图表颜色槽位的顺序），颜色跟着渠道走，不随金额排名变化。
 const CHANNEL_ORDER = ['payment', 'credit', 'redeem', 'admin_add', 'affiliate']
+// 可以选择不计入的渠道（正向入账；扣减本来就不计入入账合计）。
+const COUNTABLE = new Set(CHANNEL_ORDER)
 
 const businessToday = (): string => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 const shiftDay = (day: string, delta: number): string => {
@@ -42,6 +45,10 @@ const errorKey = ref<string | null>(null)
 const showTable = ref(false)
 const isPricingOpen = ref(false)
 const detailUserId = ref<string | null>(null)
+// 入账明细抽屉：打开时的筛选。
+const entries = ref<{ channel?: string, excludedOnly?: boolean } | null>(null)
+const savingChannel = ref('')
+const channelError = ref<string | null>(null)
 let requestId = 0
 
 const errorText = (key: string): string => (te(key) ? t(key) : t('admin.sales.errors.request'))
@@ -152,11 +159,35 @@ const chartSeries = computed(() => {
 })
 const chartConsumption = computed(() => daily.value.map((point) => point.consumption))
 
-const positiveChannels = computed(() => (summary.value?.channels ?? []).filter((item) => item.amount > 0))
+// 明细全部不计入（金额变成 0）的渠道也留着，方便恢复。
+const positiveChannels = computed(() => (summary.value?.channels ?? []).filter((item) => item.amount > 0 || (item.excludedAmount ?? 0) > 0))
 const negativeChannels = computed(() => (summary.value?.channels ?? []).filter((item) => item.amount < 0))
 const channelShare = (item: SalesChannelTotal): number => {
   const total = current.value?.credits ?? 0
-  return total > 0 && item.amount > 0 ? item.amount / total : 0
+  return total > 0 && item.amount > 0 && !item.excluded ? item.amount / total : 0
+}
+const exclusions = computed(() => summary.value?.exclusions ?? { channels: [], entries: 0, amount: 0 })
+const hasExclusions = computed(() => exclusions.value.amount > 0 || exclusions.value.channels.length > 0)
+
+// 整个渠道计入或不计入：保存后重新算。
+const toggleChannel = async (channel: string, counted: boolean) => {
+  const next = new Set(exclusions.value.channels)
+  if (counted) next.delete(channel)
+  else next.add(channel)
+  savingChannel.value = channel
+  channelError.value = null
+  try {
+    await setSalesExcludedChannels([...next])
+    await load()
+  } catch (error) {
+    channelError.value = error instanceof Error ? error.message : 'admin.sales.errors.request'
+  } finally {
+    savingChannel.value = ''
+  }
+}
+
+const openEntries = (channel?: string) => {
+  entries.value = channel ? { channel } : { excludedOnly: exclusions.value.entries > 0 }
 }
 
 const distribution = computed(() => summary.value?.distribution ?? [])
@@ -280,6 +311,12 @@ const onPricingSaved = () => { void load() }
             <DeltaBadge :current="current.credits" :previous="previous?.credits" :missing-hint="t('admin.sales.coverage.previousMissing')" />
           </p>
           <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.sales.kpi.creditsHint', { count: formatCount(current.events), deductions: formatMoney(current.deductions) }) }}</p>
+          <p v-if="hasExclusions" class="mt-1 text-xs text-muted-foreground">
+            {{ t('admin.sales.kpi.excluded', { amount: formatMoney(exclusions.amount) }) }}
+            <button type="button" class="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" @click="openEntries()">
+              {{ t('admin.sales.actions.manageExcluded') }}
+            </button>
+          </p>
         </article>
         <article class="rounded-lg border border-border/50 bg-card p-4 shadow-sm">
           <p class="text-xs text-muted-foreground">{{ t('admin.sales.kpi.payers') }}</p>
@@ -383,12 +420,26 @@ const onPricingSaved = () => { void load() }
       <section class="grid gap-3 xl:grid-cols-2">
         <!-- 渠道构成 -->
         <article class="rounded-lg border border-border/50 bg-card p-4 shadow-sm">
-          <h3 class="text-sm font-semibold text-foreground">{{ t('admin.sales.channels.title') }}</h3>
-          <p class="mt-0.5 text-xs text-muted-foreground">{{ t('admin.sales.channels.subtitle') }}</p>
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <h3 class="text-sm font-semibold text-foreground">{{ t('admin.sales.channels.title') }}</h3>
+              <p class="mt-0.5 text-xs text-muted-foreground">{{ t('admin.sales.channels.subtitle') }}</p>
+            </div>
+            <button
+              type="button"
+              class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/60 px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              @click="openEntries()"
+            >
+              <ListFilter class="h-3.5 w-3.5" />
+              {{ t('admin.sales.actions.entries') }}
+            </button>
+          </div>
+          <p v-if="channelError" class="mt-2 text-xs text-warning" role="alert">{{ errorText(channelError) }}</p>
           <div v-if="positiveChannels.length === 0 && negativeChannels.length === 0" class="py-10 text-center text-sm text-muted-foreground">{{ t('admin.sales.channels.empty') }}</div>
           <table v-else class="mt-3 w-full text-left text-sm">
             <thead class="text-xs text-muted-foreground">
               <tr>
+                <th class="w-8 py-2 pr-1 font-medium"><span class="sr-only">{{ t('admin.sales.channels.counted') }}</span></th>
                 <th class="py-2 pr-2 font-medium">{{ t('admin.sales.channels.channel') }}</th>
                 <th class="py-2 pr-2 text-right font-medium">{{ t('admin.sales.channels.amount') }}</th>
                 <th class="w-1/4 py-2 pr-2 font-medium">{{ t('admin.sales.channels.share') }}</th>
@@ -398,11 +449,40 @@ const onPricingSaved = () => { void load() }
               </tr>
             </thead>
             <tbody class="divide-y divide-border/50 tabular-nums">
-              <tr v-for="item in [...positiveChannels, ...negativeChannels]" :key="item.channel">
-                <td class="py-2 pr-2 text-foreground">{{ channelLabel(item.channel) }}</td>
-                <td class="py-2 pr-2 text-right font-medium" :class="item.amount < 0 ? 'text-muted-foreground' : 'text-foreground'">{{ item.amount < 0 ? formatSignedMoney(item.amount) : formatMoney(item.amount) }}</td>
+              <tr v-for="item in [...positiveChannels, ...negativeChannels]" :key="item.channel" :class="{ 'opacity-60': item.excluded }">
+                <td class="py-2 pr-1">
+                  <input
+                    v-if="item.amount >= 0 && COUNTABLE.has(item.channel)"
+                    type="checkbox"
+                    class="h-3.5 w-3.5 accent-primary"
+                    :checked="!item.excluded"
+                    :disabled="savingChannel !== '' || isLoading"
+                    :aria-label="t('admin.sales.channels.countThis', { channel: channelLabel(item.channel) })"
+                    :title="t('admin.sales.channels.countThis', { channel: channelLabel(item.channel) })"
+                    @change="toggleChannel(item.channel, ($event.target as HTMLInputElement).checked)"
+                  >
+                </td>
+                <td class="py-2 pr-2 text-foreground">
+                  <button
+                    v-if="item.amount >= 0 && COUNTABLE.has(item.channel)"
+                    type="button"
+                    class="text-left hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    :title="t('admin.sales.channels.viewEntries', { channel: channelLabel(item.channel) })"
+                    @click="openEntries(item.channel)"
+                  >
+                    {{ channelLabel(item.channel) }}
+                  </button>
+                  <span v-else>{{ channelLabel(item.channel) }}</span>
+                </td>
+                <td class="py-2 pr-2 text-right font-medium" :class="item.amount < 0 || item.excluded ? 'text-muted-foreground' : 'text-foreground'">
+                  {{ item.amount < 0 ? formatSignedMoney(item.amount) : formatMoney(item.amount) }}
+                  <span v-if="(item.excludedAmount ?? 0) > 0 && !item.excluded" class="block text-[11px] font-normal text-muted-foreground">
+                    {{ t('admin.sales.channels.excludedPart', { amount: formatMoney(item.excludedAmount) }) }}
+                  </span>
+                </td>
                 <td class="py-2 pr-2">
-                  <div v-if="item.amount > 0" class="flex items-center gap-2">
+                  <span v-if="item.excluded" class="text-xs text-muted-foreground">{{ t('admin.sales.channels.excludedChannel') }}</span>
+                  <div v-else-if="item.amount > 0" class="flex items-center gap-2">
                     <span class="h-1.5 flex-1 overflow-hidden rounded-full bg-primary/15" aria-hidden="true">
                       <span class="block h-full rounded-full bg-primary" :style="{ width: `${Math.min(100, channelShare(item) * 100)}%` }" />
                     </span>
@@ -512,6 +592,15 @@ const onPricingSaved = () => { void load() }
     </template>
 
     <SitePricingModal :open="isPricingOpen" @close="isPricingOpen = false" @saved="onPricingSaved" />
+    <SalesEntriesDrawer
+      v-if="entries && summary"
+      :from="summary.range.from"
+      :to="summary.range.to"
+      :channel="entries.channel"
+      :excluded-only="entries.excludedOnly"
+      @changed="load"
+      @close="entries = null"
+    />
     <UserActivityDetailDrawer
       v-if="detailUserId"
       :site-user-id="detailUserId"

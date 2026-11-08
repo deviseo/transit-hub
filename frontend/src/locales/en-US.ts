@@ -1273,7 +1273,9 @@ export default {
         goUserActivity: 'Sync data in User Analytics',
         showTable: 'Table',
         showChart: 'Chart',
-        viewDetail: 'View details of {name}'
+        viewDetail: 'View details of {name}',
+        manageExcluded: 'Manage',
+        entries: 'Credit entries'
       },
       empty: {
         title: 'No data to analyze yet',
@@ -1297,7 +1299,8 @@ export default {
         consumptionNone: 'No spend in this period',
         balanceChange: 'Balance growth',
         balanceChangeHint: 'User balance at period end: {value}',
-        balanceUnknown: 'Missing a balance snapshot at the start or end'
+        balanceUnknown: 'Missing a balance snapshot at the start or end',
+        excluded: '{amount} more is set as not counted'
       },
       trend: {
         title: 'Daily credits and spend',
@@ -1311,7 +1314,12 @@ export default {
       },
       channels: {
         title: 'Credit sources',
-        subtitle: 'Deductions (admin deductions, balance decreases) are listed separately and not counted in credits',
+        subtitle: 'Unticked channels are not counted as sales; click a channel to choose entry by entry. Deductions (admin deductions, balance decreases) are listed separately and not counted in credits',
+        counted: 'Counted',
+        countThis: 'Count “{channel}”',
+        viewEntries: 'View the “{channel}” entries and choose which to count',
+        excludedPart: '{amount} of it not counted',
+        excludedChannel: 'Whole channel not counted',
         channel: 'Source',
         amount: 'Amount',
         share: 'Share',
@@ -1321,6 +1329,31 @@ export default {
         notCounted: 'Not counted',
         empty: 'No credits in this period.',
         recordsNote: 'Online top-ups come from site payment orders; redeem codes may be sold or given away; referral rebates are not cash income.'
+      },
+      entries: {
+        title: 'Credit entries',
+        subtitle: '{range} · Entries set as not counted are left out of sales analysis and the daily report. This only affects TransitHub\'s numbers, never the data on your site.',
+        close: 'Close',
+        channel: 'Channel',
+        allChannels: 'All channels',
+        search: 'Search by user email, username or ID',
+        excludedOnly: 'Not counted only',
+        channelExcluded: 'The whole “{channel}” channel is set as not counted, so none of these entries count whatever you choose. Tick it again under Credit channels to count it.',
+        empty: 'No matching credits.',
+        emptyExcluded: 'Nothing is set as not counted yet.',
+        day: 'Date',
+        user: 'User',
+        amount: 'Amount',
+        action: 'Action',
+        events: 'Entries: {count}',
+        partly: '{amount} of it not counted',
+        notCounted: 'Not counted',
+        exclude: 'Don\'t count',
+        excludeRest: 'Don\'t count any',
+        restore: 'Restore',
+        pageInfo: 'Page {page} of {pages} · {total} entries',
+        previous: 'Previous page',
+        next: 'Next page'
       },
       conversion: {
         title: 'Conversion, repeat purchases, and concentration',
@@ -1352,7 +1385,10 @@ export default {
       errors: {
         network: 'Network request failed. Check your connection and try again.',
         request: 'Failed to load sales data. Please try again later.',
-        invalidRange: 'Invalid period: the start date must not be after the end date, the end date must not be after today, and the period must not exceed 366 days.'
+        invalidRange: 'Invalid period: the start date must not be after the end date, the end date must not be after today, and the period must not exceed 366 days.',
+        invalidEntry: 'This credit entry is not valid. Refresh and try again.',
+        invalidChannel: 'This channel can\'t be set as not counted.',
+        entryNotFound: 'This credit entry was not found (the data may have just been synced again). Refresh and try again.'
       }
     },
     tickets: {

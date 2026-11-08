@@ -199,3 +199,133 @@ func TestSalesSummaryPostgresEndToEnd(t *testing.T) {
 		t.Fatalf("unexpected concentration: %+v", response.Concentration)
 	}
 }
+
+func TestSalesExclusionsPostgres(t *testing.T) {
+	pool := openSalesTestPool(t)
+	seedSalesData(t, pool)
+	repo := NewRepository(pool)
+	ctx := context.Background()
+	ws := Workspace{UserID: "u", AdminAccountID: "a"}
+	from, to := day("2026-10-27"), day("2026-11-02")
+	loc := time.FixedZone("CST", 8*3600)
+	regFrom := time.Date(2026, 10, 27, 0, 0, 0, 0, loc)
+	regTo := time.Date(2026, 11, 3, 0, 0, 0, 0, loc)
+	dave := EntryKey{SiteUserID: "4", Channel: "admin_add", day: day("2026-10-31")}
+	totals := func() rawTotals {
+		t.Helper()
+		got, err := repo.PeriodTotals(ctx, ws, from, to, regFrom, regTo)
+		if err != nil {
+			t.Fatalf("period totals: %v", err)
+		}
+		return got
+	}
+
+	// 管理员给 dave 的加款不算销售：入账、笔数、入账用户、首次入账都去掉它，扣款照旧单独列。
+	if count, err := repo.ExcludeEntries(ctx, ws, []EntryKey{dave, {SiteUserID: "404", Channel: "payment", day: day("2026-10-31")}}); err != nil || count != 1 {
+		t.Fatalf("exclude: %d %v", count, err)
+	}
+	want := rawTotals{Credits: 100, Deductions: 5, Events: 4, Payers: 2, RepeatPayers: 1, NewPayers: 1, Registered: 2, RegisteredPaid: 1, Consumption: 10}
+	if got := totals(); got != want {
+		t.Fatalf("totals after excluding = %+v, want %+v", got, want)
+	}
+	channels, err := repo.Channels(ctx, ws, from, to)
+	if err != nil {
+		t.Fatalf("channels: %v", err)
+	}
+	wantChannels := []ChannelTotal{
+		{Channel: "payment", Amount: 80, Events: 3, Users: 2},
+		{Channel: "redeem", Amount: 20, Events: 1, Users: 1},
+		{Channel: "admin_add", Amount: 0, Events: 0, Users: 0, ExcludedAmount: 15, ExcludedEntries: 1},
+		{Channel: "admin_deduct", Amount: -5, Events: 1, Users: 1},
+	}
+	if fmt.Sprint(channels) != fmt.Sprint(wantChannels) {
+		t.Fatalf("channels = %+v, want %+v", channels, wantChannels)
+	}
+	if amounts, err := repo.PayerAmounts(ctx, ws, from, to); err != nil || fmt.Sprint(amounts) != "[50 50]" {
+		t.Fatalf("payer amounts: %v %v", amounts, err)
+	}
+	if payers, err := repo.TopPayers(ctx, ws, from, to, 10); err != nil || len(payers) != 2 {
+		t.Fatalf("top payers without dave: %+v %v", payers, err)
+	}
+	if daily, err := repo.DailyChannels(ctx, ws, from, to); err != nil || len(daily) != 4 {
+		t.Fatalf("daily without the excluded row: %+v %v", daily, err)
+	}
+
+	// 当天后来又加了一次（同一行变大）：只排除原来那笔，新增的照常计入。
+	if _, err := pool.Exec(ctx, `UPDATE user_activity_recharge_daily SET amount = 40, events = 2
+		WHERE user_id = 'u' AND admin_account_id = 'a' AND site_user_id = '4' AND day = '2026-10-31' AND channel = 'admin_add'`); err != nil {
+		t.Fatalf("grow row: %v", err)
+	}
+	if got := totals(); got.Credits != 125 || got.Events != 5 || got.Payers != 3 {
+		t.Fatalf("the later addition counts: %+v", got)
+	}
+
+	// 明细：按天倒序，带不计入的部分；可以按渠道、用户筛选，只看不计入的，分页。
+	all := entryFilter{From: from, To: to, Limit: 50}
+	items, total, err := repo.Entries(ctx, ws, all)
+	if err != nil || total != 4 || len(items) != 4 {
+		t.Fatalf("entries: %+v %d %v", items, total, err)
+	}
+	if first := items[0]; first.SiteUserID != "4" || first.Email != "dave@example.test" || first.Amount != 40 || first.Events != 2 ||
+		first.ExcludedAmount != 15 || first.ExcludedEvents != 1 || first.Day != "2026-10-31" {
+		t.Fatalf("unexpected first entry: %+v", first)
+	}
+	for _, check := range []struct {
+		filter entryFilter
+		total  int
+	}{
+		{entryFilter{From: from, To: to, Channel: "payment", Limit: 50}, 2},
+		{entryFilter{From: from, To: to, Search: "BOB", Limit: 50}, 2},
+		{entryFilter{From: from, To: to, Search: "1", Limit: 50}, 1},
+		{entryFilter{From: from, To: to, Search: "%", Limit: 50}, 0},
+		{entryFilter{From: from, To: to, ExcludedOnly: true, Limit: 50}, 1},
+	} {
+		if _, total, err := repo.Entries(ctx, ws, check.filter); err != nil || total != check.total {
+			t.Fatalf("filter %+v: total %d, want %d (%v)", check.filter, total, check.total, err)
+		}
+	}
+	if page, total, err := repo.Entries(ctx, ws, entryFilter{From: from, To: to, Limit: 1, Offset: 1}); err != nil || total != 4 || len(page) != 1 || page[0].Day != "2026-10-30" {
+		t.Fatalf("second page: %+v %d %v", page, total, err)
+	}
+	// 别的工作区的同一个用户 ID 不受影响。
+	if items, total, err := repo.Entries(ctx, Workspace{UserID: "u", AdminAccountID: "b"}, all); err != nil || total != 1 || items[0].ExcludedAmount != 0 {
+		t.Fatalf("other workspace: %+v %d %v", items, total, err)
+	}
+
+	// 恢复：回到原来的数字。
+	if count, err := repo.RestoreEntries(ctx, ws, []EntryKey{dave}); err != nil || count != 1 {
+		t.Fatalf("restore: %d %v", count, err)
+	}
+	if got := totals(); got.Credits != 140 || got.Payers != 3 || got.NewPayers != 2 {
+		t.Fatalf("restored totals: %+v", got)
+	}
+
+	// 整个渠道不计入：兑换码不算入账，但渠道列表里还在（页面上可以重新打开）。
+	if err := repo.SetExcludedChannels(ctx, ws, []string{"redeem"}); err != nil {
+		t.Fatalf("set channels: %v", err)
+	}
+	if saved, err := repo.ExcludedChannels(ctx, ws); err != nil || fmt.Sprint(saved) != "[redeem]" {
+		t.Fatalf("saved channels: %v %v", saved, err)
+	}
+	if got := totals(); got.Credits != 120 || got.RepeatPayers != 0 {
+		t.Fatalf("totals without redeem: %+v", got)
+	}
+	channels, err = repo.Channels(ctx, ws, from, to)
+	if err != nil || channels[1].Channel != "redeem" && channels[2].Channel != "redeem" {
+		t.Fatalf("redeem stays listed: %+v %v", channels, err)
+	}
+	if saved, err := repo.ExcludedChannels(ctx, Workspace{UserID: "u", AdminAccountID: "b"}); err != nil || len(saved) != 0 {
+		t.Fatalf("other workspace has no setting: %v %v", saved, err)
+	}
+
+	// 服务层：整个渠道不计入时标出来，并算进「没有计入」的合计。
+	service := NewService(repo, fixedPrice(2), nil)
+	service.now = func() time.Time { return testNow }
+	response, err := service.Summary(ctx, ws, RangeQuery{Days: 7})
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if response.Current.Credits != 240 || fmt.Sprint(response.Exclusions) != fmt.Sprint(ExclusionSummary{Channels: []string{"redeem"}, Amount: 40}) {
+		t.Fatalf("summary with excluded channel: %+v %+v", response.Current, response.Exclusions)
+	}
+}
