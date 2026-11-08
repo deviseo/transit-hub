@@ -89,6 +89,12 @@ const routes = [
         component: () => import('./modules/admin/views/MassEmailView.vue')
       },
       {
+        path: 'leads',
+        name: 'AdminLeads',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/LeadsView.vue')
+      },
+      {
         path: 'accounts',
         name: 'AdminAccounts',
         component: () => import('./modules/admin/views/AdminAccountsView.vue')

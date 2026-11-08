@@ -12,8 +12,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
+	"mime"
 	"net"
+	"net/mail"
 	"strings"
 	"testing"
 	"time"
@@ -60,12 +63,82 @@ func TestBuildSMTPTestMessageUsesCustomSubjectAndHTMLBody(t *testing.T) {
 		Subject:        "TransitHub 限时活动",
 		HTMLBody:       "<h1>自定义正文</h1>",
 	}))
-	if !strings.Contains(message, "Subject: =?UTF-8?q?TransitHub_=E9=99=90=E6=97=B6=E6=B4=BB=E5=8A=A8?=") {
-		t.Fatalf("expected MIME encoded custom subject, got %s", message)
+	header, body := decodeTestMessage(t, message)
+	if subject := decodeTestHeader(t, header.Get("Subject")); subject != "TransitHub 限时活动" {
+		t.Fatalf("expected MIME encoded custom subject, got %q in %s", subject, message)
 	}
-	if !strings.Contains(message, "<h1>自定义正文</h1>") || strings.Contains(message, smtpTestHTMLBody) {
-		t.Fatalf("expected custom html body only, got %s", message)
+	if body != "<h1>自定义正文</h1>" {
+		t.Fatalf("expected custom html body only, got %q", body)
 	}
+}
+
+// 中文标题、发件人名字和正文按标准编码：每个头部的每一行不超过 76 个字符，正文 base64 每行不超过 76 个字符，
+// 收件端解码后和原文一模一样；还带着 Date 和 Message-ID。
+func TestBuildSMTPTestMessageEncodesChineseForEveryClient(t *testing.T) {
+	subject := "【广告】TransitHub 限时活动：新用户首月充值返利，名额有限，先到先得"
+	html := "<p>您好，这是一封测试邮件。</p>\n" + strings.Repeat("<p>限时权益：完成部署后即可体验统一站点监控。</p>", 20)
+	message := string(buildSMTPTestMessage(smtpSendConfig{
+		FromEmail:      "mailer@example.com",
+		FromName:       "示例中转站官方客服中心通知",
+		RecipientEmail: "me@example.com",
+		Subject:        subject,
+		HTMLBody:       html,
+	}))
+	head, rawBody, _ := strings.Cut(message, "\r\n\r\n")
+	for _, line := range strings.Split(head, "\r\n") {
+		if len(line) > 76 {
+			t.Errorf("header line longer than 76 characters (%d): %q", len(line), line)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimRight(rawBody, "\r\n"), "\r\n") {
+		if len(line) > 76 {
+			t.Errorf("body line longer than 76 characters: %d", len(line))
+		}
+	}
+	header, body := decodeTestMessage(t, message)
+	if got := decodeTestHeader(t, header.Get("Subject")); got != subject {
+		t.Fatalf("subject = %q", got)
+	}
+	from, err := header.AddressList("From")
+	if err != nil || len(from) != 1 || from[0].Name != "示例中转站官方客服中心通知" || from[0].Address != "mailer@example.com" {
+		t.Fatalf("from = %+v %v", from, err)
+	}
+	if body != html {
+		t.Fatal("the body must decode back to the original HTML")
+	}
+	if header.Get("Content-Transfer-Encoding") != "base64" || header.Get("Date") == "" || !strings.HasSuffix(header.Get("Message-ID"), "@example.com>") {
+		t.Fatalf("missing headers: %v", header)
+	}
+}
+
+// decodeTestMessage 像收件端一样解析邮件：返回头部和解码后的正文（base64 时解码）。
+func decodeTestMessage(t *testing.T, raw string) (mail.Header, string) {
+	t.Helper()
+	message, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		t.Fatalf("parse message: %v", err)
+	}
+	body, err := io.ReadAll(message.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if strings.EqualFold(message.Header.Get("Content-Transfer-Encoding"), "base64") {
+		decoded, err := base64.StdEncoding.DecodeString(strings.NewReplacer("\r", "", "\n", "").Replace(string(body)))
+		if err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		body = decoded
+	}
+	return message.Header, string(body)
+}
+
+func decodeTestHeader(t *testing.T, value string) string {
+	t.Helper()
+	decoded, err := new(mime.WordDecoder).DecodeHeader(value)
+	if err != nil {
+		t.Fatalf("decode header %q: %v", value, err)
+	}
+	return decoded
 }
 
 func TestNetSMTPSenderRejectsCRLFInCustomSubjectBeforeDial(t *testing.T) {
@@ -275,7 +348,7 @@ func TestSMTPSenderStarttlsSendsDataSuccessfully(t *testing.T) {
 
 	select {
 	case data := <-capture.dataReceived:
-		if !strings.Contains(data, "TransitHub SMTP test email was sent successfully") {
+		if _, body := decodeTestMessage(t, data); !strings.Contains(body, "TransitHub SMTP test email was sent successfully") {
 			t.Fatalf("expected test HTML body in DATA payload, got %q", data)
 		}
 	case <-time.After(2 * time.Second):

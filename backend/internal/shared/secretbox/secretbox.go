@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -50,6 +51,8 @@ var (
 type Box struct {
 	aead cipher.AEAD
 	id   string
+	// secret 只用来派生给别的用途的子密钥（DeriveKey），不直接拿去加密别的东西。
+	secret []byte
 }
 
 // New 用 32 字节的密钥创建 Box。
@@ -66,7 +69,16 @@ func New(key []byte) (*Box, error) {
 		return nil, err
 	}
 	sum := sha256.Sum256(key)
-	return &Box{aead: aead, id: hex.EncodeToString(sum[:4])}, nil
+	return &Box{aead: aead, id: hex.EncodeToString(sum[:4]), secret: append([]byte(nil), key...)}, nil
+}
+
+// DeriveKey 从这把密钥派生一把 32 字节的子密钥给别的用途用（HKDF-SHA256，purpose 区分用途，
+// 不同用途得到互不相关的密钥）。同一把密钥、同一个 purpose 每次得到同一把子密钥。没有密钥时返回 ErrNoKey。
+func (b *Box) DeriveKey(purpose string) ([]byte, error) {
+	if b == nil {
+		return nil, ErrNoKey
+	}
+	return hkdf.Key(sha256.New, b.secret, nil, "transithub/secretbox/"+purpose, keySize)
 }
 
 // ID 是密钥的短指纹（只用于日志，看两次启动用的是不是同一把密钥），不泄露密钥本身。

@@ -22,6 +22,7 @@ import (
 	"transithub/backend/internal/modules/dashboard"
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
+	"transithub/backend/internal/modules/leads"
 	"transithub/backend/internal/modules/mass_email"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/profit"
@@ -122,11 +123,18 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	if err := settingsService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
-	// SMTP_ENCRYPTION_KEY 是可选项：空值不影响启动；显式配置了非法值（非 base64 或非 32 字节）
-	// 必须尽早启动失败，避免运行时才发现加密能力不可用。抽成 configureSMTPEncryptionKey
-	// 这个窄 seam，便于在不启动真实 DB/Redis 依赖的情况下单元测试这条组装路径。
-	if _, err := configureSMTPEncryptionKey(settingsService, cfg.SMTPEncryptionKey); err != nil {
+	// SMTP 密码的加密密钥：配了 SMTP_ENCRYPTION_KEY 就用它，没配时用凭据密钥派生的密钥（开箱即用）。
+	// 显式配置了非法值（非 base64 或非 32 字节）必须尽早启动失败，避免运行时才发现加密能力不可用。
+	// 抽成 configureSMTPEncryptionKey 这个窄 seam，便于在不启动真实 DB/Redis 依赖的情况下单元测试这条组装路径。
+	smtpKeySource, err := configureSMTPEncryptionKey(settingsService, cfg.SMTPEncryptionKey, credentialBox)
+	if err != nil {
 		panic(err)
+	}
+	if smtpKeySource == smtpKeyNone {
+		log.Printf("[settings] WARNING: SMTP passwords can't be saved: %s is not set and credentials aren't encrypted. "+
+			"Mount the data directory (../data/app:/app/data) or set %s.", cfg.DataDir, "SMTP_ENCRYPTION_KEY")
+	} else {
+		log.Printf("[settings] SMTP passwords are encrypted with %s", smtpKeySource)
 	}
 
 	// dashboard 指标表必须在 admin_accounts 之前完成 schema，
@@ -158,6 +166,10 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	// 退订页面供邮件收件人访问，不需要 TransitHub 登录（/api/email-unsubscribe 不在 protectedPath 中）。
 	mass_email.RegisterPublicRoutes(server.mux, massEmailService)
 	massEmailWorker := mass_email.NewWorker(massEmailService)
+
+	// 线索：站长自己收集的潜在用户邮箱，可以批量导入、按来源管理，再通过群发邮件联系（同一个发送队列和退订名单）。
+	leadsService := leads.NewService(leads.NewRepository(db), massEmailService)
+	leads.RegisterRoutes(server.mux, leadsService, adminAccountsService)
 
 	// 用户分析（模块名 user_activity）：把当前工作区「我的站点」（sub2api / new-api）的用户与每日用量同步到本地后分析；
 	// 只通过 my_sites 的管理员会话读取自己站点的数据。群发邮件的 segment 方式按这里的筛选条件解析收件人。
@@ -668,6 +680,7 @@ var protectedPathPrefixes = []string{
 	"/api/dashboard",
 	"/api/system",
 	"/api/mass-email",
+	"/api/leads",
 	"/api/user-activity",
 	"/api/sales",
 	"/api/reports",

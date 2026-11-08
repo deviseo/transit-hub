@@ -106,6 +106,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		FROM counts
 		WHERE b.id = counts.id`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_mass_email_batches_one_active_workspace ON mass_email_batches (user_id, admin_account_id) WHERE status IN ('queued', 'running', 'cancelling')`,
+		// 发给线索时记下对应的线索（迁移 000029 也会加，这里保证只跑 EnsureSchema 的环境也有这一列）。
+		`ALTER TABLE mass_email_batch_items ADD COLUMN IF NOT EXISTS lead_id text NOT NULL DEFAULT ''`,
 	}
 	for _, statement := range statements {
 		if _, err := r.db.Exec(ctx, statement); err != nil {
@@ -151,10 +153,10 @@ func (r *Repository) CreateBatch(ctx context.Context, batch Batch, items []Batch
 	for _, item := range items {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO mass_email_batch_items (
-				id, batch_id, user_id, admin_account_id, upstream_user_id, recipient_email, normalized_email, username, status
+				id, batch_id, user_id, admin_account_id, upstream_user_id, lead_id, recipient_email, normalized_email, username, status
 			)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		`, item.ID, item.BatchID, item.UserID, item.AdminAccountID, item.UpstreamUserID, item.RecipientEmail,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		`, item.ID, item.BatchID, item.UserID, item.AdminAccountID, item.UpstreamUserID, item.LeadID, item.RecipientEmail,
 			item.NormalizedEmail, item.Username, item.Status); err != nil {
 			if isActiveBatchUniqueViolation(err) {
 				return Batch{}, false, ErrActiveBatchExists

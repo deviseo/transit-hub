@@ -123,6 +123,7 @@ export default {
       sales: '销售分析',
       profit: '利润分析',
       massEmail: '群发邮件',
+      leads: '线索',
       tickets: '工单',
       client: '客户端',
       signOut: '退出登录'
@@ -800,7 +801,151 @@ export default {
         segmentNotSynced: '还没有同步过用户数据：登录自己站点后会在后台自动同步，也可以在「用户分析」页面马上同步。',
         invalidPublicUrl: '退订链接地址无效，请填写 http(s) 开头的完整地址。',
         invalidSuppression: '请输入有效的邮箱地址（单次最多 1000 个）。',
-        suppressed: '收件人已退订，未发送。'
+        suppressed: '收件人已退订，未发送。',
+        recipientRejected: '收件服务器拒收了这个地址（地址不存在等），没有发出。'
+      }
+    },
+    leads: {
+      title: '线索',
+      description: '收集来的潜在用户邮箱：可以一个一个添加并写上来源，也可以批量导入，再批量发邮件。已退订、退信的邮箱不会再收到邮件。',
+      quota: '最近 24 小时已发 {sent} 封，上限 {limit} 封',
+      loading: '正在加载线索…',
+      status: {
+        all: '全部',
+        not_sent: '未发送',
+        sent: '已发送',
+        unsubscribed: '已退订',
+        bounced: '退信'
+      },
+      fields: {
+        email: '邮箱',
+        source: '来源',
+        note: '备注',
+        status: '状态',
+        sentCount: '发送次数',
+        lastSentAt: '最近发送',
+        createdAt: '添加时间',
+        actions: '操作'
+      },
+      filters: {
+        allSources: '全部来源',
+        noSource: '未填来源',
+        search: '搜索线索',
+        searchPlaceholder: '搜索邮箱、来源或备注',
+        clearSearch: '清除搜索',
+        noSearch: '无'
+      },
+      selection: {
+        count: '已选 {count} 个',
+        selectPage: '选择本页全部线索',
+        selectLead: '选择 {email}'
+      },
+      actions: {
+        add: '添加邮箱',
+        import: '批量导入',
+        sendFiltered: '发送邮件',
+        sendSelected: '发送给选中的 {count} 个',
+        deleteSelected: '删除选中的',
+        clearSelection: '取消选择',
+        edit: '编辑',
+        delete: '删除',
+        refresh: '刷新',
+        editLimit: '修改上限',
+        cancel: '取消',
+        save: '保存',
+        close: '关闭',
+        done: '完成'
+      },
+      form: {
+        addTitle: '添加邮箱',
+        editTitle: '编辑线索',
+        sourcePlaceholder: '比如 V2EX、QQ 群、GitHub（可不填）',
+        notePlaceholder: '可不填'
+      },
+      import: {
+        title: '批量导入邮箱',
+        description: '粘贴邮箱，或者上传 TXT、CSV 文件；换行、逗号、空格分隔都可以。',
+        sourcePlaceholder: '这一批的来源（可不填）',
+        emails: '邮箱',
+        chooseFile: '选择文件',
+        placeholder: "alice{'@'}example.com\nbob{'@'}example.com, carol{'@'}example.com",
+        fromFile: '已读取 {name}',
+        found: '找到约 {count} 个邮箱',
+        hint: '请只导入从公开渠道拿到的邮箱，不要用别的站导出、泄露或买来的名单。',
+        submit: '导入',
+        done: '导入完成',
+        added: '新增',
+        duplicates: '已存在或重复',
+        invalid: '格式不对',
+        suppressed: '已退订（跳过）'
+      },
+      send: {
+        title: '给线索发邮件',
+        loading: '正在统计收件人…',
+        summarySelected: '发送给选中的 {count} 个线索',
+        summaryFilter: '发送给当前筛选的全部线索：来源 {source}，状态 {status}，搜索 {search}',
+        sendable: '可发送',
+        skipped: '跳过（已退订、退信）',
+        remaining: '24 小时内还能发',
+        overLimit: '这次要发 {sendable} 封，超过了最近 24 小时剩余的 {remaining} 封。请少选一些，或者在线索页面修改上限。',
+        nothingToSend: '没有可以发送的线索（已退订、退信的不会再发）。',
+        template: '邮件模板',
+        templatePlaceholder: '请选择邮件模板',
+        noTemplates: '还没有邮件模板，请先到「系统设置」里创建。',
+        subject: '标题：',
+        adLabel: '标题前加「【广告】」',
+        adLabelHint: '国内规定营销邮件要在标题前注明「广告」，建议保留。',
+        publicBaseUrl: '退订链接使用的 TransitHub 地址',
+        unsubscribeHint: '每封邮件都会带退订链接（必填）。模板里写 {placeholder} 会替换成链接，没写就附在邮件末尾。',
+        unsubscribePlaceholderFound: '模板里的 {placeholder} 会替换成退订链接。',
+        privateUrlWarning: '这像是本机或内网地址，收件人在外网点不开退订链接。请填写公网能访问的 TransitHub 地址。',
+        submit: '发送 {count} 封'
+      },
+      delete: {
+        title: '删除 {count} 条线索？',
+        description: '只删除线索记录，已经发出的邮件和群发记录不受影响。'
+      },
+      limit: {
+        title: '发送上限',
+        description: '最近 24 小时最多发给线索多少封。发得太猛容易被邮件服务商封号，新域名建议先少量发。',
+        label: '每 24 小时最多（封）'
+      },
+      notices: {
+        added: '已添加。',
+        updated: '已保存。',
+        imported: '导入完成：新增 {added}，已存在或重复 {duplicates}，格式不对 {invalid}，已退订 {suppressed}。',
+        deleted: '已删除 {count} 条线索。',
+        queued: '已排进发送队列：{count} 封，跳过 {skipped} 封。',
+        viewProgress: '查看发送进度'
+      },
+      empty: {
+        title: '还没有线索',
+        description: '点「添加邮箱」一个一个加，或者用「批量导入」一次加一批。',
+        filteredTitle: '没有符合条件的线索',
+        filteredDescription: '换个来源、状态或搜索词试试。'
+      },
+      pagination: {
+        total: '共 {total} 条',
+        page: '第 {page} / {totalPages} 页',
+        previous: '上一页',
+        next: '下一页'
+      },
+      errors: {
+        network: '网络错误，请检查连接后重试。',
+        request: '请求失败，请稍后重试。',
+        invalidRequest: '请求内容不正确。',
+        invalidEmail: '邮箱格式不对。',
+        duplicate: '这个邮箱已经在线索里了。',
+        suppressed: '这个邮箱已经退订，不能再添加。',
+        tooMany: '一次最多导入 5000 个邮箱（文件不超过 1 MB），请分批导入。',
+        notFound: '这条线索不存在，可能已经删除。',
+        noRecipients: '没有可以发送的线索（已退订、退信的不会再发）。',
+        dailyLimit: '超过了最近 24 小时的发送上限，请少选一些，或者修改上限。',
+        unsubscribeRequired: '发给线索的邮件必须带退订链接，请填写 TransitHub 地址。',
+        invalidDailyLimit: '上限要在 1 到 10000 之间。',
+        persistence: '保存失败，请稍后重试。',
+        fileTooLarge: '文件太大了（不能超过 1 MB），请拆开后再导入。',
+        fileRead: '读取文件失败，请确认是文本文件（TXT、CSV）。'
       }
     },
     userActivity: {
@@ -1883,7 +2028,7 @@ export default {
           invalidTlsMode: 'TLS 模式无效。',
           invalidEmail: '邮箱地址无效。',
           invalidPort: '端口必须是 1-65535 之间的整数。',
-          encryptionKeyUnavailable: '服务器未配置 SMTP 加密密钥。',
+          encryptionKeyUnavailable: '服务器没有可用的加密密钥，不能保存 SMTP 密码：请把数据目录挂载为持久卷（../data/app:/app/data），或者设置环境变量 SMTP_ENCRYPTION_KEY。',
           decryptFailed: '无法读取已保存的 SMTP 密码。',
           sendFailed: '测试邮件发送失败。',
           persistence: 'SMTP 设置保存失败。'

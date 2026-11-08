@@ -123,6 +123,7 @@ export default {
       sales: 'Sales',
       profit: 'Profit',
       massEmail: 'Mass Email',
+      leads: 'Leads',
       tickets: 'Tickets',
       client: 'Client',
       signOut: 'Sign Out'
@@ -800,7 +801,151 @@ export default {
         segmentNotSynced: 'User data has not been synced yet. It syncs in the background after you sign in to your site, or you can sync it now on the User Analytics page.',
         invalidPublicUrl: 'Invalid unsubscribe link address. Enter a full http(s) URL.',
         invalidSuppression: 'Enter valid email addresses (up to 1,000 at a time).',
-        suppressed: 'The recipient unsubscribed; nothing was sent.'
+        suppressed: 'The recipient unsubscribed; nothing was sent.',
+        recipientRejected: "The recipient's mail server rejected this address (for example, it doesn't exist). Nothing was sent."
+      }
+    },
+    leads: {
+      title: 'Leads',
+      description: "Email addresses of potential users you've collected. Add them one at a time with a source, or import a batch, then email them in bulk. Unsubscribed and bounced addresses never get another email.",
+      quota: '{sent} sent in the last 24 hours, limit {limit}',
+      loading: 'Loading leads…',
+      status: {
+        all: 'All',
+        not_sent: 'Not sent',
+        sent: 'Sent',
+        unsubscribed: 'Unsubscribed',
+        bounced: 'Bounced'
+      },
+      fields: {
+        email: 'Email',
+        source: 'Source',
+        note: 'Note',
+        status: 'Status',
+        sentCount: 'Sent',
+        lastSentAt: 'Last sent',
+        createdAt: 'Added',
+        actions: 'Actions'
+      },
+      filters: {
+        allSources: 'All sources',
+        noSource: 'No source',
+        search: 'Search leads',
+        searchPlaceholder: 'Search email, source or note',
+        clearSearch: 'Clear search',
+        noSearch: 'none'
+      },
+      selection: {
+        count: '{count} selected',
+        selectPage: 'Select all leads on this page',
+        selectLead: 'Select {email}'
+      },
+      actions: {
+        add: 'Add email',
+        import: 'Import',
+        sendFiltered: 'Send email',
+        sendSelected: 'Send to {count} selected',
+        deleteSelected: 'Delete selected',
+        clearSelection: 'Clear selection',
+        edit: 'Edit',
+        delete: 'Delete',
+        refresh: 'Refresh',
+        editLimit: 'Change limit',
+        cancel: 'Cancel',
+        save: 'Save',
+        close: 'Close',
+        done: 'Done'
+      },
+      form: {
+        addTitle: 'Add email',
+        editTitle: 'Edit lead',
+        sourcePlaceholder: 'For example V2EX, a QQ group or GitHub (optional)',
+        notePlaceholder: 'Optional'
+      },
+      import: {
+        title: 'Import emails',
+        description: 'Paste email addresses or upload a TXT or CSV file. New lines, commas and spaces all work as separators.',
+        sourcePlaceholder: 'Source for this batch (optional)',
+        emails: 'Emails',
+        chooseFile: 'Choose file',
+        placeholder: "alice{'@'}example.com\nbob{'@'}example.com, carol{'@'}example.com",
+        fromFile: 'Read {name}',
+        found: 'About {count} email addresses found',
+        hint: "Only import addresses you got from public sources. Don't use lists exported from other sites, leaked or bought.",
+        submit: 'Import',
+        done: 'Import finished',
+        added: 'Added',
+        duplicates: 'Already added or repeated',
+        invalid: 'Invalid',
+        suppressed: 'Unsubscribed (skipped)'
+      },
+      send: {
+        title: 'Email leads',
+        loading: 'Counting recipients…',
+        summarySelected: 'Send to the {count} selected leads',
+        summaryFilter: 'Send to every lead matching the current filter: source {source}, status {status}, search {search}',
+        sendable: 'Will be sent',
+        skipped: 'Skipped (unsubscribed or bounced)',
+        remaining: 'Left in the last 24 hours',
+        overLimit: 'This would send {sendable} emails, more than the {remaining} left for the last 24 hours. Select fewer leads or raise the limit on the Leads page.',
+        nothingToSend: 'No leads to send to (unsubscribed and bounced addresses are skipped).',
+        template: 'Email template',
+        templatePlaceholder: 'Choose a template',
+        noTemplates: 'No email templates yet. Create one in System Settings first.',
+        subject: 'Subject:',
+        adLabel: 'Start the subject with 【广告】 (ad)',
+        adLabelHint: 'Chinese rules require marketing emails to be labelled as ads in the subject. Keep this on.',
+        publicBaseUrl: 'TransitHub address for unsubscribe links',
+        unsubscribeHint: "Every email carries an unsubscribe link (required). {placeholder} in the template becomes the link; if it's missing, the link is added at the end.",
+        unsubscribePlaceholderFound: '{placeholder} in the template becomes the unsubscribe link.',
+        privateUrlWarning: "This looks like a local or private address, so recipients outside your network can't open the unsubscribe link. Use a public TransitHub address.",
+        submit: 'Send {count}'
+      },
+      delete: {
+        title: 'Delete {count} leads?',
+        description: 'Only the lead records are deleted. Emails already sent and the send history stay.'
+      },
+      limit: {
+        title: 'Sending limit',
+        description: 'The most emails sent to leads in any 24 hours. Sending too much at once can get your account blocked by your email provider; start small on a new domain.',
+        label: 'Most emails per 24 hours'
+      },
+      notices: {
+        added: 'Added.',
+        updated: 'Saved.',
+        imported: 'Import finished: {added} added, {duplicates} already added or repeated, {invalid} invalid, {suppressed} unsubscribed.',
+        deleted: 'Deleted {count} leads.',
+        queued: 'Queued {count} emails, skipped {skipped}.',
+        viewProgress: 'View progress'
+      },
+      empty: {
+        title: 'No leads yet',
+        description: 'Use Add email to add them one at a time, or Import to add a batch.',
+        filteredTitle: 'No leads match',
+        filteredDescription: 'Try another source, status or search.'
+      },
+      pagination: {
+        total: '{total} total',
+        page: 'Page {page} of {totalPages}',
+        previous: 'Previous',
+        next: 'Next'
+      },
+      errors: {
+        network: 'Network error. Check your connection and try again.',
+        request: 'The request failed. Try again later.',
+        invalidRequest: 'The request is invalid.',
+        invalidEmail: 'That email address is invalid.',
+        duplicate: 'This email is already in your leads.',
+        suppressed: "This email unsubscribed and can't be added again.",
+        tooMany: 'Import at most 5,000 addresses at a time (files up to 1 MB). Split the list and try again.',
+        notFound: 'This lead no longer exists.',
+        noRecipients: 'No leads to send to (unsubscribed and bounced addresses are skipped).',
+        dailyLimit: 'This goes over the 24-hour sending limit. Select fewer leads or raise the limit.',
+        unsubscribeRequired: 'Emails to leads must carry an unsubscribe link. Enter your TransitHub address.',
+        invalidDailyLimit: 'The limit must be between 1 and 10,000.',
+        persistence: "Couldn't save. Try again later.",
+        fileTooLarge: 'The file is too large (1 MB at most). Split it and import again.',
+        fileRead: "Couldn't read the file. Make sure it's a text file (TXT or CSV)."
       }
     },
     userActivity: {
@@ -1883,7 +2028,7 @@ export default {
           invalidTlsMode: 'The TLS mode is invalid.',
           invalidEmail: 'The email address is invalid.',
           invalidPort: 'Port must be an integer between 1 and 65535.',
-          encryptionKeyUnavailable: 'The server has no SMTP encryption key configured.',
+          encryptionKeyUnavailable: "The server has no encryption key, so it can't save the SMTP password. Mount the data directory as a persistent volume (../data/app:/app/data) or set the SMTP_ENCRYPTION_KEY environment variable.",
           decryptFailed: 'Unable to read the saved SMTP password.',
           sendFailed: 'Failed to send the test email.',
           persistence: 'Failed to save the SMTP settings.'

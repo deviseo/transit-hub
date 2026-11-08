@@ -29,9 +29,9 @@ services:
       ADMIN_PASSWORD: change-this-admin-password
       # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
       ALLOW_PUBLIC_REGISTER: "false"
-      # 可选：SMTP 密码加密密钥，仅当需要在「系统设置 - 邮件设置」中保存 SMTP 密码或发送测试邮件时才需要配置。
-      # 缺失不影响应用启动，也不影响 SMTP 之外的功能。用 `openssl rand -base64 32` 生成一个 base64 编码的
-      # 32 字节随机值；生成后必须长期稳定保存——更换 key 后，旧的 SMTP 密码密文将无法解密，需要重新填写密码。
+      # 可选：SMTP 密码的加密密钥。不设置时自动使用凭据密钥（data/app/credential.key）派生的密钥，开箱即用。
+      # 想单独管理时，用 `openssl rand -base64 32` 生成一个 base64 编码的 32 字节随机值填在这里；设置后以它为准，
+      # 需要长期稳定保存——更换后，用旧 key 保存的 SMTP 密码将无法解密，需要重新填写。
       # SMTP_ENCRYPTION_KEY: change-this-to-a-generated-base64-32-byte-key
 
   # PostgreSQL 数据库服务。

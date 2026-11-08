@@ -43,6 +43,9 @@ var (
 	ErrSMTPDecryptFailed            = errors.New("admin.settings.smtp.errors.decryptFailed")
 	ErrSMTPSendFailed               = errors.New("admin.settings.smtp.errors.sendFailed")
 	ErrSMTPPersistence              = errors.New("admin.settings.smtp.errors.persistence")
+	// ErrSMTPRecipientRejected 是 ErrSMTPSendFailed 的一种：收件服务器在 RCPT TO 阶段明确拒收这个地址
+	// （地址不存在等），邮件肯定没有发出去。errors.Is(err, ErrSMTPSendFailed) 仍然成立，已有的处理不受影响。
+	ErrSMTPRecipientRejected = fmt.Errorf("%w", ErrSMTPSendFailed)
 )
 
 type Service struct {
@@ -54,8 +57,12 @@ type Service struct {
 
 	// smtpRepo 是 SMTP 存储层的窄接口，由 *Repository 结构性满足；测试可注入内存 fake。
 	smtpRepo smtpRepository
-	// smtpKeyGCM 为 nil 表示 SMTP_ENCRYPTION_KEY 未配置，此时禁止保存非空密码或解密已保存密码。
+	// smtpKeyGCM 是加解密 SMTP 密码用的密钥：SMTP_ENCRYPTION_KEY，没配时用凭据密钥派生的那把。
+	// 为 nil 表示两者都没有，此时禁止保存非空密码或解密已保存密码。
 	smtpKeyGCM cipher.AEAD
+	// smtpFallbackGCM 只用来解密：配了 SMTP_ENCRYPTION_KEY 时，它是凭据密钥派生的那把，
+	// 用来解开以前没配 SMTP_ENCRYPTION_KEY 时保存的密码。
+	smtpFallbackGCM cipher.AEAD
 	// smtpSender 默认使用生产实现；测试可注入 fake sender 以避免依赖真实外部 SMTP 服务。
 	smtpSender smtpSender
 	// emailTemplateRepo 是邮件模板存储层窄接口，测试通过内存 fake 覆盖 workspace 隔离和限制规则。

@@ -86,6 +86,7 @@ The project is built as a Go backend with a Vue 3 admin frontend, backed by Post
 - **Group multiplier tracking** - A read-only list of upstream group multipliers with search, filters, changes, and history.
 - **User activity analytics** - Sync your own sub2api/new-api users and daily usage to find inactive or declining users, compare periods, and track top-ups, spend, and user balances.
 - **Mass email** - Email selected users or an activity segment, with an unsubscribe link and a per-workspace suppression list.
+- **Leads** - Keep email addresses of potential users with their source, add them one at a time or import a batch, and email them through the same queue with unsubscribe links, an ad label in the subject and a 24-hour sending limit.
 - **TransitLink client** - Publish a site link for the TransitLink desktop client with your branding, recommended groups and models, notice, and support contacts. Users open the link to connect and set up Claude Code, Codex, Gemini CLI, Grok Build, OpenCode, DeepSeek Harness, Pi, Oh My Pi, Kimi Code, MiniMax Code and OpenClaw in one click.
 - **Notification channels** - Configure DingTalk, Feishu, and Telegram bots for balance warnings and multiplier changes.
 - **System settings** - Manage refresh intervals, notification strategy, and runtime display settings.
@@ -139,13 +140,13 @@ data/redis
 data/app        # online updates, the credential encryption key and ticket images
 ```
 
-`SMTP_ENCRYPTION_KEY` is an optional environment variable, only required if you want to save an SMTP password or send test emails from **System Settings > Email Settings**. Its absence does not prevent the application from starting and does not affect any non-SMTP feature. Generate a value with:
+SMTP passwords are stored encrypted. By default they use a key derived from the credential encryption key (see Credential encryption below, `data/app/credential.key`), so nothing needs to be configured. To manage the SMTP key separately, set the optional `SMTP_ENCRYPTION_KEY` environment variable: it then takes precedence, and passwords saved before it was set can still be read. Generate a value with:
 
 ```bash
 openssl rand -base64 32
 ```
 
-This must be a base64-encoded 32-byte value, and it must be kept stable long-term once set. Rotating the key makes any previously saved SMTP password ciphertext undecryptable, requiring the password to be re-entered and saved.
+This must be a base64-encoded 32-byte value, and it must be kept stable once set: changing it makes SMTP passwords saved with the old key unreadable, so they have to be entered and saved again. If the data directory isn't a persistent volume and no key is set, SMTP passwords can't be saved.
 
 ### Updating
 

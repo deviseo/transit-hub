@@ -150,3 +150,30 @@ func TestLoadWithoutAWritableDirectoryDisablesEncryption(t *testing.T) {
 		t.Fatalf("expected no box with a reason, got %v %q %v", box, reason, err)
 	}
 }
+
+func TestDeriveKeyIsStableAndSeparatedByPurpose(t *testing.T) {
+	box, err := New(bytes.Repeat([]byte{0x01}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := box.DeriveKey("smtp-password")
+	if err != nil || len(first) != 32 {
+		t.Fatalf("derive: %d %v", len(first), err)
+	}
+	again, _ := box.DeriveKey("smtp-password")
+	other, _ := box.DeriveKey("something-else")
+	if !bytes.Equal(first, again) {
+		t.Fatal("the same purpose must give the same key")
+	}
+	if bytes.Equal(first, other) || bytes.Equal(first, bytes.Repeat([]byte{0x01}, 32)) {
+		t.Fatal("derived keys must differ by purpose and from the main key")
+	}
+	otherBox, _ := New(bytes.Repeat([]byte{0x02}, 32))
+	if fromOther, _ := otherBox.DeriveKey("smtp-password"); bytes.Equal(first, fromOther) {
+		t.Fatal("a different main key must give a different derived key")
+	}
+	var none *Box
+	if _, err := none.DeriveKey("smtp-password"); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("no key: %v", err)
+	}
+}

@@ -117,6 +117,21 @@ func (s *Service) ListUsers(ctx context.Context, userID string, adminAccountID s
 }
 
 func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID string, req CreateBatchRequest) (BatchDTO, error) {
+	if req.SelectionMode == SelectionModeLeads {
+		// 线索的收件人只能由线索模块给出（CreateLeadBatch），不接受接口直接传。
+		return BatchDTO{}, ErrInvalidSelection
+	}
+	return s.createBatch(ctx, userID, adminAccountID, req, nil)
+}
+
+// CreateLeadBatch 给线索群发：收件人由线索模块给出，这里照常做幂等、模板、SMTP 检查、去重和退订过滤，
+// 每个收件人记下对应的线索。
+func (s *Service) CreateLeadBatch(ctx context.Context, userID string, adminAccountID string, req CreateBatchRequest, recipients []LeadRecipient) (BatchDTO, error) {
+	req.SelectionMode = SelectionModeLeads
+	return s.createBatch(ctx, userID, adminAccountID, req, recipients)
+}
+
+func (s *Service) createBatch(ctx context.Context, userID string, adminAccountID string, req CreateBatchRequest, leads []LeadRecipient) (BatchDTO, error) {
 	req, err := normalizeCreateRequest(req)
 	if err != nil {
 		return BatchDTO{}, err
@@ -135,13 +150,15 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 	if hasActive {
 		return BatchDTO{}, ErrActiveBatchExists
 	}
-	// segment 方式的收件人来自本地同步的用户快照，不需要访问站点；其它方式实时读取 sub2api 用户。
+	// segment 方式的收件人来自本地同步的用户快照、leads 方式来自线索，都不需要访问站点；其它方式实时读取 sub2api 用户。
 	var session upstream.Session
-	if req.SelectionMode == SelectionModeSegment {
+	switch req.SelectionMode {
+	case SelectionModeSegment:
 		if s.segments == nil {
 			return BatchDTO{}, ErrSegmentUnavailable
 		}
-	} else {
+	case SelectionModeLeads:
+	default:
 		session, err = s.sessions.RequireSession(ctx, userID, adminAccountID)
 		if err != nil {
 			return BatchDTO{}, mapUpstreamError(err)
@@ -154,7 +171,13 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 	if err := s.settings.ValidateSMTPReadyForWorkspace(ctx, userID, adminAccountID); err != nil {
 		return BatchDTO{}, mapSettingsError(err)
 	}
-	recipients, skipped, err := s.resolveRecipients(ctx, userID, adminAccountID, session, req)
+	var recipients []recipientCandidate
+	var skipped int
+	if req.SelectionMode == SelectionModeLeads {
+		recipients, skipped, err = leadCandidates(leads)
+	} else {
+		recipients, skipped, err = s.resolveRecipients(ctx, userID, adminAccountID, session, req)
+	}
 	if err != nil {
 		return BatchDTO{}, err
 	}
@@ -171,6 +194,10 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 	if len(recipients) == 0 {
 		status = BatchStatusFailed
 	}
+	subject := template.Subject
+	if req.AdLabel {
+		subject = withAdLabel(subject)
+	}
 	batch := Batch{
 		ID:              batchID,
 		UserID:          userID,
@@ -178,7 +205,7 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 		RequestID:       req.RequestID,
 		TemplateID:      template.ID,
 		TemplateName:    template.Name,
-		TemplateSubject: template.Subject,
+		TemplateSubject: subject,
 		TemplateHTML:    template.HTMLBody,
 		SelectionMode:   req.SelectionMode,
 		Filters:         req.Filters,
@@ -199,6 +226,7 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 			UserID:          userID,
 			AdminAccountID:  adminAccountID,
 			UpstreamUserID:  recipient.UpstreamUserID,
+			LeadID:          recipient.LeadID,
 			RecipientEmail:  recipient.Email,
 			NormalizedEmail: normalizeEmailKey(recipient.Email),
 			Username:        recipient.Username,
@@ -214,6 +242,19 @@ func (s *Service) CreateBatch(ctx context.Context, userID string, adminAccountID
 		return BatchDTO{}, ErrPersistence
 	}
 	return batchDTO(created), nil
+}
+
+// BatchForRequest 找这个请求 ID 已经建好的批次（线索发送重试时直接返回它，不再重复检查发送上限）。
+func (s *Service) BatchForRequest(ctx context.Context, userID string, adminAccountID string, requestID string) (BatchDTO, bool) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return BatchDTO{}, false
+	}
+	batch, err := s.repository.GetByRequestID(ctx, userID, adminAccountID, requestID)
+	if err != nil {
+		return BatchDTO{}, false
+	}
+	return batchDTO(batch), true
 }
 
 func (s *Service) ListBatches(ctx context.Context, userID string, adminAccountID string, page int, pageSize int) (BatchPage, error) {
@@ -301,6 +342,11 @@ func (s *Service) processOne(ctx context.Context, item BatchItem) {
 	}
 	htmlBody := renderEmailHTML(batch.TemplateHTML, unsubscribeURL(batch.PublicBaseURL, item.ID))
 	if err := s.settings.SendSavedSMTPEmailForWorkspace(ctx, item.UserID, item.AdminAccountID, item.RecipientEmail, batch.TemplateSubject, htmlBody); err != nil {
+		if errors.Is(err, settings.ErrSMTPRecipientRejected) {
+			// 收件服务器在发正文之前就拒收了这个地址：肯定没发出去，记为失败（线索里显示为退信）。
+			_ = s.repository.CompleteItem(ctx, item.ID, ItemStatusFailed, string(ErrRecipientRejected))
+			return
+		}
 		// 发送调用已经发起后无法可靠判断远端是否投递成功，因此统一落入 uncertain，不做自动重试。
 		_ = s.repository.CompleteItem(ctx, item.ID, ItemStatusUncertain, string(ErrSendFailed))
 		return
@@ -346,6 +392,42 @@ func (s *Service) resolveSegmentRecipients(ctx context.Context, userID string, a
 		recipients = append(recipients, candidate)
 	}
 	return recipients, skipped, nil
+}
+
+// leadCandidates 把线索模块给出的收件人整理成候选：地址不合法的、重复的算跳过。
+func leadCandidates(leads []LeadRecipient) ([]recipientCandidate, int, error) {
+	if len(leads) > maxBatchRecipients {
+		return nil, 0, ErrRecipientLimitReached
+	}
+	recipients := make([]recipientCandidate, 0, len(leads))
+	seen := map[string]struct{}{}
+	skipped := 0
+	for _, lead := range leads {
+		candidate, ok := candidateFromAddress("", lead.Email, "")
+		if !ok || strings.TrimSpace(lead.LeadID) == "" {
+			skipped++
+			continue
+		}
+		key := normalizeEmailKey(candidate.Email)
+		if _, exists := seen[key]; exists {
+			skipped++
+			continue
+		}
+		seen[key] = struct{}{}
+		candidate.LeadID = strings.TrimSpace(lead.LeadID)
+		recipients = append(recipients, candidate)
+	}
+	return recipients, skipped, nil
+}
+
+// withAdLabel 在标题前加「【广告】」；已经带了（【广告】、[AD]、AD 开头）就不重复加。
+func withAdLabel(subject string) string {
+	trimmed := strings.TrimSpace(subject)
+	upper := strings.ToUpper(trimmed)
+	if strings.HasPrefix(trimmed, AdLabel) || strings.HasPrefix(trimmed, "【AD】") || strings.HasPrefix(upper, "[AD]") || strings.HasPrefix(upper, "AD ") || strings.HasPrefix(upper, "AD:") || strings.HasPrefix(upper, "AD：") {
+		return subject
+	}
+	return AdLabel + trimmed
 }
 
 // excludeSuppressed 去掉退订名单中的地址（适用于所有选择方式），返回剩余收件人和被跳过的数量。
@@ -481,6 +563,9 @@ func normalizeCreateRequest(req CreateBatchRequest) (CreateBatchRequest, error) 
 		if req.Filters.Segment == "" {
 			return CreateBatchRequest{}, ErrInvalidSelection
 		}
+	case SelectionModeLeads:
+		req.UserIDs = nil
+		req.Filters = BatchFilters{}
 	default:
 		return CreateBatchRequest{}, ErrInvalidSelection
 	}

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/mail"
@@ -32,6 +33,31 @@ func (s *Service) SetSMTPEncryptionKey(raw string) error {
 	}
 	s.smtpKeyGCM = gcm
 	return nil
+}
+
+// SetDerivedSMTPKey 安装从凭据密钥派生的 SMTP 密钥（在 SetSMTPEncryptionKey 之后调用）：
+// 没配 SMTP_ENCRYPTION_KEY 时用它加解密，开箱即用；配了的话仍以 SMTP_ENCRYPTION_KEY 为准，
+// 派生的这把只用来解开以前用它加密的密码。
+func (s *Service) SetDerivedSMTPKey(key []byte) error {
+	gcm, err := newSMTPCipher(key)
+	if err != nil {
+		return err
+	}
+	if s.smtpKeyGCM == nil {
+		s.smtpKeyGCM = gcm
+	} else {
+		s.smtpFallbackGCM = gcm
+	}
+	return nil
+}
+
+// openSMTPPassword 解密保存的 SMTP 密码：先用当前的密钥，解不开再试派生的那把。
+func (s *Service) openSMTPPassword(userID string, adminAccountID string, stored string) (string, error) {
+	password, err := decryptSMTPPassword(s.smtpKeyGCM, userID, adminAccountID, stored)
+	if err == nil || s.smtpFallbackGCM == nil {
+		return password, err
+	}
+	return decryptSMTPPassword(s.smtpFallbackGCM, userID, adminAccountID, stored)
 }
 
 // GetSMTPSettings 返回当前 workspace 的安全 SMTP 配置对象，永不包含密码明文或密文。
@@ -251,7 +277,7 @@ func (s *Service) sendSavedSMTPEmail(ctx context.Context, userID string, adminAc
 		if s.smtpKeyGCM == nil {
 			return ErrSMTPEncryptionKeyUnavailable
 		}
-		decrypted, err := decryptSMTPPassword(s.smtpKeyGCM, userID, adminAccountID, row.PasswordCiphertext)
+		decrypted, err := s.openSMTPPassword(userID, adminAccountID, row.PasswordCiphertext)
 		if err != nil {
 			return ErrSMTPDecryptFailed
 		}
@@ -278,8 +304,12 @@ func (s *Service) sendSavedSMTPEmail(ctx context.Context, userID string, adminAc
 	if err := sender.Send(ctx, cfg); err != nil {
 		// 只记录失败类别、host、port、tlsMode 和 workspace id；底层错误文本可能来自
 		// SMTP 服务端响应，不写入日志，避免意外泄漏认证相关细节。
-		log.Printf("[settings] smtp test email send failed user_id=%s admin_account_id=%s host=%s port=%d tlsMode=%s",
-			userID, adminAccountID, row.Host, row.Port, row.TLSMode)
+		rejected := errors.Is(err, ErrSMTPRecipientRejected)
+		log.Printf("[settings] smtp email send failed user_id=%s admin_account_id=%s host=%s port=%d tlsMode=%s recipient_rejected=%t",
+			userID, adminAccountID, row.Host, row.Port, row.TLSMode, rejected)
+		if rejected {
+			return ErrSMTPRecipientRejected
+		}
 		return ErrSMTPSendFailed
 	}
 	return nil

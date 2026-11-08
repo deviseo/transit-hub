@@ -27,13 +27,25 @@ func ParseSMTPEncryptionKey(raw string) (cipher.AEAD, error) {
 	if len(keyBytes) != 32 {
 		return nil, fmt.Errorf("invalid SMTP_ENCRYPTION_KEY: expected 32 bytes after base64 decoding, got %d", len(keyBytes))
 	}
-	block, err := aes.NewCipher(keyBytes)
+	gcm, err := newSMTPCipher(keyBytes)
 	if err != nil {
-		return nil, errors.New("invalid SMTP_ENCRYPTION_KEY: failed to initialize cipher")
+		return nil, fmt.Errorf("invalid SMTP_ENCRYPTION_KEY: %w", err)
+	}
+	return gcm, nil
+}
+
+// newSMTPCipher 用 32 字节的密钥创建 SMTP 密码的 AES-256-GCM 加解密器。
+func newSMTPCipher(key []byte) (cipher.AEAD, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("SMTP key must be 32 bytes, got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, errors.New("failed to initialize cipher")
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, errors.New("invalid SMTP_ENCRYPTION_KEY: failed to initialize AEAD")
+		return nil, errors.New("failed to initialize AEAD")
 	}
 	return gcm, nil
 }

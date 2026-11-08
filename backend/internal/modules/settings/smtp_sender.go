@@ -2,13 +2,18 @@ package settings
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
-	"mime"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -135,6 +140,9 @@ func (s *netSMTPSender) Send(ctx context.Context, cfg smtpSendConfig) error {
 		return fmt.Errorf("%w: MAIL FROM: %v", ErrSMTPSendFailed, err)
 	}
 	if err := client.Rcpt(cfg.RecipientEmail); err != nil {
+		if recipientRejected(err) {
+			return fmt.Errorf("%w: RCPT TO: %v", ErrSMTPRecipientRejected, err)
+		}
 		return fmt.Errorf("%w: RCPT TO: %v", ErrSMTPSendFailed, err)
 	}
 
@@ -155,6 +163,38 @@ func (s *netSMTPSender) Send(ctx context.Context, cfg smtpSendConfig) error {
 	return nil
 }
 
+var enhancedStatusCode = regexp.MustCompile(`^[245]\.\d{1,3}\.\d{1,3}\b`)
+
+// recipientUnknownPhrases 是没有增强状态码时，常见的「收件地址不存在」说法（已转成小写）。
+var recipientUnknownPhrases = []string{
+	"user unknown", "unknown user", "no such user", "user not found", "mailbox not found",
+	"mailbox unavailable", "does not exist", "doesn't exist", "invalid recipient", "no mailbox here",
+}
+
+// recipientRejected 判断 RCPT TO 是不是因为地址本身被拒（不存在、写错、对方域名不收信）。
+// 有增强状态码（RFC 3463）时只认 5.1.x；5.7.x 之类是策略或发信方的问题（比如不允许转发），不能算成
+// 对方地址无效，否则 SMTP 配置有问题时会把所有收件人都标成退信。没有增强状态码时，只认 550/551/553
+// 加上常见的「用户不存在」说法。
+func recipientRejected(err error) bool {
+	var protocolErr *textproto.Error
+	if !errors.As(err, &protocolErr) || protocolErr.Code < 500 || protocolErr.Code > 599 {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(protocolErr.Msg))
+	if code := enhancedStatusCode.FindString(message); code != "" {
+		return strings.HasPrefix(code, "5.1.")
+	}
+	if protocolErr.Code != 550 && protocolErr.Code != 551 && protocolErr.Code != 553 {
+		return false
+	}
+	for _, phrase := range recipientUnknownPhrases {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 // validateSMTPHeaderValue 拒绝任何包含 CRLF 的值，防止邮件头注入；直接拒绝而不是替换，
 // 避免静默篡改用户配置。
 func validateSMTPHeaderValue(value string) error {
@@ -165,11 +205,16 @@ func validateSMTPHeaderValue(value string) error {
 }
 
 // buildSMTPTestMessage 构造 HTML 邮件。Subject/HTMLBody 为空时回退到固定 SMTP 测试内容，
-// 保持既有 /api/settings/smtp/test-email 的静态测试邮件合同不变。
-// From/To 头使用 net/mail.Address 编码，Subject 使用 MIME encoded-word，避免手写不安全的头拼接。
+// 保持既有 /api/settings/smtp/test-email 的静态测试邮件合同不变。中文标题和正文按标准编码，任何服务器、
+// 客户端都能正常显示：
+//   - 标题、发件人名字有非 ASCII 字符时用 RFC 2047 的 B 编码，切成短段、一段一行（每行不超过 76 个字符，
+//     超长时严格的客户端会直接显示一串 =?UTF-8?…?= 编码）；
+//   - 正文用 base64（Content-Transfer-Encoding: base64，每行 76 个字符）：不声明时默认是 7bit，
+//     中文字节可能被服务器或客户端弄乱；
+//   - 带上 Date 和 Message-ID（缺了容易被当成垃圾邮件）。
+//
+// 头部的值事先已经拒绝过 CRLF（validateSMTPHeaderValue），这里不会拼出注入的头。
 func buildSMTPTestMessage(cfg smtpSendConfig) []byte {
-	from := (&mail.Address{Name: cfg.FromName, Address: cfg.FromEmail}).String()
-	to := (&mail.Address{Address: cfg.RecipientEmail}).String()
 	subjectText := cfg.Subject
 	if subjectText == "" {
 		subjectText = smtpTestSubject
@@ -178,16 +223,81 @@ func buildSMTPTestMessage(cfg smtpSendConfig) []byte {
 	if htmlBody == "" {
 		htmlBody = smtpTestHTMLBody
 	}
-	subject := mime.QEncoding.Encode("UTF-8", subjectText)
 
 	var b strings.Builder
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + to + "\r\n")
-	b.WriteString("Subject: " + subject + "\r\n")
+	b.WriteString("From: " + formatFromAddress(cfg.FromName, cfg.FromEmail) + "\r\n")
+	b.WriteString("To: " + (&mail.Address{Address: cfg.RecipientEmail}).String() + "\r\n")
+	b.WriteString("Subject: " + encodeHeaderText(subjectText) + "\r\n")
+	b.WriteString("Date: " + time.Now().Format(time.RFC1123Z) + "\r\n")
+	b.WriteString("Message-ID: " + newMessageID(cfg.FromEmail) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
 	b.WriteString("\r\n")
-	b.WriteString(htmlBody)
-	b.WriteString("\r\n")
+	encoded := base64.StdEncoding.EncodeToString([]byte(htmlBody))
+	for len(encoded) > base64LineLength {
+		b.WriteString(encoded[:base64LineLength] + "\r\n")
+		encoded = encoded[base64LineLength:]
+	}
+	b.WriteString(encoded + "\r\n")
 	return []byte(b.String())
+}
+
+const (
+	// base64LineLength 是正文 base64 每行的字符数（MIME 规定不超过 76）。
+	base64LineLength = 76
+	// headerWordBytes 是标题每个编码段最多装的原文字节数：base64 后 48 个字符，加上 =?UTF-8?B?…?= 共 60 个，
+	// 第一行再加上「Subject: 」也不超过 RFC 2047 规定的 76 个字符。
+	headerWordBytes = 36
+)
+
+// encodeHeaderText 把头部文字编码成 RFC 2047 的 B 编码段，一段一行（折行续写）。纯 ASCII 原样返回。
+// 切分只在字符边界上，不会把一个中文字拆到两段里。
+func encodeHeaderText(text string) string {
+	if isPrintableASCII(text) {
+		return text
+	}
+	var words []string
+	chunk := make([]byte, 0, headerWordBytes)
+	for _, r := range text {
+		encoded := string(r)
+		if len(chunk) > 0 && len(chunk)+len(encoded) > headerWordBytes {
+			words = append(words, "=?UTF-8?B?"+base64.StdEncoding.EncodeToString(chunk)+"?=")
+			chunk = chunk[:0]
+		}
+		chunk = append(chunk, encoded...)
+	}
+	if len(chunk) > 0 {
+		words = append(words, "=?UTF-8?B?"+base64.StdEncoding.EncodeToString(chunk)+"?=")
+	}
+	return strings.Join(words, "\r\n ")
+}
+
+// formatFromAddress 写发件人：名字是纯 ASCII 时交给 net/mail（它会按需加引号）；有中文时用 encodeHeaderText，
+// 避免编码后挤在一行里过长。
+func formatFromAddress(name string, address string) string {
+	if name == "" || isPrintableASCII(name) {
+		return (&mail.Address{Name: name, Address: address}).String()
+	}
+	return encodeHeaderText(name) + " <" + address + ">"
+}
+
+func isPrintableASCII(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if text[i] < 0x20 || text[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// newMessageID 生成 <随机数@发件域名> 形式的 Message-ID。
+func newMessageID(fromEmail string) string {
+	domain := "transithub.invalid"
+	if at := strings.LastIndex(fromEmail, "@"); at >= 0 && at < len(fromEmail)-1 {
+		domain = fromEmail[at+1:]
+	}
+	random := make([]byte, 16)
+	_, _ = rand.Read(random)
+	return "<" + hex.EncodeToString(random) + "@" + domain + ">"
 }
