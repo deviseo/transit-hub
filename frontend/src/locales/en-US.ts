@@ -121,6 +121,7 @@ export default {
       settings: 'Settings',
       userActivity: 'User Analytics',
       sales: 'Sales',
+      vip: 'Top spenders',
       profit: 'Profit',
       massEmail: 'Mass Email',
       leads: 'Leads',
@@ -1389,6 +1390,125 @@ export default {
         invalidEntry: 'This credit entry is not valid. Refresh and try again.',
         invalidChannel: 'This channel can\'t be set as not counted.',
         entryNotFound: 'This credit entry was not found (the data may have just been synced again). Refresh and try again.'
+      }
+    },
+    vip: {
+      title: 'Top spenders',
+      subtitle: 'Your biggest users, picked by average daily spend over the last 7 days and by lifetime spend, plus anyone you add yourself. See how long their balance will last and get an alert when it is about to run out. Data comes from User Analytics and syncs hourly.',
+      common: {
+        placeholder: '—'
+      },
+      source: {
+        lastSynced: 'Data from User Analytics · last synced {time}',
+        neverSynced: 'User data has not been synced yet',
+        basis: 'Amounts converted at ¥{price}/$1',
+        manual: 'Added by you',
+        dailyRank: 'Daily #{rank}',
+        lifetimeRank: 'Lifetime #{rank}'
+      },
+      actions: {
+        settings: 'Alert settings',
+        refresh: 'Refresh',
+        add: 'Add user',
+        goUserActivity: 'Sync data in User Analytics',
+        chooseBots: 'Choose bots',
+        viewDetail: 'View details of {name}',
+        copyReminder: 'Copy reminder',
+        copied: 'Copied',
+        note: 'Note',
+        remove: 'Remove',
+        removeConfirm: 'Remove {name} from Top spenders? They will not be suggested again; you can restore them in Alert settings.',
+        close: 'Close',
+        cancel: 'Cancel',
+        save: 'Save',
+        watch: 'Add'
+      },
+      empty: {
+        title: 'No data to analyze yet',
+        description: 'Top spenders uses the users, usage and balances synced by User Analytics. After you sign in to your own site it syncs in the background, or you can sync now on the User Analytics page.'
+      },
+      notice: {
+        noBots: 'No alert bots chosen yet, so you will not be notified when a top spender runs low or out.'
+      },
+      filters: {
+        label: 'Filter by status',
+        all: 'All',
+        low: 'Running low',
+        empty: 'Ran out',
+        declining: 'Using less'
+      },
+      search: 'Search the list by user or note',
+      list: {
+        user: 'User',
+        source: 'Why listed',
+        balance: 'Balance',
+        daily: 'Daily spend',
+        daysLeft: 'Lasts',
+        trend: 'Last 7 days',
+        lastUsed: 'Last used',
+        lastCredit: 'Last top-up',
+        actions: 'Actions',
+        perDay: '{amount}/day',
+        flat: 'Flat',
+        emptyAll: 'No top spenders yet: nobody has spent anything in the last 7 days or overall. Click Add user to add someone.',
+        emptyFilter: 'No users match.'
+      },
+      status: {
+        normal: 'OK',
+        low: 'Running low',
+        empty: 'Ran out',
+        declining: 'Using less',
+        disabled: 'Disabled'
+      },
+      days: {
+        underOne: 'under a day',
+        about: 'about {days} days',
+        unknown: 'a while'
+      },
+      footnote: 'Lasts = balance ÷ average daily spend over the last 7 days. Running low means it lasts {days} days or less, or the balance is under {balance} (only for people who used the site in the last 7 days). Using less means the last 7 days averaged under half of the 7 days before.',
+      watch: {
+        addTitle: 'Add user',
+        editTitle: 'Note',
+        search: 'Search by user email, username or ID',
+        noResults: 'No such user.',
+        candidate: 'Balance {balance} · 7-day daily average {daily}',
+        watched: 'Listed',
+        dismissed: 'Removed before',
+        note: 'Note (optional)',
+        notePlaceholder: 'For example: Acme Inc., WeChat abc',
+        pinHint: 'With a note, they stay on the list even if their spend ranking drops.'
+      },
+      settings: {
+        title: 'Alert settings',
+        recommendTitle: 'Suggestions',
+        dailyTop: 'Top by 7-day daily spend',
+        lifetimeTop: 'Top by lifetime spend',
+        recommendHint: '0 turns that suggestion off. Users disabled on the site are not suggested.',
+        dismissed: 'Removed and no longer suggested: {count}.',
+        restoreDismissed: 'Suggest them again',
+        restored: 'Restored: {count}.',
+        lowTitle: 'Running low',
+        alertDays: 'Runs out within (days)',
+        alertBalance: 'or balance under (CNY)',
+        lowHint: 'Only for people who used the site in the last 7 days. 0 turns that rule off.',
+        alertsEnabled: 'Alert me when someone runs low or runs out',
+        alertsHint: 'Checked every 15 minutes and sent to the bots below. At most one alert per person per day, plus one more if they go from running low to running out.',
+        noBots: "No bots yet. Add one under System settings → Notification channels.",
+        reminderTitle: 'Reminder text',
+        reminderHint: "Copy reminder copies this text so you can send it on WeChat or QQ. You can use {'{'}name{'}'} (name), {'{'}site{'}'} (site name), {'{'}balance{'}'} (balance) and {'{'}days{'}'} (how long it lasts). Leave it empty to use the default.",
+        reminderLow: 'When running low',
+        reminderEmpty: 'When it ran out'
+      },
+      reminder: {
+        defaultLow: 'Hi, your balance on {site} is down to {balance}. At your recent usage it lasts {days}, so remember to top up.',
+        defaultEmpty: 'Hi, your balance on {site} has run out. Top up to keep using it, and let me know if you need anything.'
+      },
+      errors: {
+        network: 'Network request failed. Check your connection and try again.',
+        request: 'Failed to load Top spenders. Please try again later.',
+        invalidUser: 'This user is not valid. Refresh and try again.',
+        userNotFound: 'User not found (they may not be synced yet).',
+        invalidSettings: 'Invalid settings: suggestions 0–100, days 0–30, and amounts can not be negative.'
       }
     },
     tickets: {

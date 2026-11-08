@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound, BadgeDollarSign, TrendingUp, Loader2, MonitorSmartphone, LifeBuoy, Contact } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, ChevronDown, ArrowRightLeft, Github, Mail, Menu, X, UsersRound, BadgeDollarSign, TrendingUp, Loader2, MonitorSmartphone, LifeBuoy, Contact, Crown } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -156,6 +156,7 @@ const menuItems = computed<MenuEntry[]>(() => [
   { type: 'leaf', name: t('admin.menu.profit'), path: '/admin/profit', icon: TrendingUp },
   { type: 'leaf', name: t('admin.menu.userActivity'), path: '/admin/user-activity', icon: UsersRound },
   { type: 'leaf', name: t('admin.menu.sales'), path: '/admin/sales', icon: BadgeDollarSign },
+  { type: 'leaf', name: t('admin.menu.vip'), path: '/admin/vip', icon: Crown },
   { type: 'leaf', name: t('admin.menu.massEmail'), path: '/admin/mass-email', icon: Mail },
   { type: 'leaf', name: t('admin.menu.leads'), path: '/admin/leads', icon: Contact },
   { type: 'leaf', name: t('admin.menu.tickets'), path: '/admin/tickets', icon: LifeBuoy, badge: ticketsNeedingReply.value },

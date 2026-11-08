@@ -41,6 +41,11 @@ type PriceChangeReader interface {
 	PriceChangesBetween(ctx context.Context, ws profit.Workspace, since time.Time, until time.Time) ([]profit.PriceChange, error)
 }
 
+// VIPReader 生成日报里的【大户】一段（关注多少人、谁快用完、谁用完了）；没有关注的人时返回空。
+type VIPReader interface {
+	VIPSection(ctx context.Context, userID string, adminAccountID string) (string, error)
+}
+
 // Builder 用本地已有的数据生成经营日报，不访问站点。
 type Builder struct {
 	snapshots SnapshotReader
@@ -48,10 +53,16 @@ type Builder struct {
 	activity  ActivityReader
 	names     WorkspaceNamer
 	prices    PriceChangeReader
+	vip       VIPReader
 }
 
 func NewBuilder(snapshots SnapshotReader, sales SalesReader, activity ActivityReader, names WorkspaceNamer) *Builder {
 	return &Builder{snapshots: snapshots, sales: sales, activity: activity, names: names}
+}
+
+// SetVIP 让日报加上【大户】一段。
+func (b *Builder) SetVIP(reader VIPReader) {
+	b.vip = reader
 }
 
 // SetPriceChanges 让日报的【上游】部分列出昨天的上游分组调价。
@@ -110,6 +121,15 @@ func (b *Builder) Build(ctx context.Context, userID string, adminAccountID strin
 	}
 	if usersSection != "" {
 		sections = append(sections, usersSection)
+	}
+	if b.vip != nil {
+		vipSection, err := b.vip.VIPSection(ctx, userID, adminAccountID)
+		if err != nil {
+			return DailyReport{}, err
+		}
+		if vipSection != "" {
+			sections = append(sections, vipSection)
+		}
 	}
 	priceLines, err := b.priceChangeLines(ctx, userID, adminAccountID, yesterday)
 	if err != nil {

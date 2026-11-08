@@ -65,6 +65,12 @@ const routes = [
         component: () => import('./modules/admin/views/SalesView.vue')
       },
       {
+        path: 'vip',
+        name: 'AdminVip',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/VipView.vue')
+      },
+      {
         path: 'profit',
         name: 'AdminProfit',
         meta: { requiresWorkspace: true },

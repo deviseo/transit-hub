@@ -33,6 +33,7 @@ import (
 	"transithub/backend/internal/modules/tickets"
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/modules/user_activity"
+	"transithub/backend/internal/modules/vip"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/datadir"
 	"transithub/backend/internal/shared/httpjson"
@@ -182,8 +183,15 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	salesService := sales.NewService(sales.NewRepository(db), sitePriceProvider{repo: metricsRepo}, adminAccountsService)
 	sales.RegisterRoutes(server.mux, salesService)
 
+	// 大户关注：用户分析同步到本地的数据里挑出大户（近 7 天日均、累计消耗排前面的，加上手动关注的），
+	// 算余额还能用几天；快用完、用完了时用选好的机器人提醒站长。只读本地数据，不访问站点。
+	vipService := vip.NewService(vip.NewRepository(db), sitePriceProvider{repo: metricsRepo}, adminAccountsService,
+		vipNames{accounts: adminAccountsService, configs: client_config.NewRepository(db)}, settingsService)
+	vip.RegisterRoutes(server.mux, vipService)
+
 	// 经营日报：按各工作区设置的时间，把昨天的经营、销售、用户和上游数据发到机器人；数据全部来自本地，不访问站点。
 	reportBuilder := reports.NewBuilder(metricsRepo, salesService, userActivityService, workspaceNames{accounts: adminAccountsService})
+	reportBuilder.SetVIP(vipBriefs{service: vipService})
 	reportsService := reports.NewService(
 		reportBuilder,
 		settingsService,
@@ -240,6 +248,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	massEmailWorker.Start(context.Background())
 	userActivityService.StartScheduler(context.Background())
 	reportsService.StartScheduler(context.Background())
+	vipService.StartScheduler(context.Background())
 	profitService.StartScheduler(context.Background())
 
 	// 定时同步按工作区配置：保存策略时只更新该工作区，启动时逐个工作区恢复。
@@ -437,6 +446,39 @@ func (p sitePriceProvider) SiteUnitPrice(ctx context.Context, userID string, adm
 		return 0, err
 	}
 	return config.SiteUnitPrice, nil
+}
+
+// vipNames 为大户关注提供工作区名称（提醒消息的标题）和品牌名（复制给用户的话术）。
+type vipNames struct {
+	accounts *admin_accounts.Service
+	configs  *client_config.Repository
+}
+
+func (n vipNames) WorkspaceName(ctx context.Context, userID string, adminAccountID string) string {
+	return workspaceNames{accounts: n.accounts}.WorkspaceName(ctx, userID, adminAccountID)
+}
+
+// BrandName 是站长在「客户端」页设置的品牌名，没有设置时用工作区名称。
+func (n vipNames) BrandName(ctx context.Context, userID string, adminAccountID string) string {
+	if config, err := n.configs.Get(ctx, client_config.Workspace{UserID: userID, AdminAccountID: adminAccountID}); err == nil && config != nil {
+		if name := strings.TrimSpace(config.Brand.Name); name != "" {
+			return name
+		}
+	}
+	return n.WorkspaceName(ctx, userID, adminAccountID)
+}
+
+// vipBriefs 让经营日报加上【大户】一段。
+type vipBriefs struct {
+	service *vip.Service
+}
+
+func (b vipBriefs) VIPSection(ctx context.Context, userID string, adminAccountID string) (string, error) {
+	brief, err := b.service.Brief(ctx, vip.Workspace{UserID: userID, AdminAccountID: adminAccountID})
+	if err != nil {
+		return "", err
+	}
+	return brief.ReportSection(), nil
 }
 
 // workspaceNames 为经营日报提供工作区显示名称。
@@ -683,6 +725,7 @@ var protectedPathPrefixes = []string{
 	"/api/leads",
 	"/api/user-activity",
 	"/api/sales",
+	"/api/vip",
 	"/api/reports",
 	"/api/profit",
 	"/api/client-config",

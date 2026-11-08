@@ -121,6 +121,7 @@ export default {
       settings: '系统设置',
       userActivity: '用户分析',
       sales: '销售分析',
+      vip: '大户关注',
       profit: '利润分析',
       massEmail: '群发邮件',
       leads: '线索',
@@ -1389,6 +1390,125 @@ export default {
         invalidEntry: '这条入账不对，请刷新后再试。',
         invalidChannel: '这个渠道不能设为不计入。',
         entryNotFound: '没找到这条入账（数据可能刚重新同步过），请刷新后再试。'
+      }
+    },
+    vip: {
+      title: '大户关注',
+      subtitle: '系统按近 7 天日均消耗和累计消耗推荐站里的大户，也可以自己搜索添加；看余额还能用几天，快用完时提醒你。数据来自「用户分析」，每小时同步一次。',
+      common: {
+        placeholder: '—'
+      },
+      source: {
+        lastSynced: '数据来自用户分析同步 · 最近同步 {time}',
+        neverSynced: '尚未同步用户数据',
+        basis: '金额按 ¥{price}/$1 换算',
+        manual: '手动关注',
+        dailyRank: '日均第 {rank}',
+        lifetimeRank: '累计第 {rank}'
+      },
+      actions: {
+        settings: '提醒设置',
+        refresh: '刷新',
+        add: '添加关注',
+        goUserActivity: '去用户分析同步数据',
+        chooseBots: '选机器人',
+        viewDetail: '查看 {name} 的详情',
+        copyReminder: '复制提醒',
+        copied: '已复制',
+        note: '备注',
+        remove: '移出',
+        removeConfirm: '把 {name} 移出大户关注？移出后系统也不再推荐他，可以在提醒设置里恢复。',
+        close: '关闭',
+        cancel: '取消',
+        save: '保存',
+        watch: '关注'
+      },
+      empty: {
+        title: '还没有可分析的数据',
+        description: '大户关注使用「用户分析」同步到本地的用户、用量和余额。登录自己站点后会在后台自动同步，也可以去用户分析页面马上同步。'
+      },
+      notice: {
+        noBots: '还没选提醒用的机器人：大户快用完、用完了时不会通知你。'
+      },
+      filters: {
+        label: '按状态筛选',
+        all: '全部',
+        low: '快用完',
+        empty: '已用完',
+        declining: '用量下降'
+      },
+      search: '在名单里搜用户或备注',
+      list: {
+        user: '用户',
+        source: '来源',
+        balance: '余额',
+        daily: '日均消耗',
+        daysLeft: '预计可用',
+        trend: '近 7 天',
+        lastUsed: '最近使用',
+        lastCredit: '最近入账',
+        actions: '操作',
+        perDay: '{amount}/天',
+        flat: '持平',
+        emptyAll: '还没有大户：近 7 天和累计都没有消耗记录。可以点「添加关注」手动加。',
+        emptyFilter: '没有符合条件的大户。'
+      },
+      status: {
+        normal: '正常',
+        low: '快用完',
+        empty: '已用完',
+        declining: '用量下降',
+        disabled: '已停用'
+      },
+      days: {
+        underOne: '不到 1 天',
+        about: '约 {days} 天',
+        unknown: '一段时间'
+      },
+      footnote: '预计可用 = 余额 ÷ 近 7 天日均消耗。预计 {days} 天内用完、或者余额低于 {balance} 算快用完（只看最近 7 天用过的人）；近 7 天日均不到前 7 天的一半算用量下降。',
+      watch: {
+        addTitle: '添加关注',
+        editTitle: '备注',
+        search: '搜索用户邮箱、用户名或 ID',
+        noResults: '没找到这个用户。',
+        candidate: '余额 {balance} · 近 7 天日均 {daily}',
+        watched: '已关注',
+        dismissed: '移出过',
+        note: '备注（选填）',
+        notePlaceholder: '例如：XX 公司，微信 abc',
+        pinHint: '写了备注后他会一直留在名单里，不会因为用量排名变化掉出去。'
+      },
+      settings: {
+        title: '提醒设置',
+        recommendTitle: '系统推荐',
+        dailyTop: '近 7 天日均消耗前',
+        lifetimeTop: '累计消耗前',
+        recommendHint: '填 0 表示不按这一项推荐。站点上已停用的用户不推荐。',
+        dismissed: '已移出 {count} 人，不再推荐。',
+        restoreDismissed: '全部恢复推荐',
+        restored: '已恢复 {count} 人。',
+        lowTitle: '快用完',
+        alertDays: '预计几天内用完',
+        alertBalance: '或者余额低于（元）',
+        lowHint: '只看最近 7 天用过的人。填 0 表示不按这一项判断。',
+        alertsEnabled: '快用完、用完了时提醒我',
+        alertsHint: '每 15 分钟检查一次，用下面选的机器人发消息。同一个人一天最多提醒一次；从快用完变成用完了会再提醒一次。',
+        noBots: '还没有机器人，先到「系统设置 → 通知渠道」添加。',
+        reminderTitle: '复制提醒的话术',
+        reminderHint: "点「复制提醒」时复制这段话，可以发微信或 QQ。可以用 {'{'}name{'}'}（称呼）、{'{'}site{'}'}（站点名）、{'{'}balance{'}'}（余额）、{'{'}days{'}'}（还能用多久）；留空用默认的。",
+        reminderLow: '快用完时',
+        reminderEmpty: '用完了时'
+      },
+      reminder: {
+        defaultLow: '您好，您在{site}的余额还剩 {balance}，按最近的用量大约还能用{days}，记得及时充值哦。',
+        defaultEmpty: '您好，您在{site}的余额已经用完了，充值后就能继续使用，有问题随时找我。'
+      },
+      errors: {
+        network: '网络请求失败，请检查网络后重试。',
+        request: '大户关注数据加载失败，请稍后重试。',
+        invalidUser: '这个用户不对，请刷新后再试。',
+        userNotFound: '没找到这个用户（可能还没同步到本地）。',
+        invalidSettings: '设置不对：推荐人数 0～100，天数 0～30，金额不能小于 0。'
       }
     },
     tickets: {
